@@ -411,7 +411,8 @@ function renderPanel(homeId, panelId) {
 
 const mainAmpsText = (p) => (p.mainAmps === 'other' ? p.mainAmpsOther || '' : p.mainAmps || '');
 const shoreText = (p) => (p.shorePower === 'other' ? `${p.shorePowerOther || '?'}A` : p.shorePower === 'pole' ? `Power pole ${mainAmpsText(p)}A` : labelOf(SHORE_POWER_OPTIONS, p.shorePower).split(' (')[0]);
-const sourceText = (p) => (p.type !== 'rv' && p.powerSource ? labelOf(POWER_SOURCE_OPTIONS, p.powerSource).split(' (')[0] : '');
+const sourceAmpsText = (p) => (['pole', 'pedestal', 'house_meter'].includes(p.powerSource) ? (p.sourceAmps === 'other' ? p.sourceAmpsOther : p.sourceAmps) : '');
+const sourceText = (p) => (p.type !== 'rv' && p.powerSource ? labelOf(POWER_SOURCE_OPTIONS, p.powerSource).split(' (')[0] + (sourceAmpsText(p) ? ` (${sourceAmpsText(p)}A main)` : '') : '');
 
 function shoreCard(panel, breakers, homeId, link = false) {
   if (panel.type !== 'rv') return '';
@@ -1153,7 +1154,7 @@ function sharePayload(homeId) {
     home: { name: home.name, type: home.type || '', address: home.address || '' },
     panels: inHome('panels', homeId).map((p) => ({
       id: p.id, name: p.name, type: p.type, layout: p.layout || 'auto', mainAmps: p.mainAmps || '', mainAmpsOther: p.mainAmpsOther || '',
-      spaces: p.spaces || '', spacesOther: p.spacesOther || '', shorePower: p.shorePower || '', shorePowerOther: p.shorePowerOther || '', powerSource: p.powerSource || '', location: p.location || '',
+      spaces: p.spaces || '', spacesOther: p.spacesOther || '', shorePower: p.shorePower || '', shorePowerOther: p.shorePowerOther || '', powerSource: p.powerSource || '', sourceAmps: p.sourceAmps || '', sourceAmpsOther: p.sourceAmpsOther || '', location: p.location || '',
       fuses: (p.fuses || []).map((f) => ({ num: f.num, amps: f.amps, ampsOther: f.ampsOther || '', powers: f.powers, notes: f.notes || '' })),
       breakers: inHome('breakers', homeId).filter((b) => b.panelId === p.id).map((b) => ({ slot: b.slot, poles: b.poles, amps: b.amps, ampsOther: b.ampsOther || '', label: b.label || '', rooms: b.rooms || [], kind: b.kind || '' })),
     })),
@@ -1345,6 +1346,8 @@ function renderEdit(col, id, q) {
       <label>Panel type<select name="type">${opt(PANEL_TYPES, p.type)}</select></label>
       <label class="rv-only" ${rv ? '' : 'hidden'}>Shore power<select name="shorePower" data-other="shorePowerOther">${opt(SHORE_POWER_OPTIONS, p.shorePower || '30')}</select></label>
       <label class="home-only" ${rv ? 'hidden' : ''}>Power comes from<select name="powerSource">${opt(POWER_SOURCE_OPTIONS, p.powerSource || '')}</select></label>
+      <label class="src-main" ${!rv && ['pole','pedestal','house_meter'].includes(p.powerSource) ? '' : 'hidden'}>Main breaker at the pole / meter (amps)<select name="sourceAmps" data-other="sourceAmpsOther">${opt(MAIN_AMP_OPTIONS, p.sourceAmps || '200')}</select></label>
+      <label class="other-field" ${!rv && ['pole','pedestal','house_meter'].includes(p.powerSource) && p.sourceAmps === 'other' ? '' : 'hidden'}>Pole / meter main amps (type it)<input name="sourceAmpsOther" type="number" inputmode="numeric" value="${esc(p.sourceAmpsOther || '')}"></label>
       <label class="other-field" ${rv && p.shorePower === 'other' ? '' : 'hidden'}>Shore power amps (other)<input name="shorePowerOther" type="number" inputmode="numeric" value="${esc(p.shorePowerOther || '')}"></label>
       <div class="two">
         <label>Main breaker amps<select name="mainAmps" data-other="mainAmpsOther">${opt(rv ? RV_MAIN_AMP_OPTIONS : MAIN_AMP_OPTIONS, p.mainAmps)}</select></label>
@@ -1418,10 +1421,17 @@ function renderEdit(col, id, q) {
   });
   if (col === 'panels') {
     const t = f.elements.type;
+    const syncSrc = () => {
+      const show = t.value !== 'rv' && ['pole', 'pedestal', 'house_meter'].includes(f.elements.powerSource.value);
+      f.querySelector('.src-main').hidden = !show;
+      f.elements.sourceAmpsOther.closest('label').hidden = !show || f.elements.sourceAmps.value !== 'other';
+    };
+    f.elements.powerSource.addEventListener('change', syncSrc);
     t.addEventListener('change', () => {
       const rv = t.value === 'rv';
       f.querySelectorAll('.rv-only').forEach((el) => (el.hidden = !rv));
       f.querySelectorAll('.home-only').forEach((el) => (el.hidden = rv));
+      syncSrc();
       f.elements.shorePowerOther.closest('label').hidden = !rv || f.elements.shorePower.value !== 'other';
       const cur = f.elements.mainAmps.value;
       const list = rv ? RV_MAIN_AMP_OPTIONS : MAIN_AMP_OPTIONS;
@@ -1448,7 +1458,7 @@ function renderEdit(col, id, q) {
     const base = existing ? { ...existing } : { id: col.slice(0, 1) + '_' + uid(), createdAt: Date.now() };
     let next;
     if (col === 'homes') next = { ...base, name: v.name.trim(), type: v.type, customerId: v.customerId != null ? v.customerId : base.customerId || '', address: v.address.trim(), notes: v.notes };
-    if (col === 'panels') next = { ...base, homeId, name: v.name.trim(), type: v.type, layout: v.layout, mainAmps: v.mainAmps, mainAmpsOther: v.mainAmpsOther || '', spaces: v.spaces, spacesOther: v.spacesOther || '', shorePower: v.type === 'rv' ? v.shorePower : '', shorePowerOther: v.shorePowerOther || '', powerSource: v.type === 'rv' ? '' : (v.powerSource || ''), location: v.location.trim(), notes: v.notes, fuses: base.fuses || [] };
+    if (col === 'panels') next = { ...base, homeId, name: v.name.trim(), type: v.type, layout: v.layout, mainAmps: v.mainAmps, mainAmpsOther: v.mainAmpsOther || '', spaces: v.spaces, spacesOther: v.spacesOther || '', shorePower: v.type === 'rv' ? v.shorePower : '', shorePowerOther: v.shorePowerOther || '', powerSource: v.type === 'rv' ? '' : (v.powerSource || ''), sourceAmps: v.type === 'rv' ? '' : (v.sourceAmps || ''), sourceAmpsOther: v.sourceAmpsOther || '', location: v.location.trim(), notes: v.notes, fuses: base.fuses || [] };
     if (col === 'breakers') {
       const panelId = v.panelId;
       const slot = String(parseInt(v.slot, 10));
