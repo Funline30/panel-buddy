@@ -256,3 +256,10 @@ p { line-height: 1.45; }
 .dir-table.one .a, .dir-table.one th:nth-child(2) { width: 14%; }
 .shore .load-num { margin-top: 6px; }
 @media print { .scan-btn { display: none !important; } .share-main { padding: 0; } }
+
+@media (min-width: 820px) {
+  .bottomnav { left: 50%; right: auto; width: 760px; transform: translateX(-50%); border: 1px solid var(--line); border-bottom: 0; border-radius: 16px 16px 0 0; }
+  .topbar-title { max-width: 680px; }
+}
+.brk { justify-content: flex-start; }
+.brk.empty-slot { justify-content: center; }

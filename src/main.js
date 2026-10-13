@@ -41,7 +41,7 @@ async function start() {
   await store.init();
   window.addEventListener('hashchange', render);
   render();
-  if ('serviceWorker' in navigator && import.meta.env.PROD) {
+  if ('serviceWorker' in navigator && import.meta.env.PROD && !location.pathname.includes('/previews/')) {
     navigator.serviceWorker.register('./sw.js').catch(() => {});
   }
 }
