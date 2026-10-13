@@ -21,12 +21,12 @@
 const env = (typeof import.meta !== 'undefined' && import.meta.env) || {};
 
 export const firebaseConfig = {
-  apiKey: env.VITE_FIREBASE_API_KEY || 'PASTE_API_KEY_HERE',
-  authDomain: env.VITE_FIREBASE_AUTH_DOMAIN || 'PASTE_PROJECT_ID.firebaseapp.com',
-  projectId: env.VITE_FIREBASE_PROJECT_ID || 'PASTE_PROJECT_ID',
-  storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET || 'PASTE_PROJECT_ID.firebasestorage.app',
-  messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID || 'PASTE_SENDER_ID',
-  appId: env.VITE_FIREBASE_APP_ID || 'PASTE_APP_ID',
+  apiKey: env.VITE_FIREBASE_API_KEY || 'AIzaSyB3DAWskFyX0CTWV8LtaxAl3RIeouK4mKM',
+  authDomain: env.VITE_FIREBASE_AUTH_DOMAIN || 'panel-buddy.firebaseapp.com',
+  projectId: env.VITE_FIREBASE_PROJECT_ID || 'panel-buddy',
+  storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET || 'panel-buddy.firebasestorage.app',
+  messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID || '341756651804',
+  appId: env.VITE_FIREBASE_APP_ID || '1:341756651804:web:cbc92adc839137b6ae72d9',
 };
 
 export function isFirebaseConfigured() {
