@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadSummary, voltsFor, totalWatts, shoreSummary, breakerWatts, deviceWatts } from '../src/lib/load.js';
-import { layoutOf, slotsFor, slotLabel, panelSpaces } from '../src/lib/panel.js';
+import { layoutOf, slotsFor, slotLabel, panelSpaces, keysFor, overlaps, groupPlan, breakerType, directoryRows, numberingOf } from '../src/lib/panel.js';
 import { search, parseBreakerQuery, breakerSlots } from '../src/lib/search.js';
 import { seedData, seedPro } from '../src/lib/seed.js';
 import { breakersCsv, devicesCsv, fusesCsv } from '../src/lib/csv.js';
@@ -52,8 +52,8 @@ test('sample home matches the brief and is internally consistent', () => {
   for (const d of data.devices) assert.ok(!d.breakerId || ids.has(d.breakerId), `device ${d.id} points at a real breaker`);
   const used = new Map();
   for (const b of data.breakers) {
-    const layout = layoutOf(data.panels.find((p) => p.id === b.panelId));
-    for (const s of slotsFor(b, layout)) {
+    const layout = data.panels.find((p) => p.id === b.panelId);
+    for (const s of keysFor(b, layout)) {
       const k = b.panelId + ':' + s;
       assert.ok(!used.has(k), `slot ${k} used twice (${b.id} and ${used.get(k)})`);
       used.set(k, b.id);
@@ -259,4 +259,60 @@ test('appearance setting: System / Light / Dark', () => {
   assert.equal(resolveTheme('dark', false), 'dark');
   assert.equal(normalizeTheme(null), 'system');
   assert.equal(normalizeTheme('bogus'), 'system');
+});
+
+test('tandem / 2-pole / quad: old breakers unchanged, each half its own circuit number', () => {
+  // saved before tandem support: no size/btype/numbering fields -> exactly as before
+  const old = { layout: 'two', spaces: '20' };
+  assert.equal(numberingOf(old), 'space');
+  assert.deepEqual(slotsFor({ slot: '1', poles: '2' }, old), [1, 3]);
+  assert.equal(slotLabel({ slot: '5', poles: '2' }, old), '5/7');
+  assert.equal(slotLabel({ slot: '6', poles: '1' }, old), '6');
+  assert.equal(breakerType({ slot: '6', poles: '1' }), 'single');
+  assert.equal(breakerType({ slot: '6', poles: '2' }), 'double');
+  // 1 number per space: tandem halves share space 5 as 5A / 5B
+  const a = { slot: '5', size: 'half', half: 'A', poles: '1' };
+  const b = { slot: '5', size: 'half', half: 'B', poles: '1' };
+  assert.equal(slotLabel(a, old), '5A');
+  assert.equal(slotLabel(b, old), '5B');
+  assert.ok(!overlaps(a, b, old));
+  assert.ok(overlaps(a, { slot: '5', poles: '1' }, old)); // full-size breaker in 5 clashes
+  assert.deepEqual(groupPlan('tandem', 5, old).map((p) => slotLabel(p, old)), ['5A', '5B']);
+  assert.deepEqual(groupPlan('quad', 5, old).map((p) => slotLabel(p, old)), ['5A', '5B/7A', '7B']);
+  // 2 numbers per space (Eaton BR 32): 1 & 3 share the first space
+  const br = { layout: 'two', spaces: '32', numbering: 'half' };
+  assert.deepEqual(groupPlan('tandem', 1, br).map((p) => slotLabel(p, br)), ['1', '3']);
+  assert.deepEqual(groupPlan('quad', 5, br).map((p) => slotLabel(p, br)), ['5', '7/9', '11']);
+  assert.equal(slotLabel({ slot: '10', poles: '2' }, br), '10/14'); // full-size 2-pole range
+  assert.deepEqual(slotsFor({ slot: '10', poles: '2' }, br), [10, 12, 14, 16]);
+  assert.equal(slotLabel({ slot: '1', poles: '1' }, br), '1'); // full-size single uses 1 (& blocks 3)
+  assert.ok(overlaps({ slot: '1', poles: '1' }, { slot: '3', size: 'half', poles: '1' }, br));
+  assert.ok(!overlaps({ slot: '1', size: 'half', poles: '1' }, { slot: '3', size: 'half', poles: '1' }, br));
+});
+
+test('tandem panel: load check counts each half separately, 2-pole at 240V', () => {
+  const data = seedData();
+  const tp = data.panels.find((p) => p.id === 'p_tandem');
+  const bs = data.breakers.filter((b) => b.panelId === tp.id);
+  const fridge = bs.find((b) => b.label === 'Fridge');
+  const micro = bs.find((b) => b.label === 'Microwave');
+  assert.equal(fridge.groupId, micro.groupId); // same physical tandem breaker
+  assert.equal(loadSummary(fridge).watts, 400);
+  assert.equal(loadSummary(micro).watts, 1200);
+  assert.equal(loadSummary(micro).amps, 10); // 1200W / 120V on its own 20A half
+  const dryer = bs.find((b) => b.label === 'Dryer');
+  assert.equal(slotLabel(dryer, tp), '7/9');
+  assert.equal(loadSummary(dryer).amps, 20); // 4800W / 240V
+  assert.equal(loadSummary(bs.find((b) => b.label === 'Gen #5')).level, 'warn'); // 1500W on 15A = 83%
+  // directory: every circuit number listed once, halves with their own names
+  const rows = directoryRows(tp, bs);
+  assert.equal(rows.length, 16);
+  const named = rows.flatMap((r) => r.cells).filter((c) => c.items.some((i) => !i.cont));
+  assert.equal(named.length, bs.length);
+  assert.deepEqual(rows[0].cells.map((c) => c.num), ['1', '2']);
+  assert.deepEqual(rows[1].cells.map((c) => c.num), ['3', '4']);
+  assert.equal(rows[1].cells[1].items[0].b.label, 'Kitchen counter');
+  assert.equal(rows[1].cells[0].items[0].cont, true); // 3 is the other half of full-size 1
+  // search "breaker 8" finds the microwave half
+  assert.ok(search('breaker 8', { ...data, breakers: bs }).some((r) => r.item.id === micro.id));
 });

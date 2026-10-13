@@ -47,7 +47,7 @@ function score(hay, toks) {
 export function search(query, data) {
   const { breakers = [], devices = [], panels = [], fuses = true } = data;
   const panelName = (id) => (panels.find((p) => p.id === id) || {}).name || '';
-  const layoutFor = (b) => layoutOf(panels.find((p) => p.id === b.panelId));
+  const layoutFor = (b) => panels.find((p) => p.id === b.panelId) || layoutOf(null);
   const breakerById = new Map(breakers.map((b) => [b.id, b]));
   const results = [];
   const fm = String(query || '').toLowerCase().match(/fuse\s*#?\s*(\d{1,3})/);

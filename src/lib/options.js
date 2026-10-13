@@ -6,6 +6,14 @@ export const POLE_OPTIONS = [
   { value: '2', label: 'Double pole (240V)' },
 ];
 
+// "Breaker type" dropdown. Tandem = 2 half-size breakers in 1 space, each its own circuit.
+export const BTYPE_OPTIONS = [
+  { value: 'single', label: 'Single (1 breaker, 120V)' },
+  { value: 'tandem', label: 'Tandem / twin (2 in 1 space)' },
+  { value: 'double', label: '2-pole (240V)' },
+  { value: 'quad', label: 'Quad (2-pole + 2 singles)' },
+];
+
 export const BREAKER_KINDS = [
   { value: 'standard', label: 'Standard' },
   { value: 'gfci', label: 'GFCI breaker' },
@@ -65,6 +73,11 @@ export const LAYOUT_OPTIONS = [
   { value: 'auto', label: 'Automatic (1 column for RV, 2 for home panels)' },
   { value: 'one', label: 'One column (stacked)' },
   { value: 'two', label: 'Two columns (odd left, even right)' },
+];
+
+export const NUMBERING_OPTIONS = [
+  { value: 'space', label: '1 number per space (most panels)' },
+  { value: 'half', label: '2 numbers per space (1 & 3 share a space)' },
 ];
 
 export const SPACE_OPTIONS = ['4', '6', '8', '12', '16', '20', '24', '30', '32', '40', '42', 'other'];

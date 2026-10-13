@@ -4,7 +4,7 @@ _Formerly Panel Buddy._
 
 Free, no-ads web app for mapping your home's breaker panel. Installable on iPhone, Android and Windows (it's a PWA), works offline, and syncs across your devices.
 
-- **Panels & breakers**: main panel + sub-panels, slot numbers, single/double pole, amps, label, rooms, notes. Tappable two-column panel layout like the real thing.
+- **Panels & breakers**: main panel + sub-panels, slot numbers, amps, label, rooms, notes. Breaker type dropdown: Single, Tandem / twin (2 half-size breakers in 1 space, each its own circuit number, name, amps and loads), 2-pole, or Quad (2-pole + 2 singles). Panels can use 1 number per space (most panels; tandem halves show as 5A / 5B) or 2 numbers per space (tandem-ready label strips like Eaton BR, where 1 & 3 share the first space). Tappable two-column panel layout like the real thing. Breakers saved before tandem support read as Single / 2-pole, unchanged.
 - **Outlets, lights, switches, fans, appliances**: room, location ("north wall by bed"), breaker, GFCI / AFCI (dropdowns), status, notes, meter readings, optional photo.
 - **QR codes**: every panel, breaker and device gets a QR code that opens that record. Printable sticker sheets (1" x 2-5/8" address labels like Avery 5160, 2" squares, or plain paper).
 - **Load check**: list what's plugged into each circuit (presets or custom watts). Shows amps vs. the breaker rating, warns at 80%, red over 100%. Amps = watts ÷ 120 (÷ 240 for double-pole).

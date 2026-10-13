@@ -96,6 +96,33 @@ export function seedData() {
     d('rd3', 'rb6', 'outlet', 'Outside outlet', 'Exterior', 'Door side, by the awning', { homeId: R, gfci: 'downstream' }),
     d('rd4', 'rb2', 'appliance', 'Microwave', 'Galley', 'Above the stove', { homeId: R })
   );
+
+  // Example of a tandem-ready panel (Eaton BR style, 2 numbers per space: 1 & 3 share
+  // the first space). Shows full-size, tandem, quad and 2-pole breakers.
+  const TP = 'p_tandem';
+  panels.push({ id: TP, homeId: H, name: 'Tandem example (Eaton BR 32)', type: 'sub', layout: 'two', numbering: 'half', mainAmps: '200', spaces: '32', location: 'Example panel - edit or delete', notes: 'Example: 1 & 3 share the first space. Tandem breakers give each half its own number.', createdAt: now });
+  const t = (id, slot, amps, label, extra = {}) => ({ id, homeId: H, panelId: TP, slot: String(slot), poles: '1', amps: String(amps), label, rooms: [], kind: 'standard', notes: '', loads: [], createdAt: now, ...extra });
+  const tan = (g, half) => ({ size: 'half', btype: 'tandem', groupId: g, half });
+  const quad = (g, half, poles = '1') => ({ size: 'half', btype: 'quad', groupId: g, half, poles });
+  breakers.push(
+    t('t1', 1, 15, 'Gen #4', { btype: 'single' }),
+    t('t5', 5, 15, 'Gen #5', { ...quad('gq5', 'A'), loads: [{ name: 'Space heater', watts: 1500, qty: 1 }] }),
+    t('t7', 7, 30, 'Dryer', { ...quad('gq5', 'B', '2'), loads: [{ name: 'Dryer', watts: 4800, qty: 1 }] }),
+    t('t11', 11, 15, 'Gen #6', quad('gq5', 'B')),
+    t('t13', 13, 15, 'GFI #8 bath', tan('gt13', 'A')),
+    t('t15', 15, 15, 'Gen #7', tan('gt13', 'B')),
+    t('t17', 17, 60, 'Furnace', { poles: '2', btype: 'double' }),
+    t('t25', 25, 15, 'Gen #1', tan('gt25', 'A')),
+    t('t27', 27, 15, 'Gen #2', tan('gt25', 'B')),
+    t('t29', 29, 20, 'Gen #3', { btype: 'single' }),
+    t('t2', 2, 20, 'Kitchen GFI', tan('gt2', 'A')),
+    t('t4', 4, 20, 'Kitchen counter', tan('gt2', 'B')),
+    t('t6', 6, 20, 'Fridge', { ...tan('gt6', 'A'), loads: [{ name: 'Refrigerator (running)', watts: 400, qty: 1 }] }),
+    t('t8', 8, 20, 'Microwave', { ...tan('gt6', 'B'), loads: [{ name: 'Microwave', watts: 1200, qty: 1 }] }),
+    t('t10', 10, 40, 'Range', { poles: '2', btype: 'double' }),
+    t('t18', 18, 20, 'Water heater', { poles: '2', btype: 'double' }),
+    t('t26', 26, 15, 'Lights', { btype: 'single' }),
+  );
   return { homes, panels, breakers, devices, customers: [], photos: [] };
 }
 

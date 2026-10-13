@@ -5,11 +5,11 @@ import { createLocalStore } from './store/local.js';
 import {
   AMP_OPTIONS, POLE_OPTIONS, BREAKER_KINDS, DEVICE_TYPES, GFCI_OPTIONS, AFCI_OPTIONS, STATUS_OPTIONS,
   PANEL_TYPES, SPACE_OPTIONS, MAIN_AMP_OPTIONS, RV_MAIN_AMP_OPTIONS, SHORE_POWER_OPTIONS, LEG_OPTIONS, POWER_SOURCE_OPTIONS,
-  FUSE_AMP_OPTIONS, FUSE_USES, HOME_TYPES, LAYOUT_OPTIONS, HOME_ROOMS, RV_ROOMS, labelOf, deviceIcon,
+  FUSE_AMP_OPTIONS, FUSE_USES, HOME_TYPES, LAYOUT_OPTIONS, NUMBERING_OPTIONS, BTYPE_OPTIONS, HOME_ROOMS, RV_ROOMS, labelOf, deviceIcon,
   BOX_OPTIONS, REPLACE_OPTIONS, stylesFor, styleOf, qtyOf,
 } from './lib/options.js';
 import { shoppingList, shoppingCsv, lineText } from './lib/shopping.js';
-import { layoutOf, panelSpaces, slotsFor, slotLabel } from './lib/panel.js';
+import { layoutOf, panelSpaces, slotsFor, slotLabel, numberingOf, overlaps, occupancy, halfRows, positionLabel, positionSlot, groupPlan, directoryRows, breakerType, sizeOf, keysFor } from './lib/panel.js';
 import { seedPro } from './lib/seed.js';
 import { LOAD_PRESETS, PRESET_NOTE } from './lib/presets.js';
 import { loadSummary, levelText, fmtAmps, shoreSummary, deviceWatts, voltsFor } from './lib/load.js';
@@ -24,6 +24,24 @@ const MODE_KEY = 'panelbuddy:mode';
 const HOME_KEY = 'panelbuddy:home';
 let store;
 let pendingRoute = null;
+
+// Printed / shared directory rows. Each circuit number (or tandem half) gets its own entry.
+function dirRowsHtml(panel, breakers) {
+  const one = layoutOf(panel) === 'one';
+  const half = numberingOf(panel) === 'half';
+  const amps = (b) => esc(ampsText(b));
+  const rm = (b) => ((b.rooms || []).length && !(b.label || '').toLowerCase().includes(String(b.rooms[0]).toLowerCase()) ? ` <span class="rm">(${esc(b.rooms.join(', '))})</span>` : '');
+  const cell = (c) => {
+    if (!c.items.length) return `<td class="n">${esc(c.num)}</td><td class="a"></td><td class="l"></td>`;
+    if (c.items.length === 1) {
+      const e = c.items[0];
+      if (e.cont) return `<td class="n">${esc(c.num)}</td><td class="a">″</td><td class="l cont">(${esc(e.label)}) ${esc(e.b.label || '')}</td>`;
+      return `<td class="n">${esc(!half && sizeOf(e.b) === 'half' ? e.label.split('/')[0] : c.num)}</td><td class="a">${amps(e.b)}</td><td class="l">${esc(e.b.label || '')}${rm(e.b)}</td>`;
+    }
+    return `<td class="n">${c.items.map((e) => esc(e.label.split('/')[0])).join('<br>')}</td><td class="a">${c.items.map((e) => (e.cont ? '″' : amps(e.b))).join('<br>')}</td><td class="l">${c.items.map((e) => `${e.cont ? '<span class="cont">' : ''}${esc(e.b.label || '')}${e.cont ? '</span>' : rm(e.b)}`).join('<br>')}</td>`;
+  };
+  return directoryRows(panel, breakers).map((r, i) => `<tr class="${half && i % 2 ? 'sp-end' : ''}">${r.cells.map(cell).join('')}</tr>`).join('');
+}
 
 // ---------------------------------------------------------------- startup
 async function start() {
@@ -59,8 +77,8 @@ const byId = (col, id) => D()[col].find((x) => x.id === id);
 const inHome = (col, homeId) => D()[col].filter((x) => x.homeId === homeId);
 const isPro = () => (store.settings || {}).accountType === 'pro';
 const panelOf = (b) => b && byId('panels', b.panelId);
-const slotsOf = (b) => slotsFor(b, layoutOf(panelOf(b)));
-const slotText = (b) => slotLabel(b, layoutOf(panelOf(b)));
+const slotsOf = (b) => slotsFor(b, panelOf(b) || 'two');
+const slotText = (b) => slotLabel(b, panelOf(b) || 'two');
 const breakerSlots = slotsOf;
 // circuit load = items listed on the breaker + items listed on each of its outlets
 const sumOf = (b) => loadSummary(b, D().devices);
@@ -355,32 +373,50 @@ function renderPanel(homeId, panelId) {
   const panel = panels.find((p) => p.id === panelId) || panels.find((p) => p.type === 'main') || panels[0];
   const breakers = inHome('breakers', homeId).filter((b) => b.panelId === panel.id);
   const devices = inHome('devices', homeId);
-  const spaces = Math.max(panelSpaces(panel), ...breakers.flatMap((b) => breakerSlots(b)));
   const layout = layoutOf(panel);
   const one = layout === 'one';
-  const rows = one ? spaces : Math.ceil(spaces / 2);
-  const posOf = (s) => (one ? { col: 1, row: s } : { col: s % 2 === 1 ? 1 : 2, row: Math.ceil(s / 2) });
-  const covered = new Set();
+  const halfNum = numberingOf(panel) === 'half';
+  const rows = halfRows(panel, breakers); // half-space rows per column
+  const occ = occupancy(panel, breakers);
   const cells = [];
+  const shown = new Set();
   for (const b of sortBreakers(breakers)) {
-    const slots = breakerSlots(b);
-    if (!slots.length) continue;
-    slots.forEach((s) => covered.add(s));
-    const { col, row } = posOf(slots[0]);
+    const keys = keysFor(b, panel);
+    if (!keys.length || shown.has(b.id)) continue;
+    shown.add(b.id);
+    const [col, start] = keys[0].split(':').map(Number);
+    const isHalf = sizeOf(b) === 'half';
+    const bt = breakerType(b);
     const sum = sumOf(b);
     const nDev = devices.filter((d) => d.breakerId === b.id).length;
     const dead = devices.some((d) => d.breakerId === b.id && (d.status === 'dead' || d.status === 'repair'));
-    cells.push(`<a class="brk ${b.kind === 'spare' ? 'spare' : ''} lvl-${sum.level}" href="#/h/${homeId}/breaker/${b.id}" style="grid-column:${col};grid-row:${row} / span ${slots.length}">
+    const meta = [nDev ? `${nDev} item${nDev > 1 ? 's' : ''}` : '', sum.level !== 'none' ? `${Math.round(sum.pct)}%` : '', b.leg ? `L${esc(b.leg)}` : '', dead ? '<b class="bad">needs fix</b>' : '', b.kind && b.kind !== 'standard' && b.kind !== 'spare' ? esc(b.kind.toUpperCase()) : ''].filter(Boolean).join(' · ');
+    const tag = isHalf ? (bt === 'quad' ? 'QUAD' : 'TANDEM') : '';
+    cells.push(`<a class="brk ${isHalf ? 'half ' + (keys.length > 1 ? 'half-mid' : b.half === 'B' ? 'half-b' : 'half-a') : ''} ${b.kind === 'spare' ? 'spare' : ''} lvl-${sum.level}" href="#/h/${homeId}/breaker/${b.id}" style="grid-column:${col};grid-row:${start + 1} / span ${keys.length}">
       <span class="brk-slot">${esc(slotText(b))}</span>
       <span class="brk-handle">${esc(ampsText(b))}</span>
       <span class="brk-label">${esc(b.label || 'Unlabeled')}</span>
-      <span class="brk-meta">${[nDev ? `${nDev} item${nDev > 1 ? 's' : ''}` : '', sum.level !== 'none' ? `${Math.round(sum.pct)}%` : '', b.leg ? `L${esc(b.leg)}` : '', dead ? '<b class="bad">needs fix</b>' : '', b.kind && b.kind !== 'standard' && b.kind !== 'spare' ? esc(b.kind.toUpperCase()) : ''].filter(Boolean).join(' · ')}</span>
+      ${isHalf && keys.length === 1 ? '' : `<span class="brk-meta">${tag ? `<b class="tagc">${tag}</b>${meta ? ' · ' : ''}` : ''}${meta}</span>`}
     </a>`);
   }
-  for (let s = 1; s <= spaces; s++) {
-    if (covered.has(s)) continue;
-    const { col, row } = posOf(s);
-    cells.push(`<a class="brk empty-slot" href="#/edit/breakers/new?home=${homeId}&panel=${panel.id}&slot=${s}" style="grid-column:${col};grid-row:${row}" aria-label="Add breaker in space ${s}"><span class="brk-slot">${s}</span><span class="brk-label">+ Add</span></a>`);
+  const cols = one ? [1] : [1, 2];
+  for (const col of cols) {
+    for (let h = 0; h < rows; h += 2) {
+      const a = occ.get(`${col}:${h}`), bb = occ.get(`${col}:${h + 1}`);
+      if (!a && !bb) {
+        const p = positionSlot(col, h, panel);
+        const lbl = positionLabel(col, h, panel);
+        const both = halfNum ? `${lbl} & ${positionLabel(col, h + 1, panel)}` : lbl;
+        cells.push(`<a class="brk empty-slot" href="#/edit/breakers/new?home=${homeId}&panel=${panel.id}&slot=${p.slot}" style="grid-column:${col};grid-row:${h + 1} / span 2" aria-label="Add breaker in space ${esc(both)}"><span class="brk-slot">${esc(lbl)}</span><span class="brk-label">+ Add${halfNum ? ` <span class="muted">(${esc(both)})</span>` : ''}</span></a>`);
+        continue;
+      }
+      for (const hh of [h, h + 1]) {
+        if (occ.get(`${col}:${hh}`)) continue;
+        const p = positionSlot(col, hh, panel);
+        const lbl = positionLabel(col, hh, panel, true);
+        cells.push(`<a class="brk empty-slot half" href="#/edit/breakers/new?home=${homeId}&panel=${panel.id}&slot=${p.slot}&half=${p.half}&btype=tandem" style="grid-column:${col};grid-row:${hh + 1}" aria-label="Add half-size breaker in ${esc(lbl)}"><span class="brk-slot">${esc(lbl)}</span><span class="brk-label">+ Add half</span></a>`);
+      }
+    }
   }
   const over = breakers.filter((b) => sumOf(b).level === 'over').length;
   const warn = breakers.filter((b) => sumOf(b).level === 'warn').length;
@@ -398,7 +434,7 @@ function renderPanel(homeId, panelId) {
   ${over || warn ? `<a class="alert ${over ? 'over' : 'warn'}" href="#/h/${homeId}/load">${over ? `${over} circuit${over > 1 ? 's' : ''} over 100%` : ''}${over && warn ? ' · ' : ''}${warn ? `${warn} at 80%+` : ''} - see Load check</a>` : ''}
   <div class="panel-box">
     <div class="panel-main">${panel.type === 'rv' ? '120V AC · ' : ''}MAIN ${esc(mainAmpsText(panel))}${panel.mainAmps ? 'A' : ''}</div>
-    <div class="panel-grid ${one ? 'one' : ''}" style="grid-template-rows:repeat(${rows}, minmax(64px, auto))">${cells.join('')}</div>
+    <div class="panel-grid halfrows ${one ? 'one' : ''}" style="grid-template-rows:repeat(${rows}, minmax(30px, auto))">${cells.join('')}</div>
   </div>
   <div class="row-actions">
     <a class="btn" href="#/edit/breakers/new?home=${homeId}&panel=${panel.id}">+ Breaker</a>
@@ -406,6 +442,7 @@ function renderPanel(homeId, panelId) {
     <a class="btn" href="#/h/${homeId}/print/directory/${panel.id}">Print label</a>
   </div>
   <div class="legend"><span class="dot lvl-ok"></span>under 80% <span class="dot lvl-warn"></span>80%+ <span class="dot lvl-over"></span>over 100% <span class="dot lvl-none"></span>no loads listed</div>
+  ${breakers.some((b) => sizeOf(b) === 'half') ? '<p class="tiny muted legend-note">Short rows are tandem / quad halves: 2 half-size breakers in 1 space, each with its own number.</p>' : ''}
   ${shoreCard(panel, breakers, homeId)}
   ${panel.type === 'rv' || (panel.fuses || []).length ? fuseCard(panel) : ''}
   <div id="panelExtra"></div>`;
@@ -598,6 +635,22 @@ function loadHeadline(s) {
     <p class="tiny muted">${wattsText(s.watts)} ÷ ${s.volts}V. 80% of ${s.rating}A = ${fmtAmps(s.limit80)}A.</p>`;
 }
 
+const breakerTypeText = (b) => {
+  const t = breakerType(b);
+  if (sizeOf(b) === 'half') {
+    if (t === 'quad') return String(b.poles) === '2' ? 'Quad breaker: middle 2-pole (240V)' : `Quad breaker: ${b.half === 'B' ? 'bottom' : 'top'} single (120V)`;
+    return `Tandem breaker: ${b.half === 'B' ? 'bottom' : 'top'} half (120V)`;
+  }
+  return labelOf(POLE_OPTIONS, b.poles);
+};
+// the other halves of the same tandem / quad breaker (same physical breaker)
+const groupMates = (b) => (b.groupId ? D().breakers.filter((o) => o.id !== b.id && o.groupId === b.groupId && o.panelId === b.panelId) : []);
+function groupMatesHtml(homeId, b) {
+  const mates = sortBreakers(groupMates(b));
+  if (!mates.length) return '';
+  return `<div class="card mates"><h3>Same breaker, other ${mates.length > 1 ? 'parts' : 'half'}</h3><ul class="list">${mates.map((m) => `<li><a class="row" href="#/h/${homeId}/breaker/${m.id}"><span class="row-icon mate-slot">${esc(slotText(m))}</span><span class="row-main"><b>${esc(m.label || 'Unlabeled')}</b><span class="muted">${esc(ampsText(m))} · ${esc(breakerTypeText(m))}</span></span><span class="row-side" aria-hidden="true">›</span></a></li>`).join('')}</ul></div>`;
+}
+
 function renderBreaker(homeId, id) {
   const b = byId('breakers', id);
   if (!b || b.homeId !== homeId) return renderNotFound();
@@ -611,11 +664,12 @@ function renderBreaker(homeId, id) {
     <div class="big-slot">${esc(slotText(b))}</div>
     <div class="detail-title">
       <h2>${esc(b.label || 'Unlabeled breaker')}</h2>
-      <p class="muted">${esc(ampsText(b))} · ${esc(labelOf(POLE_OPTIONS, b.poles))}${b.leg ? ` · Leg ${esc(b.leg)}` : ''}${b.kind && b.kind !== 'standard' ? ` · ${esc(labelOf(BREAKER_KINDS, b.kind))}` : ''}${panel ? ` · ${esc(panel.name)}` : ''}</p>
+      <p class="muted">${esc(ampsText(b))} · ${esc(breakerTypeText(b))}${b.leg ? ` · Leg ${esc(b.leg)}` : ''}${b.kind && b.kind !== 'standard' ? ` · ${esc(labelOf(BREAKER_KINDS, b.kind))}` : ''}${panel ? ` · ${esc(panel.name)}` : ''}</p>
       ${(b.rooms || []).length ? `<div class="chips">${b.rooms.map((r) => `<a class="chip" href="#/h/${homeId}/rooms?room=${encodeURIComponent(r)}">${esc(r)}</a>`).join('')}</div>` : ''}
     </div>
   </section>
   ${b.notes ? `<p class="note-text pre">${esc(b.notes)}</p>` : ''}
+  ${groupMatesHtml(homeId, b)}
 
   <div class="card">
     <div class="card-head"><h3>Outlets &amp; lights <span class="count">${devices.length}</span></h3><a class="btn small" href="#/edit/devices/new?home=${homeId}&breaker=${b.id}">+ Add</a></div>
@@ -1260,10 +1314,10 @@ function sharePayload(homeId) {
     v: 1,
     home: { name: home.name, type: home.type || '', address: home.address || '' },
     panels: inHome('panels', homeId).map((p) => ({
-      id: p.id, name: p.name, type: p.type, layout: p.layout || 'auto', mainAmps: p.mainAmps || '', mainAmpsOther: p.mainAmpsOther || '',
+      id: p.id, name: p.name, type: p.type, numbering: p.numbering || 'space', layout: p.layout || 'auto', mainAmps: p.mainAmps || '', mainAmpsOther: p.mainAmpsOther || '',
       spaces: p.spaces || '', spacesOther: p.spacesOther || '', shorePower: p.shorePower || '', shorePowerOther: p.shorePowerOther || '', powerSource: p.powerSource || '', sourceAmps: p.sourceAmps || '', sourceAmpsOther: p.sourceAmpsOther || '', location: p.location || '',
       fuses: (p.fuses || []).map((f) => ({ num: f.num, amps: f.amps, ampsOther: f.ampsOther || '', powers: f.powers, notes: f.notes || '' })),
-      breakers: inHome('breakers', homeId).filter((b) => b.panelId === p.id).map((b) => ({ slot: b.slot, poles: b.poles, amps: b.amps, ampsOther: b.ampsOther || '', label: b.label || '', rooms: b.rooms || [], kind: b.kind || '' })),
+      breakers: inHome('breakers', homeId).filter((b) => b.panelId === p.id).map((b) => ({ slot: b.slot, poles: b.poles, size: b.size || 'full', half: b.half || '', btype: b.btype || '', amps: b.amps, ampsOther: b.ampsOther || '', label: b.label || '', rooms: b.rooms || [], kind: b.kind || '' })),
     })),
   };
 }
@@ -1282,21 +1336,9 @@ async function renderShare(token) {
   }
   const sections = (doc.panels || []).map((p) => {
     const one = layoutOf(p) === 'one';
-    const spaces = Math.max(panelSpaces(p), ...p.breakers.flatMap((b) => slotsFor(b, one ? 'one' : 'two')));
-    const bySlot = new Map();
-    for (const b of p.breakers) slotsFor(b, one ? 'one' : 'two').forEach((s, i) => bySlot.set(s, { b, cont: i > 0 }));
-    const cell = (s) => {
-      const e = bySlot.get(s);
-      if (!e) return `<td class="n">${s}</td><td class="a"></td><td class="l"></td>`;
-      const amps = e.b.amps === 'other' ? e.b.ampsOther : e.b.amps;
-      return `<td class="n">${s}</td><td class="a">${e.cont ? '″' : esc(amps ? amps + 'A' : '')}</td><td class="l ${e.cont ? 'cont' : ''}">${esc(e.b.label)}${!e.cont && e.b.rooms.length ? ` <span class="rm">(${esc(e.b.rooms.join(', '))})</span>` : ''}</td>`;
-    };
-    const rows = [];
-    if (one) for (let s = 1; s <= spaces; s++) rows.push(`<tr>${cell(s)}</tr>`);
-    else for (let r = 0; r < Math.ceil(spaces / 2); r++) rows.push(`<tr>${cell(r * 2 + 1)}${cell(r * 2 + 2)}</tr>`);
     return `<div class="sheet directory full share-sheet">
       <div class="dir-head"><b>${esc(p.name)}</b>${p.mainAmps ? ` · Main ${esc(p.mainAmps === 'other' ? p.mainAmpsOther : p.mainAmps)}A` : ''}${p.type === 'rv' && p.shorePower ? ` · ${esc(shoreText(p))} shore` : ''}${sourceText(p) ? ` · ${esc(sourceText(p))}` : ''}${p.location ? ` · ${esc(p.location)}` : ''}</div>
-      <table class="dir-table ${one ? 'one' : ''}"><thead><tr><th>#</th><th>A</th><th>Circuit</th>${one ? '' : '<th>#</th><th>A</th><th>Circuit</th>'}</tr></thead><tbody>${rows.join('')}</tbody></table>
+      <table class="dir-table ${one ? 'one' : ''}"><thead><tr><th>#</th><th>A</th><th>Circuit</th>${one ? '' : '<th>#</th><th>A</th><th>Circuit</th>'}</tr></thead><tbody>${dirRowsHtml(p, p.breakers)}</tbody></table>
       ${p.fuses.length ? `<div class="dir-head" style="margin-top:8px"><b>12V DC fuses</b></div><table class="dir-table one"><thead><tr><th>#</th><th>A</th><th>Powers</th></tr></thead><tbody>${p.fuses.map((f) => `<tr><td class="n">${esc(f.num)}</td><td class="a">${esc(f.amps === 'other' ? f.ampsOther : f.amps)}A</td><td class="l">${esc(f.powers)}${f.notes ? ` <span class="rm">(${esc(f.notes)})</span>` : ''}</td></tr>`).join('')}</tbody></table>` : ''}
     </div>`;
   });
@@ -1386,19 +1428,7 @@ async function renderPrint(homeId, kind, id, q) {
     if (!panel) return renderNotFound();
     const size = q.get('size') || 'half';
     const breakers = inHome('breakers', homeId).filter((b) => b.panelId === panel.id);
-    const spaces = Math.max(panelSpaces(panel), ...breakers.flatMap((b) => breakerSlots(b)));
-    const bySlot = new Map();
-    for (const b of breakers) breakerSlots(b).forEach((s, i) => bySlot.set(s, { b, cont: i > 0 }));
     const one = layoutOf(panel) === 'one';
-    const cell = (s) => {
-      const e = bySlot.get(s);
-      if (!e) return `<td class="n">${s}</td><td class="a"></td><td class="l"></td>`;
-      if (e.cont) return `<td class="n">${s}</td><td class="a">″</td><td class="l cont">(${esc(slotText(e.b))}) ${esc(e.b.label || '')}</td>`;
-      return `<td class="n">${s}</td><td class="a">${esc(ampsText(e.b))}</td><td class="l">${esc(e.b.label || '')}${(e.b.rooms || []).length && !(e.b.label || '').toLowerCase().includes(String(e.b.rooms[0]).toLowerCase()) ? ` <span class="rm">(${esc(e.b.rooms.join(', '))})</span>` : ''}</td>`;
-    };
-    const rowsHtml = [];
-    if (one) for (let s = 1; s <= spaces; s++) rowsHtml.push(`<tr>${cell(s)}</tr>`);
-    else for (let r = 0; r < Math.ceil(spaces / 2); r++) rowsHtml.push(`<tr>${cell(r * 2 + 1)}${cell(r * 2 + 2)}</tr>`);
     const fuses = panel.fuses || [];
     const body = `
     <div class="print-controls no-print">
@@ -1407,7 +1437,7 @@ async function renderPrint(homeId, kind, id, q) {
     </div>
     <div class="sheet directory ${size}">
       <div class="dir-head"><b>${esc(panel.name)}</b> · ${esc(homeLabel(home))}${panel.mainAmps ? ` · Main ${esc(mainAmpsText(panel))}A` : ''}${panel.type === 'rv' && panel.shorePower ? ` · ${esc(shoreText(panel))} shore` : ''}${sourceText(panel) ? ` · ${esc(sourceText(panel))}` : ''}</div>
-      <table class="dir-table ${one ? 'one' : ''}"><thead><tr><th>#</th><th>A</th><th>Circuit</th>${one ? '' : '<th>#</th><th>A</th><th>Circuit</th>'}</tr></thead><tbody>${rowsHtml.join('')}</tbody></table>
+      <table class="dir-table ${one ? 'one' : ''}"><thead><tr><th>#</th><th>A</th><th>Circuit</th>${one ? '' : '<th>#</th><th>A</th><th>Circuit</th>'}</tr></thead><tbody>${dirRowsHtml(panel, breakers)}</tbody></table>
       ${fuses.length ? `<div class="dir-head" style="margin-top:8px"><b>12V DC fuses</b></div><table class="dir-table one"><thead><tr><th>#</th><th>A</th><th>Powers</th></tr></thead><tbody>${fuses.map((f) => `<tr><td class="n">${esc(f.num)}</td><td class="a">${esc(f.amps === 'other' ? f.ampsOther : f.amps)}A</td><td class="l">${esc(f.powers)}${f.notes ? ` <span class="rm">(${esc(f.notes)})</span>` : ''}</td></tr>`).join('')}</tbody></table>` : ''}
       <div class="dir-foot">Updated ${new Date().toLocaleDateString()} · AmpMap</div>
     </div>`;
@@ -1525,27 +1555,39 @@ function renderEdit(col, id, q) {
       <label class="other-field" ${p.mainAmps === 'other' ? '' : 'hidden'}>Main amps (other)<input name="mainAmpsOther" type="number" inputmode="numeric" value="${esc(p.mainAmpsOther || '')}"></label>
       <label class="other-field" ${p.spaces === 'other' ? '' : 'hidden'}>Number of spaces<input name="spacesOther" type="number" inputmode="numeric" min="1" max="84" value="${esc(p.spacesOther || '')}"></label>
       <label>Layout<select name="layout">${opt(LAYOUT_OPTIONS, p.layout || 'auto')}</select></label>
+      <label>Circuit numbers<select name="numbering">${opt(NUMBERING_OPTIONS, numberingOf(p))}</select></label>
+      <p class="tiny muted">Look at the number strip by the breakers. If the first space on the left is numbered 1 and 3 (common on panels made for tandem breakers), pick "2 numbers per space" and set Breaker spaces to the highest number, like 32.</p>
       <label>Where is it?<input name="location" value="${esc(p.location)}" placeholder="${rv ? 'e.g. Under the bed' : 'e.g. Garage, north wall'}"></label>
       <label>Notes<textarea name="notes" rows="3">${esc(p.notes)}</textarea></label>
       ${rv ? '<p class="tiny muted">12V DC fuses are added on the panel screen after saving.</p>' : ''}`;
   } else if (col === 'breakers') {
     const panels = inHome('panels', homeId);
-    const b = existing || { panelId: q.get('panel') || (panels[0] && panels[0].id), slot: q.get('slot') || '', poles: '1', amps: '20', label: '', rooms: [], kind: 'standard', notes: '', loads: [] };
+    const qType = ['single', 'double', 'tandem', 'quad'].includes(q.get('btype')) ? q.get('btype') : '';
+    const b = existing || { panelId: q.get('panel') || (panels[0] && panels[0].id), slot: q.get('slot') || '', poles: '1', amps: '20', label: '', rooms: [], kind: 'standard', notes: '', loads: [], ...(qType === 'tandem' || qType === 'quad' ? { size: 'half', btype: qType, half: q.get('half') === 'B' ? 'B' : 'A' } : {}) };
+    const bt = breakerType(b);
+    // adding into one empty half, or editing a half that already has its partner: no partner fields
+    const lonelyHalf = (isNew && !!q.get('half')) || (!isNew && !!b.groupId);
+    const mateAmps = AMP_OPTIONS.filter((a) => a !== 'other');
     title = isNew ? 'Add a breaker' : `Edit breaker ${slotText(b)}`;
     back = isNew ? `#/h/${homeId}/panel/${b.panelId || ''}` : `#/h/${homeId}/breaker/${id}`;
     fields = `
       ${panels.length > 1 ? `<label>Panel<select name="panelId">${opt(panels.map((p) => ({ value: p.id, label: p.name })), b.panelId)}</select></label>` : `<input type="hidden" name="panelId" value="${esc(b.panelId)}">`}
+      <label>Breaker type<select name="btype">${opt(BTYPE_OPTIONS, bt)}</select></label>
+      <label class="half-pick" hidden>Which half of the space<select name="half">${opt([{ value: 'A', label: 'Top half' }, { value: 'B', label: 'Bottom half' }], b.half === 'B' ? 'B' : 'A')}</select></label>
       <div class="two">
         <label>Space / slot #<input name="slot" required type="number" inputmode="numeric" min="1" max="84" value="${esc(b.slot)}"></label>
         <label>Amps<select name="amps" data-other="ampsOther">${opt(AMP_OPTIONS, b.amps)}</select></label>
       </div>
       <label class="other-field" ${b.amps === 'other' ? '' : 'hidden'}>Amps (other)<input name="ampsOther" type="number" inputmode="numeric" value="${esc(b.ampsOther || '')}"></label>
-      <label>Poles<select name="poles">${opt(POLE_OPTIONS, b.poles)}</select></label>
       ${(() => { const pn = byId('panels', b.panelId); return pn && pn.type === 'rv' && (pn.shorePower === '50' || pn.shorePower === 'pole') ? `<label>Leg (${pn.shorePower === 'pole' ? '240V service' : '50A service'})<select name="leg">${opt(LEG_OPTIONS, b.leg || '')}</select></label>` : ''; })()}
-      <p class="tiny muted">${layoutOf(byId('panels', b.panelId)) === 'one' ? 'This panel is stacked in one column: a double-pole breaker in space 1 also covers space 2.' : 'Spaces are numbered like most US panels: odd on the left, even on the right. A double-pole breaker in space 1 also covers space 3.'}</p>
+      <p class="tiny muted slot-hint">${(() => { const pn = byId('panels', b.panelId); if (numberingOf(pn) === 'half') return 'This panel has 2 numbers per space (1 and 3 share the first space on the left). A tandem gets both numbers; a full-size breaker uses the first.'; return layoutOf(pn) === 'one' ? 'This panel is stacked in one column: a double-pole breaker in space 1 also covers space 2.' : 'Spaces are numbered like most US panels: odd on the left, even on the right. A double-pole breaker in space 1 also covers space 3.'; })()}</p>
       <label>Label<input name="label" value="${esc(b.label)}" placeholder="e.g. Kitchen counter outlets"></label>
       <label>Room(s) it serves<input name="rooms" list="roomList" value="${esc((b.rooms || []).join(', '))}" placeholder="Separate with commas"></label>
-      <label>Breaker type<select name="kind">${opt(BREAKER_KINDS, b.kind)}</select></label>
+      <div class="mate-fields" ${lonelyHalf ? 'data-lonely="1"' : ''} hidden>
+        <p class="tiny muted mate-hint"></p>
+        ${[1, 2].map((k) => `<div class="mate" data-k="${k}"><div class="mate-title"></div><div class="two"><label>Label<input name="m${k}label" placeholder="e.g. Bedroom 2"></label><label>Amps<select name="m${k}amps">${opt(mateAmps, k === 2 ? '15' : '20')}</select></label></div></div>`).join('')}
+      </div>
+      <label>Protection<select name="kind">${opt(BREAKER_KINDS, b.kind)}</select></label>
       <label>Notes<textarea name="notes" rows="3">${esc(b.notes)}</textarea></label>`;
   } else if (col === 'devices') {
     const brks = sortBreakers(inHome('breakers', homeId));
@@ -1613,6 +1655,35 @@ function renderEdit(col, id, q) {
       if (rv && f.elements.spaces.value === '20' && isNew) f.elements.spaces.value = '6';
     });
   }
+  if (col === 'breakers') {
+    const sel = f.elements.btype;
+    const box = f.querySelector('.mate-fields');
+    const sync = () => {
+      const t = sel.value;
+      const pn = byId('panels', f.elements.panelId.value);
+      const isGroup = t === 'tandem' || t === 'quad';
+      const lonely = !!box.dataset.lonely && isGroup;
+      f.querySelector('.half-pick').hidden = !(lonely && numberingOf(pn) !== 'half');
+      box.hidden = !isGroup || lonely;
+      const mainLabel = f.elements.label.closest('label');
+      if (!mainLabel.dataset.text) mainLabel.dataset.text = mainLabel.firstChild.textContent;
+      mainLabel.firstChild.textContent = mainLabel.dataset.text;
+      if (box.hidden) return;
+      const plan = groupPlan(t, f.elements.slot.value || '1', pn || 'two');
+      const lab = (p) => slotLabel(p, pn || 'two');
+      box.querySelector('.mate-hint').textContent = `The label above is the ${plan[0].role.toLowerCase()} (${lab(plan[0])}). ${t === 'tandem' ? 'Each half is its own circuit with its own name:' : 'Each part is its own circuit with its own name:'}`;
+      box.querySelectorAll('.mate').forEach((el) => {
+        const p = plan[Number(el.dataset.k)];
+        el.hidden = !p;
+        if (p) el.querySelector('.mate-title').textContent = `${p.role} · ${lab(p)}`;
+      });
+      mainLabel.firstChild.textContent = `Label (${plan[0].role.toLowerCase()} · ${lab(plan[0])})`;
+    };
+    sel.addEventListener('change', sync);
+    f.elements.slot.addEventListener('input', sync);
+    if (f.elements.panelId.tagName === 'SELECT') f.elements.panelId.addEventListener('change', sync);
+    sync();
+  }
   if (col === 'devices') {
     const rs = f.elements.room;
     const tog = () => (f.elements.roomNew.closest('label').hidden = rs.value !== '__new');
@@ -1639,15 +1710,29 @@ function renderEdit(col, id, q) {
     const base = existing ? { ...existing } : { id: col.slice(0, 1) + '_' + uid(), createdAt: Date.now() };
     let next;
     if (col === 'homes') next = { ...base, name: v.name.trim(), type: v.type, customerId: v.customerId != null ? v.customerId : base.customerId || '', address: v.address.trim(), notes: v.notes };
-    if (col === 'panels') next = { ...base, homeId, name: v.name.trim(), type: v.type, layout: v.layout, mainAmps: v.mainAmps, mainAmpsOther: v.mainAmpsOther || '', spaces: v.spaces, spacesOther: v.spacesOther || '', shorePower: v.type === 'rv' ? v.shorePower : '', shorePowerOther: v.shorePowerOther || '', powerSource: v.type === 'rv' ? '' : (v.powerSource || ''), sourceAmps: v.type === 'rv' ? '' : (v.sourceAmps || ''), sourceAmpsOther: v.sourceAmpsOther || '', location: v.location.trim(), notes: v.notes, fuses: base.fuses || [] };
+    if (col === 'panels') next = { ...base, homeId, name: v.name.trim(), type: v.type, layout: v.layout, mainAmps: v.mainAmps, mainAmpsOther: v.mainAmpsOther || '', spaces: v.spaces, spacesOther: v.spacesOther || '', shorePower: v.type === 'rv' ? v.shorePower : '', shorePowerOther: v.shorePowerOther || '', powerSource: v.type === 'rv' ? '' : (v.powerSource || ''), sourceAmps: v.type === 'rv' ? '' : (v.sourceAmps || ''), sourceAmpsOther: v.sourceAmpsOther || '', location: v.location.trim(), notes: v.notes, numbering: v.numbering === 'half' ? 'half' : 'space', fuses: base.fuses || [] };
     if (col === 'breakers') {
       const panelId = v.panelId;
       const slot = String(parseInt(v.slot, 10));
-      const poles = v.poles;
-      const mine = breakerSlots({ slot, poles, panelId });
-      const clash = inHome('breakers', homeId).find((o) => o.id !== base.id && o.panelId === panelId && breakerSlots(o).some((s) => mine.includes(s)));
-      if (clash && !confirm(`Space ${slot} overlaps breaker ${slotText(clash)} (${clash.label || 'unlabeled'}). Save anyway?`)) return;
-      next = { ...base, homeId, panelId, slot, poles, amps: v.amps, ampsOther: v.ampsOther || '', label: v.label.trim(), leg: v.leg || base.leg || '', rooms: v.rooms.split(',').map((s) => s.trim()).filter(Boolean), kind: v.kind, notes: v.notes, loads: base.loads || [] };
+      const pn = byId('panels', panelId) || 'two';
+      const t = v.btype || 'single';
+      const isGroup = t === 'tandem' || t === 'quad';
+      const makeGroup = isGroup && !(isNew ? q.get('half') : base.groupId);
+      const plan = makeGroup ? groupPlan(t, slot, pn) : [];
+      let pos;
+      if (makeGroup) pos = { slot: String(plan[0].slot), size: 'half', half: plan[0].half, poles: plan[0].poles };
+      else if (isGroup) pos = { slot, size: 'half', half: numberingOf(pn) === 'half' ? base.half || 'A' : v.half || base.half || 'A', poles: base.size === 'half' && base.btype === t ? base.poles || '1' : '1' };
+      else pos = { slot, size: 'full', half: '', poles: t === 'double' ? '2' : '1' };
+      const groupId = makeGroup ? 'g_' + uid() : isGroup ? base.groupId || '' : '';
+      const mates = plan.slice(1).map((p, i) => ({
+        id: 'b_' + uid(), createdAt: Date.now(), homeId, panelId, slot: String(p.slot), size: 'half', half: p.half, poles: p.poles, btype: t, groupId,
+        amps: v[`m${i + 1}amps`] || '15', ampsOther: '', label: (v[`m${i + 1}label`] || '').trim(), leg: '', rooms: [], kind: 'standard', notes: '', loads: [],
+      }));
+      const others = inHome('breakers', homeId).filter((o) => o.id !== base.id && o.panelId === panelId && !(groupId && o.groupId === groupId));
+      const clash = [{ ...pos }, ...mates].map((m) => others.find((o) => overlaps(o, m, pn))).find(Boolean);
+      if (clash && !confirm(`That overlaps breaker ${slotText(clash)} (${clash.label || 'unlabeled'}). Save anyway?`)) return;
+      next = { ...base, homeId, panelId, slot: pos.slot, poles: pos.poles, size: pos.size, half: pos.half, btype: t, groupId, amps: v.amps, ampsOther: v.ampsOther || '', label: v.label.trim(), leg: v.leg || base.leg || '', rooms: v.rooms.split(',').map((s) => s.trim()).filter(Boolean), kind: v.kind, notes: v.notes, loads: base.loads || [] };
+      for (const m of mates) await store.put('breakers', m);
     }
     if (col === 'devices') next = { ...base, homeId, type: v.type, name: v.name.trim(), room: (v.room === '__new' ? v.roomNew : v.room).trim(), location: v.location.trim(), breakerId: v.breakerId, gfci: v.gfci, afci: v.afci, status: v.status, notes: v.notes, readings: base.readings || [], style: stylesFor(v.type) ? v.style || '' : '', qty: Math.max(1, Math.floor(Number(v.qty)) || 1), box: v.box || '', replace: v.replace || '' };
     if (col === 'customers') next = { ...base, name: v.name.trim(), phone: v.phone.trim(), email: v.email.trim(), notes: v.notes, visits: base.visits || [], openCount: base.openCount || 0, lastOpenedAt: Date.now() };

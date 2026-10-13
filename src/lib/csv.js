@@ -1,7 +1,9 @@
 import { ampsText } from './util.js';
-import { slotLabel, layoutOf } from './panel.js';
+import { slotLabel, layoutOf, breakerType } from './panel.js';
 import { labelOf, DEVICE_TYPES, GFCI_OPTIONS, AFCI_OPTIONS, STATUS_OPTIONS, BOX_OPTIONS, styleOf, qtyOf } from './options.js';
 import { loadSummary, fmtAmps, deviceWatts } from './load.js';
+
+const BTYPE_NAMES = { single: 'Single', double: '2-pole', tandem: 'Tandem half', quad: 'Quad' };
 
 function cell(v) {
   const s = String(v == null ? '' : v);
@@ -14,17 +16,17 @@ function rows(arr) {
 export function breakersCsv(data) {
   const P = (id) => data.panels.find((p) => p.id === id);
   const panel = (id) => (P(id) || {}).name || '';
-  const out = [['Panel', 'Slot', 'Poles', 'Amps', 'Label', 'Rooms', 'Type', 'Load watts', 'Load amps', 'Load %', 'Notes']];
+  const out = [['Panel', 'Slot', 'Poles', 'Amps', 'Label', 'Rooms', 'Type', 'Load watts', 'Load amps', 'Load %', 'Notes', 'Breaker type']];
   for (const b of data.breakers) {
     const s = loadSummary(b, data.devices || []);
-    out.push([panel(b.panelId), slotLabel(b, layoutOf(P(b.panelId))), b.poles, ampsText(b), b.label, (b.rooms || []).join('; '), b.kind, s.watts, fmtAmps(s.amps), Math.round(s.pct), b.notes]);
+    out.push([panel(b.panelId), slotLabel(b, P(b.panelId) || layoutOf(null)), b.poles, ampsText(b), b.label, (b.rooms || []).join('; '), b.kind, s.watts, fmtAmps(s.amps), Math.round(s.pct), b.notes, BTYPE_NAMES[breakerType(b)] + (b.size === 'half' && b.btype === 'quad' ? (String(b.poles) === '2' ? ' (2-pole part)' : ' (single part)') : '')]);
   }
   return rows(out);
 }
 
 export function devicesCsv(data) {
   const br = new Map(data.breakers.map((b) => [b.id, b]));
-  const slotText = (b) => slotLabel(b, layoutOf(data.panels.find((p) => p.id === b.panelId)));
+  const slotText = (b) => slotLabel(b, data.panels.find((p) => p.id === b.panelId) || layoutOf(null));
   const out = [['Room', 'Name', 'Type', 'Location', 'Breaker', 'Breaker label', 'Style', 'Quantity', 'Box', 'Needs replacing', 'GFCI', 'AFCI', 'Status', 'Plugged in', 'Plugged in watts', 'Notes', 'Readings']];
   for (const d of data.devices) {
     const b = br.get(d.breakerId);
