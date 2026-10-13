@@ -88,9 +88,10 @@ test('setup page carries the exact firestore.rules text', () => {
   assert.doesNotMatch(rules, /allow read, write: if true/);
 });
 
-test('firebase config ships with placeholders (demo mode until filled in)', () => {
+test('firebase config is filled in for the panel-buddy project (env vars still override)', () => {
   const cfg = readFileSync(new URL('../src/firebase-config.js', import.meta.url), 'utf8');
-  assert.match(cfg, /PASTE_API_KEY_HERE/);
+  assert.doesNotMatch(cfg, /PASTE_API_KEY_HERE/);
+  assert.match(cfg, /panel-buddy\.firebaseapp\.com/);
   assert.match(cfg, /VITE_FIREBASE_API_KEY/);
 });
 
@@ -155,4 +156,12 @@ test('rules: share docs are get-only for the public, owner-only writes', () => {
   assert.match(rules, /match \/shares\/\{token\}[\s\S]*?allow get: if true;[\s\S]*?allow list: if false;/);
   assert.match(rules, /match \/sharedPanels\/\{panelId\}[\s\S]*?allow list: if false;/);
   assert.match(rules, /'customers', 'settings'/);
+});
+
+test('power pole service uses the main breaker size on two legs', () => {
+  const panel = { type: 'rv', shorePower: 'pole', mainAmps: '200' };
+  const s = shoreSummary(panel, [{ poles: '2', loads: [{ watts: 4800 }] }]);
+  assert.equal(s.legs.length, 2);
+  assert.equal(s.legs[0].cap, 200);
+  assert.equal(s.legs[0].amps, 20);
 });

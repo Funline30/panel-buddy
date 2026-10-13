@@ -4,7 +4,7 @@ import { firebaseConfig, isFirebaseConfigured } from './firebase-config.js';
 import { createLocalStore } from './store/local.js';
 import {
   AMP_OPTIONS, POLE_OPTIONS, BREAKER_KINDS, DEVICE_TYPES, GFCI_OPTIONS, AFCI_OPTIONS, STATUS_OPTIONS,
-  PANEL_TYPES, SPACE_OPTIONS, MAIN_AMP_OPTIONS, RV_MAIN_AMP_OPTIONS, SHORE_POWER_OPTIONS, LEG_OPTIONS,
+  PANEL_TYPES, SPACE_OPTIONS, MAIN_AMP_OPTIONS, RV_MAIN_AMP_OPTIONS, SHORE_POWER_OPTIONS, LEG_OPTIONS, POWER_SOURCE_OPTIONS,
   FUSE_AMP_OPTIONS, FUSE_USES, HOME_TYPES, LAYOUT_OPTIONS, HOME_ROOMS, RV_ROOMS, labelOf, deviceIcon,
 } from './lib/options.js';
 import { layoutOf, panelSpaces, slotsFor, slotLabel } from './lib/panel.js';
@@ -380,7 +380,7 @@ function renderPanel(homeId, panelId) {
   <section class="panel-head">
     <div>
       ${panels.length > 1 ? `<label class="sr-only" for="panelPick">Panel</label><select id="panelPick" class="panel-pick">${panels.map((p) => `<option value="${p.id}" ${p.id === panel.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>` : `<h2>${esc(panel.name)}</h2>`}
-      <p class="muted">${esc(labelOf(PANEL_TYPES, panel.type))}${panel.mainAmps ? ` · ${esc(mainAmpsText(panel))}A main` : ''}${panel.type === 'rv' && panel.shorePower ? ` · ${esc(shoreText(panel))} shore power` : ''} · ${breakers.length} breakers${panel.location ? ` · ${esc(panel.location)}` : ''}</p>
+      <p class="muted">${esc(labelOf(PANEL_TYPES, panel.type))}${panel.mainAmps ? ` · ${esc(mainAmpsText(panel))}A main` : ''}${panel.type === 'rv' && panel.shorePower ? ` · ${esc(shoreText(panel))} shore power` : ''}${sourceText(panel) ? ` · Power from: ${esc(sourceText(panel))}` : ''} · ${breakers.length} breakers${panel.location ? ` · ${esc(panel.location)}` : ''}</p>
     </div>
     <div class="head-actions">
       <a class="btn small" href="#/edit/panels/${panel.id}?home=${homeId}">Edit</a>
@@ -410,7 +410,8 @@ function renderPanel(homeId, panelId) {
 }
 
 const mainAmpsText = (p) => (p.mainAmps === 'other' ? p.mainAmpsOther || '' : p.mainAmps || '');
-const shoreText = (p) => (p.shorePower === 'other' ? `${p.shorePowerOther || '?'}A` : labelOf(SHORE_POWER_OPTIONS, p.shorePower).split(' (')[0]);
+const shoreText = (p) => (p.shorePower === 'other' ? `${p.shorePowerOther || '?'}A` : p.shorePower === 'pole' ? `Power pole ${mainAmpsText(p)}A` : labelOf(SHORE_POWER_OPTIONS, p.shorePower).split(' (')[0]);
+const sourceText = (p) => (p.type !== 'rv' && p.powerSource ? labelOf(POWER_SOURCE_OPTIONS, p.powerSource).split(' (')[0] : '');
 
 function shoreCard(panel, breakers, homeId, link = false) {
   if (panel.type !== 'rv') return '';
@@ -1152,7 +1153,7 @@ function sharePayload(homeId) {
     home: { name: home.name, type: home.type || '', address: home.address || '' },
     panels: inHome('panels', homeId).map((p) => ({
       id: p.id, name: p.name, type: p.type, layout: p.layout || 'auto', mainAmps: p.mainAmps || '', mainAmpsOther: p.mainAmpsOther || '',
-      spaces: p.spaces || '', spacesOther: p.spacesOther || '', shorePower: p.shorePower || '', shorePowerOther: p.shorePowerOther || '', location: p.location || '',
+      spaces: p.spaces || '', spacesOther: p.spacesOther || '', shorePower: p.shorePower || '', shorePowerOther: p.shorePowerOther || '', powerSource: p.powerSource || '', location: p.location || '',
       fuses: (p.fuses || []).map((f) => ({ num: f.num, amps: f.amps, ampsOther: f.ampsOther || '', powers: f.powers, notes: f.notes || '' })),
       breakers: inHome('breakers', homeId).filter((b) => b.panelId === p.id).map((b) => ({ slot: b.slot, poles: b.poles, amps: b.amps, ampsOther: b.ampsOther || '', label: b.label || '', rooms: b.rooms || [], kind: b.kind || '' })),
     })),
@@ -1186,7 +1187,7 @@ async function renderShare(token) {
     if (one) for (let s = 1; s <= spaces; s++) rows.push(`<tr>${cell(s)}</tr>`);
     else for (let r = 0; r < Math.ceil(spaces / 2); r++) rows.push(`<tr>${cell(r * 2 + 1)}${cell(r * 2 + 2)}</tr>`);
     return `<div class="sheet directory full share-sheet">
-      <div class="dir-head"><b>${esc(p.name)}</b>${p.mainAmps ? ` · Main ${esc(p.mainAmps === 'other' ? p.mainAmpsOther : p.mainAmps)}A` : ''}${p.type === 'rv' && p.shorePower ? ` · ${esc(shoreText(p))} shore` : ''}${p.location ? ` · ${esc(p.location)}` : ''}</div>
+      <div class="dir-head"><b>${esc(p.name)}</b>${p.mainAmps ? ` · Main ${esc(p.mainAmps === 'other' ? p.mainAmpsOther : p.mainAmps)}A` : ''}${p.type === 'rv' && p.shorePower ? ` · ${esc(shoreText(p))} shore` : ''}${sourceText(p) ? ` · ${esc(sourceText(p))}` : ''}${p.location ? ` · ${esc(p.location)}` : ''}</div>
       <table class="dir-table ${one ? 'one' : ''}"><thead><tr><th>#</th><th>A</th><th>Circuit</th>${one ? '' : '<th>#</th><th>A</th><th>Circuit</th>'}</tr></thead><tbody>${rows.join('')}</tbody></table>
       ${p.fuses.length ? `<div class="dir-head" style="margin-top:8px"><b>12V DC fuses</b></div><table class="dir-table one"><thead><tr><th>#</th><th>A</th><th>Powers</th></tr></thead><tbody>${p.fuses.map((f) => `<tr><td class="n">${esc(f.num)}</td><td class="a">${esc(f.amps === 'other' ? f.ampsOther : f.amps)}A</td><td class="l">${esc(f.powers)}${f.notes ? ` <span class="rm">(${esc(f.notes)})</span>` : ''}</td></tr>`).join('')}</tbody></table>` : ''}
     </div>`;
@@ -1235,7 +1236,7 @@ async function renderPrint(homeId, kind, id, q) {
       <button class="btn primary" id="doPrint">Print / Save as PDF</button>
     </div>
     <div class="sheet directory ${size}">
-      <div class="dir-head"><b>${esc(panel.name)}</b> · ${esc(homeLabel(home))}${panel.mainAmps ? ` · Main ${esc(mainAmpsText(panel))}A` : ''}${panel.type === 'rv' && panel.shorePower ? ` · ${esc(shoreText(panel))} shore` : ''}</div>
+      <div class="dir-head"><b>${esc(panel.name)}</b> · ${esc(homeLabel(home))}${panel.mainAmps ? ` · Main ${esc(mainAmpsText(panel))}A` : ''}${panel.type === 'rv' && panel.shorePower ? ` · ${esc(shoreText(panel))} shore` : ''}${sourceText(panel) ? ` · ${esc(sourceText(panel))}` : ''}</div>
       <table class="dir-table ${one ? 'one' : ''}"><thead><tr><th>#</th><th>A</th><th>Circuit</th>${one ? '' : '<th>#</th><th>A</th><th>Circuit</th>'}</tr></thead><tbody>${rowsHtml.join('')}</tbody></table>
       ${fuses.length ? `<div class="dir-head" style="margin-top:8px"><b>12V DC fuses</b></div><table class="dir-table one"><thead><tr><th>#</th><th>A</th><th>Powers</th></tr></thead><tbody>${fuses.map((f) => `<tr><td class="n">${esc(f.num)}</td><td class="a">${esc(f.amps === 'other' ? f.ampsOther : f.amps)}A</td><td class="l">${esc(f.powers)}${f.notes ? ` <span class="rm">(${esc(f.notes)})</span>` : ''}</td></tr>`).join('')}</tbody></table>` : ''}
       <div class="dir-foot">Updated ${new Date().toLocaleDateString()} · Panel Buddy</div>
@@ -1343,6 +1344,7 @@ function renderEdit(col, id, q) {
       <label>Panel name<input name="name" required value="${esc(p.name)}"></label>
       <label>Panel type<select name="type">${opt(PANEL_TYPES, p.type)}</select></label>
       <label class="rv-only" ${rv ? '' : 'hidden'}>Shore power<select name="shorePower" data-other="shorePowerOther">${opt(SHORE_POWER_OPTIONS, p.shorePower || '30')}</select></label>
+      <label class="home-only" ${rv ? 'hidden' : ''}>Power comes from<select name="powerSource">${opt(POWER_SOURCE_OPTIONS, p.powerSource || '')}</select></label>
       <label class="other-field" ${rv && p.shorePower === 'other' ? '' : 'hidden'}>Shore power amps (other)<input name="shorePowerOther" type="number" inputmode="numeric" value="${esc(p.shorePowerOther || '')}"></label>
       <div class="two">
         <label>Main breaker amps<select name="mainAmps" data-other="mainAmpsOther">${opt(rv ? RV_MAIN_AMP_OPTIONS : MAIN_AMP_OPTIONS, p.mainAmps)}</select></label>
@@ -1367,7 +1369,7 @@ function renderEdit(col, id, q) {
       </div>
       <label class="other-field" ${b.amps === 'other' ? '' : 'hidden'}>Amps (other)<input name="ampsOther" type="number" inputmode="numeric" value="${esc(b.ampsOther || '')}"></label>
       <label>Poles<select name="poles">${opt(POLE_OPTIONS, b.poles)}</select></label>
-      ${(() => { const pn = byId('panels', b.panelId); return pn && pn.type === 'rv' && pn.shorePower === '50' ? `<label>Leg (50A service)<select name="leg">${opt(LEG_OPTIONS, b.leg || '')}</select></label>` : ''; })()}
+      ${(() => { const pn = byId('panels', b.panelId); return pn && pn.type === 'rv' && (pn.shorePower === '50' || pn.shorePower === 'pole') ? `<label>Leg (${pn.shorePower === 'pole' ? '240V service' : '50A service'})<select name="leg">${opt(LEG_OPTIONS, b.leg || '')}</select></label>` : ''; })()}
       <p class="tiny muted">${layoutOf(byId('panels', b.panelId)) === 'one' ? 'This panel is stacked in one column: a double-pole breaker in space 1 also covers space 2.' : 'Spaces are numbered like most US panels: odd on the left, even on the right. A double-pole breaker in space 1 also covers space 3.'}</p>
       <label>Label<input name="label" value="${esc(b.label)}" placeholder="e.g. Kitchen counter outlets"></label>
       <label>Room(s) it serves<input name="rooms" list="roomList" value="${esc((b.rooms || []).join(', '))}" placeholder="Separate with commas"></label>
@@ -1419,6 +1421,7 @@ function renderEdit(col, id, q) {
     t.addEventListener('change', () => {
       const rv = t.value === 'rv';
       f.querySelectorAll('.rv-only').forEach((el) => (el.hidden = !rv));
+      f.querySelectorAll('.home-only').forEach((el) => (el.hidden = rv));
       f.elements.shorePowerOther.closest('label').hidden = !rv || f.elements.shorePower.value !== 'other';
       const cur = f.elements.mainAmps.value;
       const list = rv ? RV_MAIN_AMP_OPTIONS : MAIN_AMP_OPTIONS;
@@ -1445,7 +1448,7 @@ function renderEdit(col, id, q) {
     const base = existing ? { ...existing } : { id: col.slice(0, 1) + '_' + uid(), createdAt: Date.now() };
     let next;
     if (col === 'homes') next = { ...base, name: v.name.trim(), type: v.type, customerId: v.customerId != null ? v.customerId : base.customerId || '', address: v.address.trim(), notes: v.notes };
-    if (col === 'panels') next = { ...base, homeId, name: v.name.trim(), type: v.type, layout: v.layout, mainAmps: v.mainAmps, mainAmpsOther: v.mainAmpsOther || '', spaces: v.spaces, spacesOther: v.spacesOther || '', shorePower: v.type === 'rv' ? v.shorePower : '', shorePowerOther: v.shorePowerOther || '', location: v.location.trim(), notes: v.notes, fuses: base.fuses || [] };
+    if (col === 'panels') next = { ...base, homeId, name: v.name.trim(), type: v.type, layout: v.layout, mainAmps: v.mainAmps, mainAmpsOther: v.mainAmpsOther || '', spaces: v.spaces, spacesOther: v.spacesOther || '', shorePower: v.type === 'rv' ? v.shorePower : '', shorePowerOther: v.shorePowerOther || '', powerSource: v.type === 'rv' ? '' : (v.powerSource || ''), location: v.location.trim(), notes: v.notes, fuses: base.fuses || [] };
     if (col === 'breakers') {
       const panelId = v.panelId;
       const slot = String(parseInt(v.slot, 10));

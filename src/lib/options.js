@@ -69,7 +69,7 @@ export const LAYOUT_OPTIONS = [
 
 export const SPACE_OPTIONS = ['4', '6', '8', '12', '16', '20', '24', '30', '32', '40', '42', 'other'];
 export const MAIN_AMP_OPTIONS = ['60', '100', '125', '150', '200', '225', '400', 'other'];
-export const RV_MAIN_AMP_OPTIONS = ['15', '20', '30', '50', 'other'];
+export const RV_MAIN_AMP_OPTIONS = ['15', '20', '30', '50', '100', '200', 'other'];
 
 // Shore power service for RVs. 30A = 30 amps at 120V. 50A = 50 amps on EACH of two
 // 120V legs (120/240V). Household = a regular 120V outlet on a 15A or 20A circuit.
@@ -78,7 +78,18 @@ export const SHORE_POWER_OPTIONS = [
   { value: '50', label: '50A / 120/240V (two legs, 14-50 plug)' },
   { value: '20', label: '20A household outlet (120V)' },
   { value: '15', label: '15A household outlet (120V)' },
+  { value: 'pole', label: 'Power pole / hardwired service (uses main breaker size)' },
   { value: 'other', label: 'Other' },
+];
+
+// Where a home panel gets its power from (shown on all non-RV panels).
+export const POWER_SOURCE_OPTIONS = [
+  { value: '', label: 'Not set' },
+  { value: 'pole', label: 'Utility power pole (meter on pole)' },
+  { value: 'house_meter', label: 'Meter on the house / home' },
+  { value: 'pedestal', label: 'Underground to meter pedestal' },
+  { value: 'subfeed', label: 'Fed from another panel' },
+  { value: 'generator', label: 'Generator / solar / other' },
 ];
 
 export const LEG_OPTIONS = [

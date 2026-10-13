@@ -64,6 +64,10 @@ export function fmtAmps(a) {
 export function shoreCapacity(panel) {
   const v = panel && panel.shorePower;
   if (!v) return null;
+  if (v === 'pole') {
+    const m = panel.mainAmps === 'other' ? Number(panel.mainAmpsOther) : Number(panel.mainAmps);
+    return m > 0 ? { amps: m, legs: 2 } : null;
+  }
   if (v === 'other') {
     const n = Number(panel.shorePowerOther);
     return n > 0 ? { amps: n, legs: 1 } : null;
