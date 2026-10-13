@@ -1,4 +1,4 @@
-// Panel Buddy service worker: network-first for everything (so updates always win),
+// AmpMap service worker: network-first for everything (so updates always win),
 // falling back to the cached copy when offline. Data itself is cached by Firestore.
 const CACHE = 'panelbuddy-v1';
 self.addEventListener('install', (e) => {

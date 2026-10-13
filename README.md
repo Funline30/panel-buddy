@@ -1,4 +1,6 @@
-# ⚡ Panel Buddy
+# ⚡ AmpMap
+
+_Formerly Panel Buddy._
 
 Free, no-ads web app for mapping your home's breaker panel. Installable on iPhone, Android and Windows (it's a PWA), works offline, and syncs across your devices.
 
@@ -66,4 +68,10 @@ npm run build    # outputs dist/
 - In demo mode, data lives only in that browser. Use **More → Download backup** to move it, or **Copy demo data into my account** after signing in.
 - Known v1 limit: share links are snapshots (tap "Update shared copy" after changes). `sharedPanels` entries are first-come: someone who already knows a panel's ID could claim that panel's share slot before the owner shares it, so a scan of that sticker would offer their shared copy instead. The owner's private data is never exposed by this.
 - Load presets are rough typical wattages. For a real check, use the watts on the device's label. The 80% line is the guideline for loads that run 3+ hours.
-- Panel Buddy is a record-keeping tool, not electrical advice. Turn the breaker off and verify with a tester before working on wiring.
+- AmpMap is a record-keeping tool, not electrical advice. Turn the breaker off and verify with a tester before working on wiring.
+
+## Privacy & license
+
+- Privacy Policy: [`public/privacy.html`](public/privacy.html), live at `/privacy.html`.
+- Copyright (c) 2026 Funline30. All rights reserved. See [LICENSE](LICENSE). The source is public to read; it is not licensed for reuse.
+- The repo name, URL, Firebase project and storage keys still say `panel-buddy` / `panelbuddy:` on purpose: renaming them would break existing logins and saved data.

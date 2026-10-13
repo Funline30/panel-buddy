@@ -30,7 +30,7 @@ async function start() {
   applyTheme();
   const wantDemo = localStorage.getItem(MODE_KEY) === 'demo' || /[?&]demo=1/.test(location.search);
   if (isFirebaseConfigured() && !wantDemo) {
-    app.innerHTML = `<div class="center-msg">Loading Panel Buddy...</div>`;
+    app.innerHTML = `<div class="center-msg">Loading AmpMap...</div>`;
     const { createFirebaseStore } = await import('./store/firebase.js');
     store = createFirebaseStore(firebaseConfig);
     store.onAuth(() => render());
@@ -247,7 +247,7 @@ async function render() {
 
 function renderNotFound() {
   const homeId = currentHomeId();
-  app.innerHTML = shell(homeId, '', `<div class="card empty"><h2>Not found</h2><p>That item isn't in this account. It may have been deleted, or it belongs to someone else's Panel Buddy.</p><a class="btn" href="#/">Go to my panel</a></div>`, { title: 'Not found', back: '#/' });
+  app.innerHTML = shell(homeId, '', `<div class="card empty"><h2>Not found</h2><p>That item isn't in this account. It may have been deleted, or it belongs to someone else's AmpMap.</p><a class="btn" href="#/">Go to my panel</a></div>`, { title: 'Not found', back: '#/' });
   bindShell();
 }
 
@@ -257,9 +257,9 @@ function renderLogin() {
   app.innerHTML = `
   <div class="auth">
     <div class="auth-logo" aria-hidden="true">⚡</div>
-    <h1>Panel Buddy</h1>
+    <h1>AmpMap</h1>
     <p class="muted">Map your breaker panel, every outlet and light, QR stickers and load checks. Free, no ads.</p>
-    ${pendingRoute && /^#\/(p|d|b)\//.test(pendingRoute) ? `<div class="alert warn" id="scanBanner">You scanned a Panel Buddy sticker. Sign in to open it.</div>` : ''}
+    ${pendingRoute && /^#\/(p|d|b)\//.test(pendingRoute) ? `<div class="alert warn" id="scanBanner">You scanned an AmpMap sticker. Sign in to open it.</div>` : ''}
     ${isFirebaseConfigured() ? `
     <form id="authForm" class="card form">
       <label>Email<input type="email" name="email" autocomplete="email" required inputmode="email"></label>
@@ -272,9 +272,9 @@ function renderLogin() {
       </label>
       <button class="btn primary" type="submit">Continue</button>
       <p class="err" id="authErr" role="alert"></p>
-    </form>` : `<div class="card"><p>Accounts aren't switched on yet for this copy of Panel Buddy. You can use the demo below; it saves on this device.</p></div>`}
+    </form>` : `<div class="card"><p>Accounts aren't switched on yet for this copy of AmpMap. You can use the demo below; it saves on this device.</p></div>`}
     <button class="btn ghost" id="demoBtn">${cloud ? 'Try the demo without an account' : 'Back to the demo'}</button>
-    <p class="tiny muted">Your data is private to your account. No ads, no trackers.</p>
+    <p class="tiny muted">Your data is private to your account. No ads, no trackers. <a href="/privacy.html">Privacy Policy</a></p>
   </div>`;
   const f = document.getElementById('authForm');
   if (f) {
@@ -337,7 +337,7 @@ function friendlyAuthError(ex) {
 }
 
 function renderFirstHome() {
-  app.innerHTML = `<div class="auth"><div class="auth-logo" aria-hidden="true">⚡</div><h1>Welcome to Panel Buddy</h1>
+  app.innerHTML = `<div class="auth"><div class="auth-logo" aria-hidden="true">⚡</div><h1>Welcome to AmpMap</h1>
   <p class="muted">Start by adding your home. You can add more properties later.</p>
   <a class="btn primary" href="#/edit/homes/new">Add my home</a>
   ${store.mode === 'cloud' ? `<p class="tiny muted">Signed in as ${esc(store.user.email)} · <a href="#" id="so">Sign out</a></p>` : ''}</div>`;
@@ -946,7 +946,7 @@ function renderMore(homeId) {
     <h3>Install on your phone</h3>
     <p class="muted"><b>iPhone:</b> open in Safari, tap Share, then "Add to Home Screen".<br><b>Android / Windows (Chrome or Edge):</b> menu, then "Install app".</p>
   </div>
-  <p class="tiny muted center">Panel Buddy · free, no ads, no trackers. Not a substitute for a licensed electrician; turn the breaker off and verify with a tester before touching wiring.</p>`;
+  <p class="tiny muted center">AmpMap · free, no ads, no trackers. Not a substitute for a licensed electrician; turn the breaker off and verify with a tester before touching wiring.<br><a href="/privacy.html">Privacy Policy</a></p>`;
   app.innerHTML = shell(homeId, 'more', body);
   bindShell();
   const $ = (id) => document.getElementById(id);
@@ -955,10 +955,10 @@ function renderMore(homeId) {
     const data = JSON.parse(JSON.stringify(D()));
     const photos = {};
     for (const c of ['panels', 'devices']) for (const it of data[c]) if (it.photoId) photos[it.photoId] = await store.getPhoto(it.photoId);
-    download(`panel-buddy-backup-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify({ app: 'panel-buddy', version: 1, exportedAt: new Date().toISOString(), ...data, settings: store.settings, photos }, null, 2));
+    download(`ampmap-backup-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify({ app: 'panel-buddy', version: 1, exportedAt: new Date().toISOString(), ...data, settings: store.settings, photos }, null, 2));
   };
-  $('expBrk').onclick = () => download('panel-buddy-breakers.csv', breakersCsv(D()), 'text/csv');
-  if ($('expFuse')) $('expFuse').onclick = () => download('panel-buddy-12v-fuses.csv', fusesCsv(D()), 'text/csv');
+  $('expBrk').onclick = () => download('ampmap-breakers.csv', breakersCsv(D()), 'text/csv');
+  if ($('expFuse')) $('expFuse').onclick = () => download('ampmap-12v-fuses.csv', fusesCsv(D()), 'text/csv');
   $('acctType').onchange = async (e) => {
     const t = e.target.value;
     await store.saveSettings({ accountType: t });
@@ -995,14 +995,14 @@ function renderMore(homeId) {
     void _t;
     await store.put('homes', rest);
   };
-  $('expShop').onclick = () => download('panel-buddy-shopping-list.csv', shoppingCsv(inHome('devices', homeId), shopScope(homeId), home.name), 'text/csv');
-  $('expDev').onclick = () => download('panel-buddy-outlets-lights.csv', devicesCsv(D()), 'text/csv');
+  $('expShop').onclick = () => download('ampmap-shopping-list.csv', shoppingCsv(inHome('devices', homeId), shopScope(homeId), home.name), 'text/csv');
+  $('expDev').onclick = () => download('ampmap-outlets-lights.csv', devicesCsv(D()), 'text/csv');
   $('impJson').onchange = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
     try {
       const parsed = JSON.parse(await file.text());
-      if (!Array.isArray(parsed.homes)) throw new Error('Not a Panel Buddy backup');
+      if (!Array.isArray(parsed.homes)) throw new Error('Not an AmpMap backup');
       if (!confirm(`Replace everything here with this backup (${parsed.homes.length} home(s), ${(parsed.breakers || []).length} breakers, ${(parsed.devices || []).length} items)?`)) return;
       await importAll(parsed);
       toast('Backup restored');
@@ -1150,7 +1150,7 @@ async function resolveShort(kind, id) {
   const item = byId(col, id);
   if (item) return location.replace(`#/h/${item.homeId}/${view}/${id}`);
   const homeId = currentHomeId();
-  app.innerHTML = shell(homeId, '', `<div class="card empty"><h2>Not in your Panel Buddy</h2>
+  app.innerHTML = shell(homeId, '', `<div class="card empty"><h2>Not in your AmpMap</h2>
     <p>This sticker belongs to ${store.mode === 'cloud' ? 'another account' : 'data that isn\'t on this device'}.</p>
     <div id="shareHint" class="muted">Checking for a shared copy...</div>
     ${store.mode === 'cloud' ? '<button class="btn" id="switchAcct">Sign in with a different account</button>' : ''}
@@ -1175,7 +1175,7 @@ function handleScanned(text) {
   const m = String(text).match(/#(\/(?:p|d|b|h|share)\/[^\s]*)/);
   if (m) return go('#' + m[1]);
   const el = document.getElementById('scanMsg');
-  if (el) el.textContent = `That QR code isn't a Panel Buddy sticker: ${String(text).slice(0, 120)}`;
+  if (el) el.textContent = `That QR code isn't an AmpMap sticker: ${String(text).slice(0, 120)}`;
 }
 
 async function decodeImageData(imgData) {
@@ -1191,7 +1191,7 @@ async function renderScan() {
     <video id="scanVideo" playsinline muted aria-label="Camera view"></video>
     <div class="scan-frame" aria-hidden="true"></div>
   </div>
-  <p id="scanMsg" class="center muted" role="status">Point the camera at a Panel Buddy QR sticker.</p>
+  <p id="scanMsg" class="center muted" role="status">Point the camera at an AmpMap QR sticker.</p>
   <label class="btn full file-btn">Take a photo of the sticker instead<input type="file" accept="image/*" capture="environment" id="scanFile" hidden></label>
   <p class="tiny muted center">Tip: your phone's regular Camera app can scan the stickers too.</p>`;
   app.innerHTML = homeId ? shell(homeId, '', body, { title: 'Scan sticker', back: '#/' }) : body;
@@ -1277,7 +1277,7 @@ async function renderShare(token) {
     doc = null;
   }
   if (!doc) {
-    app.innerHTML = `<div class="auth"><div class="auth-logo" aria-hidden="true">⚡</div><h1>Link not found</h1><p class="muted">This shared panel link was turned off or doesn't exist.</p><a class="btn" href="#/">Open Panel Buddy</a></div>`;
+    app.innerHTML = `<div class="auth"><div class="auth-logo" aria-hidden="true">⚡</div><h1>Link not found</h1><p class="muted">This shared panel link was turned off or doesn't exist.</p><a class="btn" href="#/">Open AmpMap</a></div>`;
     return;
   }
   const sections = (doc.panels || []).map((p) => {
@@ -1303,8 +1303,8 @@ async function renderShare(token) {
   app.innerHTML = `
   <header class="topbar"><span class="logo" aria-hidden="true">⚡</span><div class="topbar-title"><h1>${esc(doc.home.name)}</h1></div></header>
   <main class="main share-main">
-    <p class="muted no-print">Read-only panel directory shared from Panel Buddy${doc.updatedAt ? ' · updated ' + new Date(doc.updatedAt).toLocaleDateString() : ''}.</p>
-    <div class="row-actions no-print"><button class="btn" id="doPrint">Print / Save as PDF</button><a class="btn ghost" href="#/">Get Panel Buddy (free)</a></div>
+    <p class="muted no-print">Read-only panel directory shared from AmpMap${doc.updatedAt ? ' · updated ' + new Date(doc.updatedAt).toLocaleDateString() : ''}.</p>
+    <div class="row-actions no-print"><button class="btn" id="doPrint">Print / Save as PDF</button><a class="btn ghost" href="#/">Get AmpMap (free)</a></div>
     ${sections.join('') || '<p>No panels in this share.</p>'}
   </main>`;
   document.getElementById('doPrint').onclick = () => window.print();
@@ -1357,7 +1357,7 @@ function renderShop(homeId, scopeQ) {
   app.innerHTML = shell(homeId, 'rooms', body, { title: 'Shopping list', back: `#/h/${homeId}/rooms` });
   bindShell();
   document.getElementById('shopScope').onchange = (e) => go(`#/h/${homeId}/shop?scope=${e.target.value}`);
-  document.getElementById('shopCsv').onclick = () => download(`panel-buddy-shopping-list.csv`, shoppingCsv(inHome('devices', homeId), scope, home.name), 'text/csv');
+  document.getElementById('shopCsv').onclick = () => download(`ampmap-shopping-list.csv`, shoppingCsv(inHome('devices', homeId), scope, home.name), 'text/csv');
 }
 
 async function renderPrint(homeId, kind, id, q) {
@@ -1372,7 +1372,7 @@ async function renderPrint(homeId, kind, id, q) {
     </div>
     <div class="sheet shop">
       <h2>Shopping list · ${esc(homeLabel(home))}</h2>
-      <div class="dir-foot" style="text-align:left">${scope === 'replace' ? 'Items marked "Needs replacing"' : 'Everything in this home'} · ${new Date().toLocaleDateString()} · Panel Buddy</div>
+      <div class="dir-foot" style="text-align:left">${scope === 'replace' ? 'Items marked "Needs replacing"' : 'Everything in this home'} · ${new Date().toLocaleDateString()} · AmpMap</div>
       ${sl.count ? shopSections(sl).map(([title, list]) => `<h3>${esc(title)}</h3><table class="shop-table"><tbody>${list.map((i) => `<tr><td class="box"><span></span></td><td class="q">${i.qty}</td><td>${esc(lineText(i).replace(/^\d+ /, ''))}</td></tr>`).join('')}</tbody></table>`).join('') : '<p>Nothing to list.</p>'}
     </div>`;
     app.innerHTML = shell(homeId, 'rooms', body, { title: 'Print shopping list', back: `#/h/${homeId}/shop?scope=${scope}` });
@@ -1409,7 +1409,7 @@ async function renderPrint(homeId, kind, id, q) {
       <div class="dir-head"><b>${esc(panel.name)}</b> · ${esc(homeLabel(home))}${panel.mainAmps ? ` · Main ${esc(mainAmpsText(panel))}A` : ''}${panel.type === 'rv' && panel.shorePower ? ` · ${esc(shoreText(panel))} shore` : ''}${sourceText(panel) ? ` · ${esc(sourceText(panel))}` : ''}</div>
       <table class="dir-table ${one ? 'one' : ''}"><thead><tr><th>#</th><th>A</th><th>Circuit</th>${one ? '' : '<th>#</th><th>A</th><th>Circuit</th>'}</tr></thead><tbody>${rowsHtml.join('')}</tbody></table>
       ${fuses.length ? `<div class="dir-head" style="margin-top:8px"><b>12V DC fuses</b></div><table class="dir-table one"><thead><tr><th>#</th><th>A</th><th>Powers</th></tr></thead><tbody>${fuses.map((f) => `<tr><td class="n">${esc(f.num)}</td><td class="a">${esc(f.amps === 'other' ? f.ampsOther : f.amps)}A</td><td class="l">${esc(f.powers)}${f.notes ? ` <span class="rm">(${esc(f.notes)})</span>` : ''}</td></tr>`).join('')}</tbody></table>` : ''}
-      <div class="dir-foot">Updated ${new Date().toLocaleDateString()} · Panel Buddy</div>
+      <div class="dir-foot">Updated ${new Date().toLocaleDateString()} · AmpMap</div>
     </div>`;
     app.innerHTML = shell(homeId, 'more', body, { title: 'Panel label', back: `#/h/${homeId}/panel/${panel.id}` });
     bindShell();

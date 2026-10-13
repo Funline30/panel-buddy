@@ -1,0 +1,14 @@
+Copyright (c) 2026 Funline30. All rights reserved.
+
+AmpMap (formerly Panel Buddy) and its source code, design and content are
+proprietary. The source code is published for viewing only. No permission is
+granted to copy, modify, distribute, sublicense or sell any part of it, or to
+create derivative works, without prior written permission from the copyright
+holder.
+
+Third-party open-source packages used by this project (such as Firebase, jsQR,
+qrcode and Vite) are covered by their own licenses.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM,
+DAMAGES OR OTHER LIABILITY ARISING FROM THE USE OF THE SOFTWARE.

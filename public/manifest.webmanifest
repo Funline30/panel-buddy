@@ -1,6 +1,6 @@
 {
-  "name": "Panel Buddy",
-  "short_name": "Panel Buddy",
+  "name": "AmpMap",
+  "short_name": "AmpMap",
   "description": "Map your breaker panel, outlets and lights. QR stickers and load checks. Free, no ads.",
   "start_url": "./",
   "scope": "./",

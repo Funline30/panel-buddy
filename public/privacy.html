@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AmpMap - Privacy Policy</title>
+<meta name="description" content="How AmpMap handles your data.">
+<link rel="icon" href="./icons/icon-192.png" type="image/png">
+<style>
+  :root { color-scheme: light dark; --bg: #f6f7f9; --card: #fff; --text: #111827; --muted: #4b5563; --line: #e5e7eb; --accent: #b45309; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0f1115; --card: #181b21; --text: #e8eaed; --muted: #a3a9b3; --line: #2a2f37; --accent: #fbbf24; } }
+  body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; background: var(--bg); color: var(--text); }
+  main { max-width: 720px; margin: 0 auto; padding: 24px 18px 64px; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; }
+  h2 { font-size: 1.1rem; margin: 0 0 8px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; margin: 14px 0; }
+  p, li { line-height: 1.55; }
+  ul { padding-left: 20px; margin: 8px 0; }
+  .muted { color: var(--muted); }
+  a { color: var(--accent); }
+  .back { display: inline-block; margin-bottom: 14px; font-weight: 600; text-decoration: none; }
+</style>
+</head>
+<body>
+<main>
+  <a class="back" href="/">&larr; Back to AmpMap</a>
+  <h1>&#9889; AmpMap Privacy Policy</h1>
+  <p class="muted">Effective date: October 13, 2026</p>
+
+  <section>
+    <p>AmpMap is a free app for mapping breaker panels, outlets, lights and circuit loads. It has no ads and no tracking or analytics. This page explains what the app stores, where it is stored, and what you can do about it.</p>
+  </section>
+
+  <section>
+    <h2>Demo mode (no account)</h2>
+    <p>If you use AmpMap without signing in, everything you enter (homes, panels, breakers, outlets, photos and settings) is saved only in your own browser's local storage on that device. It is not sent to us. Clearing your browser data or tapping "Reset demo" deletes it.</p>
+  </section>
+
+  <section>
+    <h2>If you create an account</h2>
+    <ul>
+      <li><b>Sign-in:</b> accounts use email and password through Google Firebase Authentication. We see your email address; your password is handled by Firebase and is never visible to us. Firebase may send you emails we trigger, such as password resets.</li>
+      <li><b>Your records:</b> homes, panels, breakers, outlets/devices, loads, notes, optional addresses, optional photos (shrunk to a small image on your device before upload) and app settings are stored in Google Cloud Firestore under your account.</li>
+      <li><b>Tech / Pro mode:</b> if you add customers, their name, phone, email, notes and service history are stored the same way, under your account. You are responsible for having permission to store your customers' information.</li>
+      <li><b>Who can see it:</b> only you, when signed in. Our database rules block every other account from reading your data.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Sharing and QR stickers</h2>
+    <p>QR stickers contain only a short link to a record (for example a panel ID). They do not contain your personal information. Someone who scans one sees a sign-in screen, unless you turned on sharing for that panel.</p>
+    <p>If you turn on sharing, a read-only copy of that panel's directory is saved so that anyone with the link (or the sticker) can view it. You can update or turn off a shared link at any time, which removes the shared copy.</p>
+  </section>
+
+  <section>
+    <h2>Camera</h2>
+    <p>The camera is used only when you tap Scan or add a photo. QR codes are decoded on your device. Video from the scanner is not uploaded or saved.</p>
+  </section>
+
+  <section>
+    <h2>Services we use</h2>
+    <ul>
+      <li><b>Google Firebase</b> (Authentication and Cloud Firestore) to run accounts and sync your data. Google processes this data under its own terms and privacy policy.</li>
+      <li><b>Vercel</b> to host the website. Like any web host, it may keep standard server logs (such as IP address, browser type and pages requested) for security and operations.</li>
+    </ul>
+    <p>We do not sell your data, share it with advertisers, or use it for anything other than running the app.</p>
+  </section>
+
+  <section>
+    <h2>Your choices</h2>
+    <ul>
+      <li>Edit or delete any home, panel, breaker, device, photo or customer in the app at any time.</li>
+      <li>Download a copy of your data from <b>More &rarr; Download backup</b> (JSON) or the CSV exports.</li>
+      <li>To delete your account and all of its data, email us at the address below from the email on your account. We will delete it and confirm.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Children</h2>
+    <p>AmpMap is meant for adults managing their own homes, RVs or customers' properties. It is not directed at children under 13, and we do not knowingly collect their information.</p>
+  </section>
+
+  <section>
+    <h2>Changes and contact</h2>
+    <p>If this policy changes, we will update this page and its effective date.</p>
+    <p>Questions or deletion requests: <a href="mailto:margoittac@gmail.com">margoittac@gmail.com</a></p>
+  </section>
+</main>
+</body>
+</html>

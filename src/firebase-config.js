@@ -1,5 +1,5 @@
 // ============================================================================
-//  PANEL BUDDY - FIREBASE SETTINGS  (the only file you need to edit)
+//  AMPMAP - FIREBASE SETTINGS  (the only file you need to edit)
 // ----------------------------------------------------------------------------
 //  1. Firebase console -> your project -> Project settings (gear) -> "Your apps"
 //     -> Web app (</>) -> "SDK setup and configuration" -> Config.

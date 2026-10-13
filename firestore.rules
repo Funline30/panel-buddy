@@ -1,6 +1,6 @@
 rules_version = '2';
 
-// Panel Buddy - Firestore security rules.
+// AmpMap - Firestore security rules.
 // Each signed-in user can read and write ONLY their own data under users/{their uid}/.
 // Nobody (signed in or not) can read anyone else's data.
 // Exception: shares/{token} - a read-only panel directory snapshot the owner chose to
