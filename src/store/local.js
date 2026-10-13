@@ -1,5 +1,5 @@
 // Demo / local mode: everything lives in this browser's localStorage.
-import { seedData } from '../lib/seed.js';
+import { seedData, tandemExample, sampleHome } from '../lib/seed.js';
 
 const KEY = 'panelbuddy:data:v1';
 const PHOTO = 'panelbuddy:photo:';
@@ -35,6 +35,14 @@ export function createLocalStore() {
         save();
       }
       for (const c of COLS) data[c] = data[c] || [];
+      // ?example=tandem adds the tandem example panel to an older demo (missing ids only)
+      if (typeof location !== 'undefined' && /[?&]example=tandem/.test(location.search)) {
+        const ex = tandemExample();
+        const add = { homes: data.homes.some((h) => h.id === 'h_sample') ? [] : [sampleHome()], panels: ex.panels, breakers: ex.breakers };
+        let changed = false;
+        for (const c of ['homes', 'panels', 'breakers']) for (const it of add[c]) if (!data[c].find((x) => x.id === it.id)) { data[c].push(it); changed = true; }
+        if (changed) save();
+      }
       data.settings = data.settings || { accountType: 'personal' };
       emit();
     },
