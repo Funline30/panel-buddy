@@ -394,3 +394,11 @@ select.full { margin-top: 0; }
 @media print { .sheet.shop { border: 0; padding: 0.5in; max-width: none; width: 8.5in; } }
 .items.sub .item-main { display: block; }
 .style-field .muted, .form label .muted { font-weight: 500; }
+
+/* "How do I find the watts?" help */
+.watts-help { margin: 2px 0 6px; border-radius: 12px; background: color-mix(in srgb, currentColor 6%, transparent); }
+.watts-help > summary { cursor: pointer; padding: 10px 12px; font-size: 0.92rem; font-weight: 600; list-style: none; }
+.watts-help > summary::-webkit-details-marker { display: none; }
+.watts-help .wh-body { padding: 0 12px 12px; font-size: 0.9rem; line-height: 1.4; }
+.watts-help .wh-body p { margin: 0 0 8px; }
+@media print { .watts-help { display: none; } }

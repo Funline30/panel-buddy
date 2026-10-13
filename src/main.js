@@ -531,6 +531,22 @@ function addItemForm(id, { targets = null, button = 'Add' } = {}) {
       <label>Name<input name="name" placeholder="e.g. Space heater" autocomplete="off"></label>
       <label>Watts<input name="watts" type="number" inputmode="numeric" min="0" step="1" placeholder="1500"></label>
     </div>
+    <details class="watts-help">
+      <summary>❓ How do I find the watts?</summary>
+      <div class="wh-body">
+        <p><b>1. Look for the label.</b> Most things have a sticker or stamped plate on the back, bottom, or inside the door (fridge, microwave, washer). Look for a number with <b>W</b> or <b>Watts</b>, like "1500W".</p>
+        <p><b>2. Only amps listed?</b> Multiply volts × amps. A label that says "120V 5A" is about 600W. Use the calculator below.</p>
+        <p><b>3. Chargers and power bricks:</b> read the <b>Input</b> line (like "100-240V 1.5A"), not the Output line. Use 120 for volts.</p>
+        <p><b>4. No label?</b> Search the model number online with "watts", or check the manual.</p>
+        <p><b>5. Most accurate:</b> a plug-in watt meter (Kill A Watt style) shows what it really pulls. Plug it in between the outlet and the item.</p>
+        <p class="tiny muted">The label is the most it can draw. Heaters, microwaves, hair dryers, and toasters really do pull close to their label. TVs and computers usually pull less.</p>
+        <div class="two wh-calc">
+          <label>Volts<input name="wvolts" type="number" inputmode="decimal" value="120"></label>
+          <label>Amps<input name="wamps" type="number" inputmode="decimal" step="0.1" placeholder="5"></label>
+        </div>
+        <button type="button" class="btn full" data-wcalc>Use volts × amps as the watts</button>
+      </div>
+    </details>
     <div class="two">
       <label>How many<select name="qty">${opt(['1', '2', '3', '4', '5', '6', '8', '10'], '1')}</select></label>
       <label>Note <span class="muted">(optional)</span><input name="note" placeholder="e.g. on a power strip" autocomplete="off"></label>
@@ -552,6 +568,14 @@ function bindAddItemForm(f, onAdd) {
       f.elements.watts.value = '';
       f.elements.name.focus();
     }
+  };
+  const wc = f.querySelector('[data-wcalc]');
+  if (wc) wc.onclick = () => {
+    const v = Number(f.elements.wvolts.value) || 120;
+    const a = Number(f.elements.wamps.value);
+    if (!(a > 0)) return toast('Enter the amps from the label');
+    f.elements.watts.value = Math.round(v * a);
+    toast(`${Math.round(v * a)}W`);
   };
   f.onsubmit = async (e) => {
     e.preventDefault();
