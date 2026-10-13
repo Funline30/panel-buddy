@@ -19,7 +19,7 @@ export function seedData() {
     b('b8', 8, 1, 20, 'Refrigerator', ['Kitchen'], { loads: [{ name: 'Refrigerator (running)', watts: 400, qty: 1 }], notes: 'Dedicated fridge circuit. New GFCI installed Oct 12; outlet reads 120V.' }),
     b('b9', 9, 1, 15, 'Master bedroom + master bath + closet lights', ['Master bedroom', 'Master bath', 'Master closet'], { notes: 'One circuit feeds the master bedroom, the master bath lights and the closet light.', loads: [{ name: 'LED bulb', watts: 10, qty: 6 }, { name: 'TV', watts: 150, qty: 1 }, { name: 'Phone charger', watts: 20, qty: 2 }] }),
     b('b10', 10, 1, 20, 'Dining room outlets', ['Dining room'], { notes: 'First outlet is a GFCI. Its LOAD side feeds the rest of the dining outlets.', loads: [{ name: 'Space heater', watts: 1500, qty: 1 }] }),
-    b('b11', 11, 1, 15, 'Bedroom 2 - computer, 3D printer, WiFi', ['Bedroom 2'], { notes: 'Office/bedroom. PC, 3D printer and WiFi share this one. Also feeds the ceiling light.', loads: [{ name: 'Gaming PC', watts: 600, qty: 1 }, { name: 'Computer monitor', watts: 40, qty: 2 }, { name: '3D printer (heated bed)', watts: 300, qty: 1 }, { name: 'WiFi router / modem', watts: 15, qty: 1 }, { name: 'LED bulb', watts: 10, qty: 2 }] }),
+    b('b11', 11, 1, 15, 'Bedroom 2 - computer, 3D printer, WiFi', ['Bedroom 2'], { notes: 'Office/bedroom. PC, 3D printer and WiFi share this one. Also feeds the ceiling light. What is plugged in is listed on each outlet.', loads: [{ name: 'LED bulb', watts: 10, qty: 2 }] }),
     b('b12', 12, 1, 20, 'Bathroom outlets', ['Hall bath'], { kind: 'gfci', loads: [{ name: 'Hair dryer', watts: 1500, qty: 1 }] }),
     b('b13', 13, 1, 15, 'Living room outlets + lights', ['Living room'], { loads: [{ name: 'TV', watts: 150, qty: 1 }, { name: 'Game console', watts: 200, qty: 1 }, { name: 'LED bulb', watts: 10, qty: 4 }] }),
     b('b14', 14, 1, 20, 'Microwave', ['Kitchen'], { loads: [{ name: 'Microwave', watts: 1200, qty: 1 }] }),
@@ -40,7 +40,7 @@ export function seedData() {
     d('d2', 'b9', 'outlet', 'Outlet by bed', 'Master bedroom', 'North wall by bed'),
     d('d3', 'b9', 'light', 'Vanity light', 'Master bath', 'Over the sink', { notes: 'Swapping for a 2-light vanity fixture.' }),
     d('d4', 'b9', 'light', 'Closet light', 'Master closet', 'Ceiling, just inside door'),
-    d('d5', 'b10', 'outlet', 'GFCI outlet (first in line)', 'Dining room', 'East wall by window', { gfci: 'gfci_outlet', notes: 'LINE = power in from panel. LOAD terminals feed the other dining outlets, so if this one trips, they all go dead. Reset here.' }),
+    d('d5', 'b10', 'outlet', 'GFCI outlet (first in line)', 'Dining room', 'East wall by window', { gfci: 'gfci_outlet', style: 'gfci', replace: 'yes', box: 'existing', notes: 'LINE = power in from panel. LOAD terminals feed the other dining outlets, so if this one trips, they all go dead. Reset here.' }),
     d('d6', 'b10', 'outlet', 'Outlet', 'Dining room', 'South wall, center', { gfci: 'downstream', notes: 'Fed from the LOAD side of the dining GFCI.' }),
     d('d7', 'b10', 'outlet', 'Outlet', 'Dining room', 'West wall by hutch', { gfci: 'downstream', notes: 'Fed from the LOAD side of the dining GFCI.' }),
     d('d8', 'b15', 'fan', 'Bathroom vent fan', 'Hall bath', 'Ceiling over tub', {
@@ -52,14 +52,17 @@ export function seedData() {
       ],
     }),
     d('d9', 'b15', 'light', 'Bath light', 'Hall bath', 'Over mirror'),
-    d('d10', 'b11', 'outlet', 'Desk outlet', 'Bedroom 2', 'Behind desk, west wall', { notes: 'PC, monitors, 3D printer on a power strip here.' }),
-    d('d11', 'b11', 'outlet', 'WiFi outlet', 'Bedroom 2', 'By the window', { notes: 'WiFi router + modem.' }),
+    d('d10', 'b11', 'outlet', 'Desk outlet', 'Bedroom 2', 'Behind desk, west wall', { notes: 'PC, monitors, 3D printer on a power strip here.', loads: [{ name: 'Gaming PC', watts: 600, qty: 1 }, { name: 'Computer monitor', watts: 40, qty: 2 }, { name: '3D printer (heated bed)', watts: 300, qty: 1 }] }),
+    d('d11', 'b11', 'outlet', 'WiFi outlet', 'Bedroom 2', 'By the window', { notes: 'WiFi router + modem.', loads: [{ name: 'WiFi router / modem', watts: 15, qty: 1 }] }),
     d('d12', 'b11', 'light', 'Ceiling light', 'Bedroom 2', 'Center of ceiling', { notes: 'Bulb was out: fixed by prying up the socket tab (Oct 12).', readings: [{ text: '120V brass tab to threads with switch ON', date: '2026-10-12' }] }),
     d('d13', 'b8', 'outlet', 'Fridge outlet', 'Kitchen', 'Behind refrigerator', { gfci: 'gfci_outlet', notes: 'New GFCI installed Oct 12. Reads 120V.' }),
     d('d14', 'b6', 'outlet', 'Counter outlet', 'Kitchen', 'Left of sink', { gfci: 'gfci_outlet' }),
     d('d15', 'b12', 'outlet', 'Bathroom outlet', 'Hall bath', 'Next to sink', { gfci: 'gfci_breaker' }),
     d('d16', 'b13', 'outlet', 'TV outlet', 'Living room', 'Under the TV'),
     d('d17', 'b14', 'appliance', 'Microwave', 'Kitchen', 'Over the range'),
+    d('d18', 'b9', 'outlet', 'Bedroom outlets', 'Master bedroom', 'Around the room', { style: 'tr_duplex', qty: 7, box: 'oldwork', replace: 'yes', notes: 'Old loose outlets. Swapping all 7 for tamper-resistant; boxes are cracked.' }),
+    d('d19', 'b9', 'switch', 'Light switches', 'Master bedroom', 'By doors', { style: 'toggle', qty: 2, box: 'existing', replace: 'yes' }),
+    d('d20', 'b10', 'switch', 'Dining light switch', 'Dining room', 'By the hallway', { style: 'rocker', box: 'mobile', replace: 'yes' }),
   ];
   // ---- sample camper (RV panel, 30A shore power, 12V fuses)
   const R = 'h_camper';

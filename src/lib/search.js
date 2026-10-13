@@ -1,6 +1,6 @@
 // Search across breakers and devices. Understands "breaker 7", "#7", "slot 7",
 // and plain words ("bathroom fan", "gfci", "dead").
-import { labelOf, DEVICE_TYPES, STATUS_OPTIONS, GFCI_OPTIONS } from './options.js';
+import { labelOf, DEVICE_TYPES, STATUS_OPTIONS, GFCI_OPTIONS, styleOf } from './options.js';
 import { slotsFor, layoutOf } from './panel.js';
 
 export function breakerSlots(b, layout = 'two') {
@@ -89,6 +89,9 @@ export function search(query, data) {
       d.gfci && d.gfci !== 'no' && d.gfci !== 'unknown' ? 'gfci ' + labelOf(GFCI_OPTIONS, d.gfci) : '',
       d.afci && d.afci !== 'no' && d.afci !== 'unknown' ? 'afci' : '',
       (d.readings || []).map((r) => r.text).join(' '),
+      (d.loads || []).map((l) => l.name).join(' '),
+      styleOf(d) ? styleOf(d).label : '',
+      d.replace === 'yes' ? 'replace needs replacing' : '',
     ]);
     const s = score(hay, toks);
     if (s) results.push({ kind: 'device', item: d, breaker: b, score: s + 2 });

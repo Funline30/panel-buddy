@@ -21,9 +21,32 @@ export function totalWatts(loads = []) {
   }, 0);
 }
 
-export function loadSummary(breaker) {
+// Watts plugged into one outlet / device (its own "what's plugged in" list).
+export function deviceWatts(device) {
+  return totalWatts((device && device.loads) || []);
+}
+
+// Devices that belong to this breaker AND have something listed as plugged in.
+export function devicesWithLoads(breaker, devices = []) {
+  if (!breaker) return [];
+  return (devices || []).filter((d) => d && d.breakerId === breaker.id && deviceWatts(d) > 0);
+}
+
+// Total watts on a circuit = loads listed on the breaker itself + every outlet's own list.
+// Each item lives in exactly one place (breaker OR outlet), so nothing is counted twice.
+export function breakerWatts(breaker, devices = []) {
+  const own = totalWatts((breaker && breaker.loads) || []);
+  return own + devicesWithLoads(breaker, devices).reduce((s, d) => s + deviceWatts(d), 0);
+}
+
+// devices is optional (older callers pass only the breaker): pass the home's devices to
+// include what's plugged into each outlet on this circuit.
+export function loadSummary(breaker, devices = []) {
   const volts = voltsFor(breaker && breaker.poles);
-  const watts = totalWatts((breaker && breaker.loads) || []);
+  const ownWatts = totalWatts((breaker && breaker.loads) || []);
+  const parts = devicesWithLoads(breaker, devices).map((d) => ({ device: d, watts: deviceWatts(d) }));
+  const outletWatts = parts.reduce((s, x) => s + x.watts, 0);
+  const watts = ownWatts + outletWatts;
   const amps = watts / volts;
   const rating = breakerAmps(breaker);
   const pct = rating ? (amps / rating) * 100 : 0;
@@ -39,6 +62,9 @@ export function loadSummary(breaker) {
     pct,
     level,
     limit80: rating * 0.8,
+    ownWatts,
+    outletWatts,
+    parts,
   };
 }
 
@@ -83,17 +109,17 @@ function levelFor(amps, cap) {
   return pct > 100 ? 'over' : pct >= 80 ? 'warn' : 'ok';
 }
 
-export function shoreSummary(panel, breakers) {
+export function shoreSummary(panel, breakers, devices = []) {
   const cap = shoreCapacity(panel);
   if (!cap) return null;
   if (cap.legs === 1) {
     let amps = 0;
-    for (const b of breakers) amps += totalWatts(b.loads || []) / voltsFor(b.poles);
+    for (const b of breakers) amps += breakerWatts(b, devices) / voltsFor(b.poles);
     return { legs: [{ name: 'Total', amps, cap: cap.amps, pct: (amps / cap.amps) * 100, level: levelFor(amps, cap.amps) }], unassigned: 0 };
   }
   let l1 = 0, l2 = 0, unassigned = 0;
   for (const b of breakers) {
-    const w = totalWatts(b.loads || []);
+    const w = breakerWatts(b, devices);
     if (!w) continue;
     if (String(b.poles) === '2') {
       l1 += w / 240;

@@ -118,3 +118,55 @@ export function deviceIcon(type) {
   const hit = DEVICE_TYPES.find((d) => d.value === type);
   return hit ? hit.icon : '⚡';
 }
+
+// ---- style / quantity / box (for a shopping list). Missing fields on older docs = qty 1, style unknown.
+export const OUTLET_STYLES = [
+  { value: '', label: 'Not set' },
+  { value: 'duplex', label: 'Standard duplex', short: 'standard duplex outlet', plate: 'duplex' },
+  { value: 'tr_duplex', label: 'Tamper-resistant duplex', short: 'TR duplex outlet', plate: 'duplex' },
+  { value: 'decora', label: 'Decora / rocker-style', short: 'Decora outlet', plate: 'decora' },
+  { value: 'gfci', label: 'GFCI', short: 'GFCI outlet', plate: 'decora' },
+  { value: 'afci', label: 'AFCI', short: 'AFCI outlet', plate: 'decora' },
+  { value: 'usb', label: 'USB combo', short: 'USB combo outlet', plate: 'decora' },
+  { value: 'double', label: 'Double / quad (2-gang)', short: 'quad (2-gang) outlet', plate: 'duplex', gangs: 2 },
+  { value: '20a', label: '20A', short: '20A outlet', plate: 'duplex' },
+  { value: 'other', label: 'Other', short: 'other outlet', plate: 'other' },
+];
+export const SWITCH_STYLES = [
+  { value: '', label: 'Not set' },
+  { value: 'toggle', label: 'Toggle single-pole', short: 'toggle switch (single-pole)', plate: 'toggle' },
+  { value: 'rocker', label: 'Rocker (Decora) single-pole', short: 'rocker switch (single-pole)', plate: 'decora' },
+  { value: '3way', label: '3-way', short: '3-way switch', plate: 'toggle' },
+  { value: '4way', label: '4-way', short: '4-way switch', plate: 'toggle' },
+  { value: 'dimmer', label: 'Dimmer', short: 'dimmer', plate: 'decora' },
+  { value: 'combo', label: 'Combo switch / outlet', short: 'combo switch/outlet', plate: 'decora' },
+  { value: 'smart', label: 'Smart', short: 'smart switch', plate: 'decora' },
+  { value: 'other', label: 'Other', short: 'other switch', plate: 'other' },
+];
+export const BOX_OPTIONS = [
+  { value: '', label: 'Unknown' },
+  { value: 'existing', label: 'Existing box (reuse it)' },
+  { value: 'oldwork', label: 'Needs new box - old-work (swing-tab / lever drywall box)', short: 'old-work box (swing-tab / lever)' },
+  { value: 'mobile', label: 'Needs new box - mobile-home box', short: 'mobile-home box' },
+  { value: 'surface', label: 'Surface / no box' },
+];
+export const NEW_BOX_VALUES = ['oldwork', 'mobile'];
+export const REPLACE_OPTIONS = [
+  { value: '', label: 'No' },
+  { value: 'yes', label: 'Yes - needs replacing' },
+];
+export const PLATE_LABELS = { duplex: 'duplex outlet plate', decora: 'Decora (rocker) plate', toggle: 'toggle switch plate', other: 'other plate' };
+
+export function stylesFor(type) {
+  if (type === 'outlet') return OUTLET_STYLES;
+  if (type === 'switch') return SWITCH_STYLES;
+  return null;
+}
+export function styleOf(d) {
+  const list = d && stylesFor(d.type);
+  return (list && list.find((s) => s.value && s.value === d.style)) || null;
+}
+export function qtyOf(d) {
+  const n = Math.floor(Number(d && d.qty));
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}

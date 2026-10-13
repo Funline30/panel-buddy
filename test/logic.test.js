@@ -1,11 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { loadSummary, voltsFor, totalWatts, shoreSummary } from '../src/lib/load.js';
+import { loadSummary, voltsFor, totalWatts, shoreSummary, breakerWatts, deviceWatts } from '../src/lib/load.js';
 import { layoutOf, slotsFor, slotLabel, panelSpaces } from '../src/lib/panel.js';
 import { search, parseBreakerQuery, breakerSlots } from '../src/lib/search.js';
 import { seedData, seedPro } from '../src/lib/seed.js';
 import { breakersCsv, devicesCsv, fusesCsv } from '../src/lib/csv.js';
 import { readFileSync } from 'node:fs';
+import { shoppingList, shoppingCsv, lineText, plural } from '../src/lib/shopping.js';
+import { qtyOf, styleOf, stylesFor } from '../src/lib/options.js';
+import { resolveTheme, normalizeTheme } from '../src/lib/theme.js';
 
 test('load math: amps = watts / 120 single pole, / 240 double pole', () => {
   assert.equal(voltsFor('1'), 120);
@@ -66,7 +69,11 @@ test('sample home matches the brief and is internally consistent', () => {
   assert.ok(data.devices.filter((d) => d.gfci === 'downstream' && d.room === 'Dining room').length >= 2);
   assert.equal(data.devices.find((d) => d.id === 'd8').status, 'dead');
   const office = data.breakers.find((b) => b.id === 'b11');
-  for (const n of ['PC', '3D printer', 'WiFi']) assert.ok(office.loads.some((l) => l.name.includes(n)), n);
+  const officeItems = [...office.loads, ...data.devices.filter((d) => d.breakerId === 'b11').flatMap((d) => d.loads || [])];
+  for (const n of ['PC', '3D printer', 'WiFi']) assert.ok(officeItems.some((l) => l.name.includes(n)), n);
+  // the office circuit total is unchanged by moving items onto its outlets: 600 + 80 + 300 + 15 + 20
+  assert.equal(loadSummary(office, data.devices).watts, 1015);
+  assert.equal(loadSummary(office, data.devices).level, 'ok');
 });
 
 test('CSV export has a header and one row per item', () => {
@@ -164,4 +171,92 @@ test('power pole service uses the main breaker size on two legs', () => {
   assert.equal(s.legs.length, 2);
   assert.equal(s.legs[0].cap, 200);
   assert.equal(s.legs[0].amps, 20);
+});
+
+test('per-outlet loads roll up into the breaker load check without double counting', () => {
+  const b = { id: 'bx', poles: '1', amps: '15', loads: [{ name: 'LED bulb', watts: 10, qty: 3 }] };
+  const devices = [
+    { id: 'o1', breakerId: 'bx', loads: [{ name: 'Space heater', watts: 1500 }] },
+    { id: 'o2', breakerId: 'bx', loads: [{ name: 'Phone charger', watts: 20, qty: 2 }] },
+    { id: 'o3', breakerId: 'bx' }, // old doc with no loads field
+    { id: 'o4', breakerId: 'other', loads: [{ name: 'Microwave', watts: 1200 }] }, // different circuit
+  ];
+  const s = loadSummary(b, devices);
+  assert.equal(s.ownWatts, 30);
+  assert.equal(s.outletWatts, 1540);
+  assert.equal(s.watts, 1570);
+  assert.equal(s.parts.length, 2);
+  assert.deepEqual(s.parts.map((p) => p.device.id), ['o1', 'o2']);
+  assert.equal(Math.round(s.amps * 100) / 100, 13.08);
+  assert.equal(s.level, 'warn');
+  assert.equal(breakerWatts(b, devices), 1570);
+  assert.equal(deviceWatts(devices[0]), 1500);
+  assert.equal(deviceWatts({}), 0);
+  // old callers (breaker only) behave exactly as before
+  assert.equal(loadSummary(b).watts, 30);
+  // double pole: watts / 240
+  const dp = loadSummary({ id: 'dp', poles: '2', amps: '20', loads: [] }, [{ breakerId: 'dp', loads: [{ name: 'Welder', watts: 4800 }] }]);
+  assert.equal(dp.amps, 20);
+  assert.equal(dp.level, 'warn');
+  const over = loadSummary({ id: 'ov', poles: '1', amps: '15' }, [{ breakerId: 'ov', loads: [{ name: 'Heater', watts: 1500, qty: 2 }] }]);
+  assert.equal(over.level, 'over');
+  // shore power check counts outlet loads too
+  const sh = shoreSummary({ shorePower: '30' }, [{ id: 'r1', poles: '1', loads: [] }], [{ breakerId: 'r1', loads: [{ name: 'AC', watts: 1800 }] }]);
+  assert.equal(sh.legs[0].amps, 15);
+});
+
+test('outlet contents are searchable and exported', () => {
+  const data = seedData();
+  const r = search('3D printer', data);
+  assert.ok(r.some((x) => x.kind === 'device' && x.item.id === 'd10'));
+  const csv = devicesCsv(data);
+  assert.match(csv.split('\n')[0], /Plugged in,Plugged in watts/);
+  assert.match(csv, /Gaming PC \(600W\)/);
+});
+
+test('shopping list: totals by type + style, boxes, plates (1 per gang); old docs = qty 1, style not set', () => {
+  const devices = [
+    { type: 'outlet', style: 'tr_duplex', qty: 7, box: 'oldwork', replace: 'yes' },
+    { type: 'outlet', style: 'tr_duplex', qty: '3', box: 'existing' },
+    { type: 'outlet', style: 'gfci', box: 'mobile', replace: 'yes' },
+    { type: 'outlet', style: 'double', qty: 2, replace: 'yes' }, // 2-gang: 2 plates-worth each
+    { type: 'switch', style: 'toggle', qty: 4, box: 'oldwork', replace: 'yes' },
+    { type: 'outlet' }, // old doc: no style, no qty
+    { type: 'light', qty: 2 },
+  ];
+  assert.equal(qtyOf({}), 1);
+  assert.equal(qtyOf({ qty: '0' }), 1);
+  assert.equal(styleOf({ type: 'outlet' }), null);
+  assert.equal(stylesFor('light'), null);
+  const all = shoppingList(devices, 'all');
+  const by = Object.fromEntries(all.items.map((i) => [i.key, i.qty]));
+  assert.equal(by['outlet|tr_duplex'], 10);
+  assert.equal(by['outlet|gfci'], 1);
+  assert.equal(by['outlet|'], 1);
+  assert.equal(by['switch|toggle'], 4);
+  assert.equal(by['light|'], 2);
+  assert.equal(all.boxesNeeded, 7 + 1 + 4);
+  assert.equal(all.platesNeeded, 10 + 1 + 4 + 4 + 1); // outlets+switches gangs, lights excluded
+  const rep = shoppingList(devices, 'replace');
+  assert.equal(rep.items.find((i) => i.key === 'outlet|tr_duplex').qty, 7);
+  assert.equal(rep.platesNeeded, 7 + 1 + 4 + 4);
+  assert.equal(lineText(rep.items.find((i) => i.key === 'outlet|tr_duplex')), '7 TR duplex outlets');
+  assert.equal(lineText({ qty: 4, name: 'toggle switch (single-pole)' }), '4 toggle switches (single-pole)');
+  assert.equal(plural(30, 'old-work box (swing-tab / lever)'), 'old-work boxes (swing-tab / lever)');
+  const csv = shoppingCsv(devices, 'all', 'Home');
+  assert.match(csv, /^Home,Group,Item,Quantity/);
+  assert.match(csv, /Home,Outlets,TR duplex outlet,10/);
+  assert.match(csv, /Wall plates \(1 per gang\)/);
+  // sample data has something to shop for
+  const sample = shoppingList(seedData().devices.filter((d) => d.homeId === 'h_sample'), 'replace');
+  assert.ok(sample.count >= 3);
+});
+
+test('appearance setting: System / Light / Dark', () => {
+  assert.equal(resolveTheme('system', true), 'dark');
+  assert.equal(resolveTheme('system', false), 'light');
+  assert.equal(resolveTheme('light', true), 'light');
+  assert.equal(resolveTheme('dark', false), 'dark');
+  assert.equal(normalizeTheme(null), 'system');
+  assert.equal(normalizeTheme('bogus'), 'system');
 });

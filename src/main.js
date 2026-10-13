@@ -6,11 +6,14 @@ import {
   AMP_OPTIONS, POLE_OPTIONS, BREAKER_KINDS, DEVICE_TYPES, GFCI_OPTIONS, AFCI_OPTIONS, STATUS_OPTIONS,
   PANEL_TYPES, SPACE_OPTIONS, MAIN_AMP_OPTIONS, RV_MAIN_AMP_OPTIONS, SHORE_POWER_OPTIONS, LEG_OPTIONS, POWER_SOURCE_OPTIONS,
   FUSE_AMP_OPTIONS, FUSE_USES, HOME_TYPES, LAYOUT_OPTIONS, HOME_ROOMS, RV_ROOMS, labelOf, deviceIcon,
+  BOX_OPTIONS, REPLACE_OPTIONS, stylesFor, styleOf, qtyOf,
 } from './lib/options.js';
+import { shoppingList, shoppingCsv, lineText } from './lib/shopping.js';
 import { layoutOf, panelSpaces, slotsFor, slotLabel } from './lib/panel.js';
 import { seedPro } from './lib/seed.js';
 import { LOAD_PRESETS, PRESET_NOTE } from './lib/presets.js';
-import { loadSummary, levelText, fmtAmps, shoreSummary } from './lib/load.js';
+import { loadSummary, levelText, fmtAmps, shoreSummary, deviceWatts, voltsFor } from './lib/load.js';
+import { THEME_OPTIONS, getThemePref, setThemePref, applyTheme } from './lib/theme.js';
 import { search } from './lib/search.js';
 import { uid, esc, ampsText, sortBreakers, download } from './lib/util.js';
 import { breakersCsv, devicesCsv, fusesCsv } from './lib/csv.js';
@@ -24,6 +27,7 @@ let pendingRoute = null;
 
 // ---------------------------------------------------------------- startup
 async function start() {
+  applyTheme();
   const wantDemo = localStorage.getItem(MODE_KEY) === 'demo' || /[?&]demo=1/.test(location.search);
   if (isFirebaseConfigured() && !wantDemo) {
     app.innerHTML = `<div class="center-msg">Loading Panel Buddy...</div>`;
@@ -58,6 +62,9 @@ const panelOf = (b) => b && byId('panels', b.panelId);
 const slotsOf = (b) => slotsFor(b, layoutOf(panelOf(b)));
 const slotText = (b) => slotLabel(b, layoutOf(panelOf(b)));
 const breakerSlots = slotsOf;
+// circuit load = items listed on the breaker + items listed on each of its outlets
+const sumOf = (b) => loadSummary(b, D().devices);
+const wattsText = (w) => `${Math.round(w).toLocaleString('en-US')}W`;
 const homeLabel = (h) => {
   const c = h.customerId && byId('customers', h.customerId);
   return c ? `${c.name} · ${h.name}` : h.name;
@@ -132,7 +139,7 @@ function shell(homeId, active, body, { title = '', back = '' } = {}) {
     ['rooms', '⌂', 'Rooms', `#/h/${homeId}/rooms`],
     ['search', '⌕', 'Search', `#/h/${homeId}/search`],
     ['load', '⚡', 'Load', `#/h/${homeId}/load`],
-    ['more', '☰', 'More', `#/h/${homeId}/more`],
+    ['more', '⚙︎', 'Settings', `#/h/${homeId}/more`],
   ];
   return `
   ${store.mode === 'demo' ? `<div class="demo-banner">Demo mode: saved on this device only${isFirebaseConfigured() ? ' · <a href="#/login">Sign in to sync</a>' : ''}</div>` : ''}
@@ -230,6 +237,7 @@ async function render() {
     if (view === 'search') return renderSearch(homeId, q.get('q') || '');
     if (view === 'load') return renderLoad(homeId);
     if (view === 'more') return renderMore(homeId);
+    if (view === 'shop') return renderShop(homeId, q.get('scope'));
     if (view === 'print') return renderPrint(homeId, parts[3], parts[4], q);
   } catch (e) {
     console.error(e);
@@ -359,7 +367,7 @@ function renderPanel(homeId, panelId) {
     if (!slots.length) continue;
     slots.forEach((s) => covered.add(s));
     const { col, row } = posOf(slots[0]);
-    const sum = loadSummary(b);
+    const sum = sumOf(b);
     const nDev = devices.filter((d) => d.breakerId === b.id).length;
     const dead = devices.some((d) => d.breakerId === b.id && (d.status === 'dead' || d.status === 'repair'));
     cells.push(`<a class="brk ${b.kind === 'spare' ? 'spare' : ''} lvl-${sum.level}" href="#/h/${homeId}/breaker/${b.id}" style="grid-column:${col};grid-row:${row} / span ${slots.length}">
@@ -374,8 +382,8 @@ function renderPanel(homeId, panelId) {
     const { col, row } = posOf(s);
     cells.push(`<a class="brk empty-slot" href="#/edit/breakers/new?home=${homeId}&panel=${panel.id}&slot=${s}" style="grid-column:${col};grid-row:${row}" aria-label="Add breaker in space ${s}"><span class="brk-slot">${s}</span><span class="brk-label">+ Add</span></a>`);
   }
-  const over = breakers.filter((b) => loadSummary(b).level === 'over').length;
-  const warn = breakers.filter((b) => loadSummary(b).level === 'warn').length;
+  const over = breakers.filter((b) => sumOf(b).level === 'over').length;
+  const warn = breakers.filter((b) => sumOf(b).level === 'warn').length;
   const body = `
   <section class="panel-head">
     <div>
@@ -416,7 +424,7 @@ const sourceText = (p) => (p.type !== 'rv' && p.powerSource ? labelOf(POWER_SOUR
 
 function shoreCard(panel, breakers, homeId, link = false) {
   if (panel.type !== 'rv') return '';
-  const sum = shoreSummary(panel, breakers);
+  const sum = shoreSummary(panel, breakers, D().devices);
   if (!sum) return `<div class="card"><h3>Shore power check</h3><p class="muted">Pick the shore power service in <a href="#/edit/panels/${panel.id}?home=${homeId}">Edit panel</a> to compare your loads to it.</p></div>`;
   return `<div class="card shore">
     <h3>${link ? `<a href="#/h/${homeId}/panel/${panel.id}">${esc(panel.name)}</a>: ` : ''}Shore power check (${esc(shoreText(panel))})</h3>
@@ -507,57 +515,33 @@ async function renderPanelExtra(homeId, panel) {
 }
 
 // ---------------------------------------------------------------- breaker view
-function renderBreaker(homeId, id) {
-  const b = byId('breakers', id);
-  if (!b || b.homeId !== homeId) return renderNotFound();
-  const panel = byId('panels', b.panelId);
-  const devices = inHome('devices', homeId).filter((d) => d.breakerId === b.id);
-  const s = loadSummary(b);
-  const body = `
-  <section class="detail-head">
-    <div class="big-slot">${esc(slotText(b))}</div>
-    <div>
-      <h2>${esc(b.label || 'Unlabeled breaker')}</h2>
-      <p class="muted">${esc(ampsText(b))} · ${esc(labelOf(POLE_OPTIONS, b.poles))}${b.leg ? ` · Leg ${esc(b.leg)}` : ''}${b.kind && b.kind !== 'standard' ? ` · ${esc(labelOf(BREAKER_KINDS, b.kind))}` : ''}${panel ? ` · ${esc(panel.name)}` : ''}</p>
-      ${(b.rooms || []).length ? `<div class="chips">${b.rooms.map((r) => `<a class="chip" href="#/h/${homeId}/rooms?room=${encodeURIComponent(r)}">${esc(r)}</a>`).join('')}</div>` : ''}
+// ---------------------------------------------------------------- "what's plugged in" helpers
+function itemRow(l, i, delAttr) {
+  const w = (Number(l.watts) || 0) * (Number(l.qty) || 1);
+  return `<li class="item-row"><span class="item-main"><b>${esc(l.name)}${Number(l.qty) > 1 ? ` <span class="muted">×${esc(l.qty)}</span>` : ''}</b>${l.note ? `<span class="muted tiny">${esc(l.note)}</span>` : ''}</span><span class="item-w">${wattsText(w)}</span><button type="button" class="icon-btn small" ${delAttr}="${i}" aria-label="Remove ${esc(l.name)}">✕</button></li>`;
+}
+
+function addItemForm(id, { targets = null, button = 'Add' } = {}) {
+  return `<form id="${id}" class="form add-item">
+    ${targets ? `<label>Plugged into<select name="target">${targets}</select></label>` : ''}
+    <label>What is it?
+      <select name="preset"><option value="">Choose a common item...</option>${LOAD_PRESETS.map((p, i) => `<option value="${i}">${esc(p.name)} (~${p.watts}W)</option>`).join('')}<option value="custom">Something else (type it)</option></select>
+    </label>
+    <div class="two">
+      <label>Name<input name="name" placeholder="e.g. Space heater" autocomplete="off"></label>
+      <label>Watts<input name="watts" type="number" inputmode="numeric" min="0" step="1" placeholder="1500"></label>
     </div>
-  </section>
-  <div class="row-actions"><a class="btn" href="#/edit/breakers/${b.id}?home=${homeId}">Edit breaker</a><a class="btn" href="#/edit/devices/new?home=${homeId}&breaker=${b.id}">+ Outlet / light</a></div>
-  ${b.notes ? `<div class="card"><h3>Notes</h3><p class="pre">${esc(b.notes)}</p></div>` : ''}
-
-  <div class="card">
-    <h3>What it feeds (${devices.length})</h3>
-    ${devices.length ? `<ul class="list">${devices.map((d) => deviceRow(homeId, d)).join('')}</ul>` : `<p class="muted">Nothing mapped to this breaker yet.</p>`}
-  </div>
-
-  <div class="card" id="loads">
-    <h3>Load check</h3>
-    ${s.rating ? `
-      <div class="load-num"><b>${fmtAmps(s.amps)}A</b> of ${s.rating}A <span class="muted">(${Math.round(s.watts)}W ÷ ${s.volts}V)</span></div>
-      ${loadBar(s)}
-      <p class="lvl-text ${s.level}">${esc(levelText(s.level))}. 80% of ${s.rating}A = ${fmtAmps(s.limit80)}A.</p>` : `<p class="muted">Set the breaker's amps to see the load check.</p>`}
-    <ul class="list loads">${(b.loads || []).map((l, i) => `<li class="load-row"><span>${esc(l.name)}${Number(l.qty) > 1 ? ` ×${esc(l.qty)}` : ''}</span><span class="muted">${Math.round((Number(l.watts) || 0) * (Number(l.qty) || 1))}W</span><button class="icon-btn small" data-del-load="${i}" aria-label="Remove ${esc(l.name)}">✕</button></li>`).join('')}</ul>
-    <form id="loadForm" class="form inline-form">
-      <label>Add something plugged in
-        <select name="preset"><option value="">Choose...</option>${LOAD_PRESETS.map((p, i) => `<option value="${i}">${esc(p.name)} (~${p.watts}W)</option>`).join('')}<option value="custom">Custom...</option></select>
-      </label>
-      <div class="two">
-        <label>Name<input name="name" placeholder="e.g. Space heater"></label>
-        <label>Watts<input name="watts" type="number" inputmode="numeric" min="0" step="1" placeholder="1500"></label>
-      </div>
+    <div class="two">
       <label>How many<select name="qty">${opt(['1', '2', '3', '4', '5', '6', '8', '10'], '1')}</select></label>
-      <button class="btn primary" type="submit">Add to this circuit</button>
-      <p class="tiny muted">${esc(PRESET_NOTE)}</p>
-    </form>
-  </div>
-  <div class="card qr-card"><div class="qr" id="qrBox"></div><div><h3>Breaker QR</h3><p class="muted">Scan to open this breaker.</p><a class="btn small" href="#/h/${homeId}/print/qr?only=breaker:${b.id}">Print sticker</a></div></div>`;
-  app.innerHTML = shell(homeId, 'panel', body, { title: `Breaker ${slotText(b)}`, back: `#/h/${homeId}/panel/${b.panelId}` });
-  bindShell();
-  qrSvg(deepLink(`/b/${b.id}`)).then((svg) => {
-    const el = document.getElementById('qrBox');
-    if (el) el.innerHTML = svg;
-  });
-  const f = document.getElementById('loadForm');
+      <label>Note <span class="muted">(optional)</span><input name="note" placeholder="e.g. on a power strip" autocomplete="off"></label>
+    </div>
+    <button class="btn primary full" type="submit">${esc(button)}</button>
+    <p class="tiny muted">${esc(PRESET_NOTE)}</p>
+  </form>`;
+}
+
+function bindAddItemForm(f, onAdd) {
+  if (!f) return;
   f.elements.preset.onchange = () => {
     const v = f.elements.preset.value;
     if (v !== '' && v !== 'custom') {
@@ -574,9 +558,70 @@ function renderBreaker(homeId, id) {
     const name = f.elements.name.value.trim();
     const watts = Number(f.elements.watts.value);
     if (!name || !(watts > 0)) return toast('Add a name and watts');
-    await store.put('breakers', { ...b, loads: [...(b.loads || []), { name, watts, qty: Number(f.elements.qty.value) || 1 }] });
+    const item = { name, watts, qty: Number(f.elements.qty.value) || 1 };
+    const note = f.elements.note.value.trim();
+    if (note) item.note = note;
+    await onAdd(item, f.elements.target ? f.elements.target.value : '');
     toast('Added');
   };
+}
+
+function loadHeadline(s) {
+  if (!s.rating) return `<p class="muted">Set the breaker's amps to see the load check.</p>`;
+  return `<div class="load-num"><b>${fmtAmps(s.amps)}A</b> <span>of ${s.rating}A</span><span class="pct ${s.level}">${s.level === 'none' ? '' : Math.round(s.pct) + '%'}</span></div>
+    ${loadBar(s)}
+    <p class="lvl-text ${s.level}">${esc(levelText(s.level))}</p>
+    <p class="tiny muted">${wattsText(s.watts)} ÷ ${s.volts}V. 80% of ${s.rating}A = ${fmtAmps(s.limit80)}A.</p>`;
+}
+
+function renderBreaker(homeId, id) {
+  const b = byId('breakers', id);
+  if (!b || b.homeId !== homeId) return renderNotFound();
+  const panel = byId('panels', b.panelId);
+  const devices = inHome('devices', homeId).filter((d) => d.breakerId === b.id);
+  const s = sumOf(b);
+  const own = b.loads || [];
+  const outletOpts = `<option value="">This circuit (no specific outlet)</option>${devices.map((d) => `<option value="${esc(d.id)}">${esc(deviceIcon(d.type))} ${esc(d.name || labelOf(DEVICE_TYPES, d.type))}${d.room ? ' · ' + esc(d.room) : ''}</option>`).join('')}`;
+  const body = `
+  <section class="detail-head">
+    <div class="big-slot">${esc(slotText(b))}</div>
+    <div class="detail-title">
+      <h2>${esc(b.label || 'Unlabeled breaker')}</h2>
+      <p class="muted">${esc(ampsText(b))} · ${esc(labelOf(POLE_OPTIONS, b.poles))}${b.leg ? ` · Leg ${esc(b.leg)}` : ''}${b.kind && b.kind !== 'standard' ? ` · ${esc(labelOf(BREAKER_KINDS, b.kind))}` : ''}${panel ? ` · ${esc(panel.name)}` : ''}</p>
+      ${(b.rooms || []).length ? `<div class="chips">${b.rooms.map((r) => `<a class="chip" href="#/h/${homeId}/rooms?room=${encodeURIComponent(r)}">${esc(r)}</a>`).join('')}</div>` : ''}
+    </div>
+  </section>
+  ${b.notes ? `<p class="note-text pre">${esc(b.notes)}</p>` : ''}
+
+  <div class="card">
+    <div class="card-head"><h3>Outlets &amp; lights <span class="count">${devices.length}</span></h3><a class="btn small" href="#/edit/devices/new?home=${homeId}&breaker=${b.id}">+ Add</a></div>
+    ${devices.length ? `<ul class="list">${devices.map((d) => deviceRow(homeId, d)).join('')}</ul>` : `<p class="muted">Nothing mapped to this breaker yet. Add each outlet and light it feeds, then tap one to list what's plugged in.</p>`}
+  </div>
+
+  <div class="card" id="loads">
+    <h3>Load check</h3>
+    ${loadHeadline(s)}
+    ${s.watts ? `<div class="breakdown">
+      ${own.length ? `<div class="bd-group"><div class="bd-head"><span>On this circuit</span><span>${wattsText(s.ownWatts)}</span></div><ul class="list items">${own.map((l, i) => itemRow(l, i, 'data-del-load')).join('')}</ul></div>` : ''}
+      ${s.parts.map(({ device: d, watts }) => `<div class="bd-group"><a class="bd-head link" href="#/h/${homeId}/device/${d.id}"><span>${deviceIcon(d.type)} ${esc(d.name || labelOf(DEVICE_TYPES, d.type))}${d.room ? ` <span class="muted">· ${esc(d.room)}</span>` : ''}</span><span>${wattsText(watts)} ›</span></a><ul class="list items sub">${(d.loads || []).map((l) => `<li class="item-row"><span class="item-main">${esc(l.name)}${Number(l.qty) > 1 ? ` <span class="muted">×${esc(l.qty)}</span>` : ''}</span><span class="item-w muted">${wattsText((Number(l.watts) || 0) * (Number(l.qty) || 1))}</span></li>`).join('')}</ul></div>`).join('')}
+    </div>` : ''}
+    <details class="add-wrap" ${s.watts ? '' : 'open'}><summary class="btn full">+ Add something plugged in</summary>
+      ${addItemForm('loadForm', { targets: devices.length ? outletOpts : null, button: 'Add to this circuit' })}
+    </details>
+  </div>
+  <div class="card qr-card"><div class="qr" id="qrBox"></div><div><h3>Breaker QR</h3><p class="muted">Scan to open this breaker.</p><a class="btn small" href="#/h/${homeId}/print/qr?only=breaker:${b.id}">Print sticker</a></div></div>
+  <div class="row-actions"><a class="btn" href="#/edit/breakers/${b.id}?home=${homeId}">Edit breaker</a></div>`;
+  app.innerHTML = shell(homeId, 'panel', body, { title: `Breaker ${slotText(b)}`, back: `#/h/${homeId}/panel/${b.panelId}` });
+  bindShell();
+  qrSvg(deepLink(`/b/${b.id}`)).then((svg) => {
+    const el = document.getElementById('qrBox');
+    if (el) el.innerHTML = svg;
+  });
+  bindAddItemForm(document.getElementById('loadForm'), async (item, target) => {
+    const d = target && byId('devices', target);
+    if (d) await store.put('devices', { ...d, loads: [...(d.loads || []), item] });
+    else await store.put('breakers', { ...b, loads: [...(b.loads || []), item] });
+  });
   app.querySelectorAll('[data-del-load]').forEach((btn) => {
     btn.onclick = async () => {
       const i = Number(btn.dataset.delLoad);
@@ -592,8 +637,8 @@ function deviceRow(homeId, d, showBreaker = false) {
   const bad = d.status === 'dead' || d.status === 'repair';
   return `<li><a class="row" href="#/h/${homeId}/device/${d.id}">
     <span class="row-icon" aria-hidden="true">${deviceIcon(d.type)}</span>
-    <span class="row-main"><b>${esc(d.name || labelOf(DEVICE_TYPES, d.type))}</b><span class="muted">${esc([d.room, d.location].filter(Boolean).join(' · '))}</span></span>
-    <span class="row-side">${showBreaker ? (b ? `<span class="pill">#${esc(slotText(b))}</span>` : '<span class="pill gray">?</span>') : ''}${bad ? `<span class="pill red">${esc(labelOf(STATUS_OPTIONS, d.status).split(' ')[0])}</span>` : ''}${d.gfci && !['no', 'unknown'].includes(d.gfci) ? '<span class="pill blue">GFCI</span>' : ''}</span>
+    <span class="row-main"><b>${esc(d.name || labelOf(DEVICE_TYPES, d.type))}</b><span class="muted">${esc([styleOf(d) ? styleOf(d).label : '', d.room, d.location].filter(Boolean).join(' · ') || (d.loads || []).map((l) => l.name).join(', '))}</span></span>
+    <span class="row-side">${qtyOf(d) > 1 ? `<span class="pill gray">×${qtyOf(d)}</span>` : ''}${d.replace === 'yes' ? '<span class="pill amber">Replace</span>' : ''}${deviceWatts(d) ? `<span class="pill amber">${wattsText(deviceWatts(d))}</span>` : ''}${showBreaker ? (b ? `<span class="pill">#${esc(slotText(b))}</span>` : '<span class="pill gray">?</span>') : ''}${bad ? `<span class="pill red">${esc(labelOf(STATUS_OPTIONS, d.status).split(' ')[0])}</span>` : ''}${d.gfci && !['no', 'unknown'].includes(d.gfci) ? '<span class="pill blue">GFCI</span>' : ''}</span><span class="chev" aria-hidden="true">›</span>
   </a></li>`;
 }
 
@@ -612,9 +657,27 @@ function renderDevice(homeId, id) {
     </div>
   </section>
   ${b ? `<a class="breaker-link" href="#/h/${homeId}/breaker/${b.id}"><span class="big-slot sm">${esc(slotText(b))}</span><span><b>Breaker ${esc(slotText(b))} · ${esc(ampsText(b))}</b><span class="muted">${esc(b.label || '')}${panel ? ` · ${esc(panel.name)}` : ''}</span></span><span aria-hidden="true">›</span></a>` : `<div class="alert warn">Breaker not mapped yet. <a href="#/edit/devices/${d.id}?home=${homeId}">Pick one</a></div>`}
+  ${(() => {
+    const items = d.loads || [];
+    const w = deviceWatts(d);
+    const cs = b ? sumOf(b) : null;
+    const plugTitle = d.type === 'outlet' || !d.type ? 'Plugged in here' : 'What it powers / draws';
+    return `<div class="card" id="plugged">
+      <div class="card-head"><h3>${plugTitle}</h3>${w ? `<span class="pill amber">${wattsText(w)} · ${fmtAmps(w / voltsFor(b && b.poles))}A</span>` : ''}</div>
+      ${items.length ? `<ul class="list items">${items.map((l, i) => itemRow(l, i, 'data-del-item')).join('')}</ul>` : `<p class="muted">Nothing listed yet. Add what's plugged in and it counts toward ${b ? `breaker ${esc(slotText(b))}'s` : 'the breaker'} load check.</p>`}
+      <details class="add-wrap" ${items.length ? '' : 'open'}><summary class="btn full">+ Add something plugged in</summary>
+        ${addItemForm('itemForm', { button: 'Add to this ' + (d.type === 'outlet' ? 'outlet' : 'item') })}
+      </details>
+      ${cs && cs.rating ? `<a class="circuit-mini" href="#/h/${homeId}/breaker/${b.id}#loads"><span class="row-main"><b>Whole circuit: ${fmtAmps(cs.amps)}A of ${cs.rating}A</b><span class="muted">${w ? `This ${d.type === 'outlet' ? 'outlet' : 'item'} is ${wattsText(w)} of ${wattsText(cs.watts)}` : `${wattsText(cs.watts)} on breaker ${esc(slotText(b))}`}</span></span><span class="pct ${cs.level}">${cs.level === 'none' ? '' : Math.round(cs.pct) + '%'}</span>${cs.level !== 'none' ? loadBar(cs, true) : ''}</a>` : ''}
+    </div>`;
+  })()}
   <div class="card">
     <dl class="facts">
       <dt>Type</dt><dd>${esc(labelOf(DEVICE_TYPES, d.type))}</dd>
+      ${styleOf(d) ? `<dt>Style</dt><dd>${esc(styleOf(d).label)}</dd>` : ''}
+      <dt>Quantity</dt><dd>${qtyOf(d)}</dd>
+      ${d.box ? `<dt>Box</dt><dd>${esc(labelOf(BOX_OPTIONS, d.box))}</dd>` : ''}
+      <dt>Needs replacing</dt><dd class="${d.replace === 'yes' ? 'warnc' : ''}">${d.replace === 'yes' ? 'Yes' : 'No'}</dd>
       <dt>Status</dt><dd class="${d.status === 'dead' || d.status === 'repair' ? 'bad' : ''}">${esc(labelOf(STATUS_OPTIONS, d.status))}</dd>
       <dt>GFCI</dt><dd>${esc(labelOf(GFCI_OPTIONS, d.gfci))}</dd>
       <dt>AFCI</dt><dd>${esc(labelOf(AFCI_OPTIONS, d.afci))}</dd>
@@ -647,6 +710,16 @@ function renderDevice(homeId, id) {
       if (el) el.innerHTML = src ? `<img class="photo" src="${src}" alt="Photo of ${esc(d.name)}">` : 'Photo not available offline yet.';
     });
   bindPhoto('devices', d);
+  bindAddItemForm(document.getElementById('itemForm'), async (item) => {
+    await store.put('devices', { ...d, loads: [...(d.loads || []), item] });
+  });
+  app.querySelectorAll('[data-del-item]').forEach((btn) => {
+    btn.onclick = async () => {
+      const loads = [...(d.loads || [])];
+      loads.splice(Number(btn.dataset.delItem), 1);
+      await store.put('devices', { ...d, loads });
+    };
+  });
   const rf = document.getElementById('readingForm');
   rf.onsubmit = async (e) => {
     e.preventDefault();
@@ -713,7 +786,7 @@ function renderRooms(homeId, roomFilter) {
   const names = [...groups.keys()].sort((a, b) => a.localeCompare(b));
   const shown = roomFilter ? names.filter((n) => n === roomFilter) : names;
   const body = `
-  <div class="section-head"><h2>${roomFilter ? esc(roomFilter) : 'Rooms'}</h2><a class="btn small primary" href="#/edit/devices/new?home=${homeId}${roomFilter ? `&room=${encodeURIComponent(roomFilter)}` : ''}">+ Add</a></div>
+  <div class="section-head"><h2>${roomFilter ? esc(roomFilter) : 'Rooms'}</h2><div class="head-actions"><a class="btn small" href="#/h/${homeId}/shop">🛒 Shopping list</a><a class="btn small primary" href="#/edit/devices/new?home=${homeId}${roomFilter ? `&room=${encodeURIComponent(roomFilter)}` : ''}">+ Add</a></div></div>
   ${roomFilter ? `<p><a href="#/h/${homeId}/rooms">‹ All rooms</a></p>` : `<label class="sr-only" for="roomJump">Jump to room</label><select id="roomJump" class="full"><option value="">Jump to a room...</option>${names.map((n) => `<option>${esc(n)}</option>`).join('')}</select>`}
   ${shown.length ? shown.map((r) => {
     const list = groups.get(r);
@@ -762,7 +835,7 @@ function renderSearch(homeId, query) {
 // ---------------------------------------------------------------- load check
 function renderLoad(homeId) {
   const breakers = inHome('breakers', homeId).filter((b) => b.kind !== 'spare');
-  const rows = breakers.map((b) => ({ b, s: loadSummary(b) })).sort((x, y) => y.s.pct - x.s.pct || (parseInt(x.b.slot, 10) - parseInt(y.b.slot, 10)));
+  const rows = breakers.map((b) => ({ b, s: sumOf(b) })).sort((x, y) => y.s.pct - x.s.pct || (parseInt(x.b.slot, 10) - parseInt(y.b.slot, 10)));
   const over = rows.filter((r) => r.s.level === 'over').length;
   const warn = rows.filter((r) => r.s.level === 'warn').length;
   const body = `
@@ -787,12 +860,19 @@ function renderMore(homeId) {
   const home = byId('homes', homeId);
   const panels = inHome('panels', homeId);
   const body = `
-  <div class="section-head"><h2>More</h2></div>
+  <div class="section-head"><h2>Settings</h2></div>
+  <div class="card">
+    <h3>Appearance</h3>
+    <label class="sr-only" for="themePick">Appearance</label>
+    <select id="themePick" class="full">${opt(THEME_OPTIONS, getThemePref())}</select>
+    <p class="tiny muted">Saved on this device. System follows your phone's light / dark mode.</p>
+  </div>
   <div class="card">
     <h3>Print</h3>
     <div class="stack">
       ${panels.map((p) => `<a class="btn" href="#/h/${homeId}/print/directory/${p.id}">Panel door label: ${esc(p.name)}</a>`).join('')}
       <a class="btn" href="#/h/${homeId}/print/qr">QR sticker sheet</a>
+      <a class="btn" href="#/h/${homeId}/print/shop">Shopping list</a>
     </div>
   </div>
   <div class="card">
@@ -818,6 +898,7 @@ function renderMore(homeId) {
       <button class="btn" id="expJson">Download backup (JSON, everything)</button>
       <button class="btn" id="expBrk">Breakers spreadsheet (CSV)</button>
       <button class="btn" id="expDev">Outlets &amp; lights spreadsheet (CSV)</button>
+      <button class="btn" id="expShop">Shopping list spreadsheet (CSV)</button>
       ${D().panels.some((p) => (p.fuses || []).length) ? '<button class="btn" id="expFuse">12V fuses spreadsheet (CSV)</button>' : ''}
       <label class="btn file-btn">Restore from backup (JSON)<input type="file" accept="application/json,.json" id="impJson" hidden></label>
       ${store.mode === 'cloud' && localStorage.getItem('panelbuddy:data:v1') ? '<button class="btn" id="impLocal">Copy demo data from this device into my account</button>' : ''}
@@ -845,6 +926,7 @@ function renderMore(homeId) {
   app.innerHTML = shell(homeId, 'more', body);
   bindShell();
   const $ = (id) => document.getElementById(id);
+  $('themePick').onchange = (e) => { setThemePref(e.target.value); toast(`Appearance: ${e.target.options[e.target.selectedIndex].text}`); };
   $('expJson').onclick = async () => {
     const data = JSON.parse(JSON.stringify(D()));
     const photos = {};
@@ -889,6 +971,7 @@ function renderMore(homeId) {
     void _t;
     await store.put('homes', rest);
   };
+  $('expShop').onclick = () => download('panel-buddy-shopping-list.csv', shoppingCsv(inHome('devices', homeId), shopScope(homeId), home.name), 'text/csv');
   $('expDev').onclick = () => download('panel-buddy-outlets-lights.csv', devicesCsv(D()), 'text/csv');
   $('impJson').onchange = async (e) => {
     const file = e.target.files[0];
@@ -1210,8 +1293,70 @@ const STICKERS = {
   plain: { label: 'Plain paper, cut out (20 per page)', cls: 'st-plain', per: 20 },
 };
 
+// ---------------------------------------------------------------- shopping list
+function shopScope(homeId, scope) {
+  if (scope === 'all' || scope === 'replace') return scope;
+  return inHome('devices', homeId).some((d) => d.replace === 'yes') ? 'replace' : 'all';
+}
+const SHOP_SCOPES = [{ value: 'replace', label: 'Only items marked "Needs replacing"' }, { value: 'all', label: 'Everything in this home' }];
+function shopSections(s) {
+  const outlets = s.items.filter((i) => i.type === 'outlet');
+  const switches = s.items.filter((i) => i.type === 'switch');
+  const other = s.items.filter((i) => i.type !== 'outlet' && i.type !== 'switch');
+  return [
+    ['Outlets', outlets],
+    ['Switches', switches],
+    ['Other items', other],
+    ['Boxes needed', s.boxes],
+    [`Wall plates (1 per gang · ${s.platesNeeded} total)`, s.plates],
+  ].filter(([, list]) => list.length);
+}
+
+function renderShop(homeId, scopeQ) {
+  const home = byId('homes', homeId);
+  const scope = shopScope(homeId, scopeQ);
+  const s = shoppingList(inHome('devices', homeId), scope);
+  const secs = shopSections(s);
+  const body = `
+  <div class="section-head"><h2>Shopping list</h2><a class="btn small" href="#/h/${homeId}/print/shop?scope=${scope}">Print</a></div>
+  <label class="sr-only" for="shopScope">What to count</label>
+  <select id="shopScope" class="full">${opt(SHOP_SCOPES, scope)}</select>
+  ${s.count ? `<div class="card summary">
+      <div><b>${s.items.filter((i) => i.type === 'outlet').reduce((a, i) => a + i.qty, 0)}</b><span>outlets</span></div>
+      <div><b>${s.items.filter((i) => i.type === 'switch').reduce((a, i) => a + i.qty, 0)}</b><span>switches</span></div>
+      <div><b>${s.boxesNeeded}</b><span>new boxes</span></div>
+    </div>
+    ${secs.map(([title, list]) => `<div class="card shop-group"><h3>${esc(title)}</h3><ul class="list">${list.map((i) => `<li class="shop-row"><span class="shop-qty">${i.qty}</span><span class="row-main">${esc(lineText(i).replace(/^\d+ /, ''))}</span></li>`).join('')}</ul></div>`).join('')}
+    <p class="tiny muted">Counts come from each item's Style, Quantity, Box and Needs replacing fields. Items with no style set are listed as "style not set". Edit any outlet or switch to fill them in.</p>`
+    : `<div class="card empty"><p>${scope === 'replace' ? 'Nothing is marked "Needs replacing" yet.' : 'No outlets or switches yet.'}</p><p class="muted">Open an outlet or switch, tap Edit, and set its Style, Quantity, Box and Needs replacing.</p></div>`}
+  <button class="btn full" id="shopCsv">Download spreadsheet (CSV)</button>`;
+  app.innerHTML = shell(homeId, 'rooms', body, { title: 'Shopping list', back: `#/h/${homeId}/rooms` });
+  bindShell();
+  document.getElementById('shopScope').onchange = (e) => go(`#/h/${homeId}/shop?scope=${e.target.value}`);
+  document.getElementById('shopCsv').onclick = () => download(`panel-buddy-shopping-list.csv`, shoppingCsv(inHome('devices', homeId), scope, home.name), 'text/csv');
+}
+
 async function renderPrint(homeId, kind, id, q) {
   const home = byId('homes', homeId);
+  if (kind === 'shop') {
+    const scope = shopScope(homeId, q.get('scope'));
+    const sl = shoppingList(inHome('devices', homeId), scope);
+    const body = `
+    <div class="print-controls no-print">
+      <label>What to count<select id="shopScopeP">${opt(SHOP_SCOPES, scope)}</select></label>
+      <button class="btn primary" id="doPrint">Print / Save as PDF</button>
+    </div>
+    <div class="sheet shop">
+      <h2>Shopping list · ${esc(homeLabel(home))}</h2>
+      <div class="dir-foot" style="text-align:left">${scope === 'replace' ? 'Items marked "Needs replacing"' : 'Everything in this home'} · ${new Date().toLocaleDateString()} · Panel Buddy</div>
+      ${sl.count ? shopSections(sl).map(([title, list]) => `<h3>${esc(title)}</h3><table class="shop-table"><tbody>${list.map((i) => `<tr><td class="box"><span></span></td><td class="q">${i.qty}</td><td>${esc(lineText(i).replace(/^\d+ /, ''))}</td></tr>`).join('')}</tbody></table>`).join('') : '<p>Nothing to list.</p>'}
+    </div>`;
+    app.innerHTML = shell(homeId, 'rooms', body, { title: 'Print shopping list', back: `#/h/${homeId}/shop?scope=${scope}` });
+    bindShell();
+    document.getElementById('shopScopeP').onchange = (e) => go(`#/h/${homeId}/print/shop?scope=${e.target.value}`);
+    document.getElementById('doPrint').onclick = () => window.print();
+    return;
+  }
   if (kind === 'directory') {
     const panel = byId('panels', id) || inHome('panels', homeId)[0];
     if (!panel) return renderNotFound();
@@ -1388,6 +1533,11 @@ function renderEdit(col, id, q) {
       <label>Name (optional)<input name="name" value="${esc(d.name)}" placeholder="e.g. Outlet by bed, Vanity light"></label>
       ${roomSelect(homeId, d.room)}
       <label>Location in the room<input name="location" value="${esc(d.location)}" placeholder="e.g. North wall by bed"></label>
+      <label class="style-field" ${stylesFor(d.type) ? '' : 'hidden'}>Style <span class="muted">(what's there, or what you're putting in)</span><select name="style">${opt(stylesFor(d.type) || [], d.style || '')}</select></label>
+      <label>Quantity<input name="qty" type="number" inputmode="numeric" min="1" step="1" value="${esc(String(qtyOf(d)))}"></label>
+      <p class="tiny muted field-hint">One entry can stand for several, like "7 outlets, master bedroom".</p>
+      <label>Box<select name="box">${opt(BOX_OPTIONS, d.box || '')}</select></label>
+      <label>Needs replacing<select name="replace">${opt(REPLACE_OPTIONS, d.replace || '')}</select></label>
       <label>Breaker<select name="breakerId"><option value="">Not mapped yet</option>${brks.map((b) => `<option value="${b.id}" ${b.id === d.breakerId ? 'selected' : ''}>#${esc(slotText(b))} · ${esc(ampsText(b))} · ${esc(b.label || '')}</option>`).join('')}</select></label>
       <label>GFCI protection<select name="gfci">${opt(GFCI_OPTIONS, d.gfci)}</select></label>
       <label>AFCI protection<select name="afci">${opt(AFCI_OPTIONS, d.afci)}</select></label>
@@ -1444,6 +1594,13 @@ function renderEdit(col, id, q) {
     const tog = () => (f.elements.roomNew.closest('label').hidden = rs.value !== '__new');
     rs.addEventListener('change', () => { tog(); if (rs.value === '__new') f.elements.roomNew.focus(); });
     tog();
+    const ts = f.elements.type;
+    ts.addEventListener('change', () => {
+      const list = stylesFor(ts.value);
+      const sf = f.querySelector('.style-field');
+      sf.hidden = !list;
+      f.elements.style.innerHTML = opt(list || [], '');
+    });
   }
   if (photo && existing.photoId)
     store.getPhoto(existing.photoId).then((src) => {
@@ -1468,7 +1625,7 @@ function renderEdit(col, id, q) {
       if (clash && !confirm(`Space ${slot} overlaps breaker ${slotText(clash)} (${clash.label || 'unlabeled'}). Save anyway?`)) return;
       next = { ...base, homeId, panelId, slot, poles, amps: v.amps, ampsOther: v.ampsOther || '', label: v.label.trim(), leg: v.leg || base.leg || '', rooms: v.rooms.split(',').map((s) => s.trim()).filter(Boolean), kind: v.kind, notes: v.notes, loads: base.loads || [] };
     }
-    if (col === 'devices') next = { ...base, homeId, type: v.type, name: v.name.trim(), room: (v.room === '__new' ? v.roomNew : v.room).trim(), location: v.location.trim(), breakerId: v.breakerId, gfci: v.gfci, afci: v.afci, status: v.status, notes: v.notes, readings: base.readings || [] };
+    if (col === 'devices') next = { ...base, homeId, type: v.type, name: v.name.trim(), room: (v.room === '__new' ? v.roomNew : v.room).trim(), location: v.location.trim(), breakerId: v.breakerId, gfci: v.gfci, afci: v.afci, status: v.status, notes: v.notes, readings: base.readings || [], style: stylesFor(v.type) ? v.style || '' : '', qty: Math.max(1, Math.floor(Number(v.qty)) || 1), box: v.box || '', replace: v.replace || '' };
     if (col === 'customers') next = { ...base, name: v.name.trim(), phone: v.phone.trim(), email: v.email.trim(), notes: v.notes, visits: base.visits || [], openCount: base.openCount || 0, lastOpenedAt: Date.now() };
     await store.put(col, next);
     toast('Saved');
