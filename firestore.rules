@@ -3,15 +3,22 @@ rules_version = '2';
 // Panel Buddy - Firestore security rules.
 // Each signed-in user can read and write ONLY their own data under users/{their uid}/.
 // Nobody (signed in or not) can read anyone else's data.
+// Exception: shares/{token} - a read-only panel directory snapshot the owner chose to
+// share. Anyone holding the (random, 24+ character) link can open that one document;
+// nobody can list or search shares, and only the owner can change or delete it.
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    function signedIn() {
+      return request.auth != null;
+    }
+
     function isOwner(uid) {
-      return request.auth != null && request.auth.uid == uid;
+      return signedIn() && request.auth.uid == uid;
     }
 
     function knownCollection(col) {
-      return col in ['homes', 'panels', 'breakers', 'devices', 'photos'];
+      return col in ['homes', 'panels', 'breakers', 'devices', 'photos', 'customers', 'settings'];
     }
 
     match /users/{uid}/{col}/{docId} {
@@ -21,6 +28,30 @@ service cloud.firestore {
         && (col != 'photos'
             || (request.resource.data.data is string
                 && request.resource.data.data.size() < 900000));
+    }
+
+    match /shares/{token} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if signedIn()
+        && token.size() >= 24
+        && request.resource.data.owner == request.auth.uid;
+      allow update: if signedIn()
+        && resource.data.owner == request.auth.uid
+        && request.resource.data.owner == request.auth.uid;
+      allow delete: if signedIn() && resource.data.owner == request.auth.uid;
+    }
+
+    // Lets someone who scans a panel's QR sticker find that panel's share link
+    // (only exists while the owner has sharing turned on).
+    match /sharedPanels/{panelId} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if signedIn() && request.resource.data.owner == request.auth.uid;
+      allow update: if signedIn()
+        && resource.data.owner == request.auth.uid
+        && request.resource.data.owner == request.auth.uid;
+      allow delete: if signedIn() && resource.data.owner == request.auth.uid;
     }
 
     // Everything else is closed.

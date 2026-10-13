@@ -24,7 +24,7 @@ import {
   getDocs,
 } from 'firebase/firestore';
 
-const COLS = ['homes', 'panels', 'breakers', 'devices'];
+const COLS = ['homes', 'panels', 'breakers', 'devices', 'customers'];
 
 export function createFirebaseStore(config) {
   const app = initializeApp(config);
@@ -35,7 +35,8 @@ export function createFirebaseStore(config) {
   } catch {
     db = initializeFirestore(app, {});
   }
-  let data = { homes: [], panels: [], breakers: [], devices: [] };
+  let data = { homes: [], panels: [], breakers: [], devices: [], customers: [] };
+  let settings = { accountType: 'personal' };
   let unsubs = [];
   const listeners = new Set();
   const authListeners = new Set();
@@ -53,10 +54,25 @@ export function createFirebaseStore(config) {
         onAuthStateChanged(auth, (user) => {
           unsubs.forEach((u) => u());
           unsubs = [];
-          data = { homes: [], panels: [], breakers: [], devices: [] };
+          data = { homes: [], panels: [], breakers: [], devices: [], customers: [] };
+          settings = { accountType: 'personal' };
           store.user = user ? { uid: user.uid, email: user.email } : null;
           if (user) {
-            let pending = COLS.length;
+            let pending = COLS.length + 1;
+            unsubs.push(
+              onSnapshot(
+                doc(db, 'users', user.uid, 'settings', 'profile'),
+                (snap) => {
+                  settings = { accountType: 'personal', ...(snap.exists() ? snap.data() : {}) };
+                  if (pending > 0) pending--;
+                  if (pending === 0) emit();
+                },
+                () => {
+                  if (pending > 0) pending--;
+                  if (pending === 0) emit();
+                }
+              )
+            );
             for (const c of COLS) {
               const un = onSnapshot(
                 collection(db, 'users', user.uid, c),
@@ -83,6 +99,40 @@ export function createFirebaseStore(config) {
           }
         });
       });
+    },
+    get settings() {
+      return settings;
+    },
+    async saveSettings(next) {
+      settings = { ...settings, ...next };
+      setDoc(doc(db, 'users', store.user.uid, 'settings', 'profile'), settings).catch((e) => alert('Save failed: ' + e.message));
+      emit();
+    },
+    async addMany(extra) {
+      for (const c of COLS) for (const it of extra[c] || []) await store.put(c, it);
+    },
+    // Read-only share links: a snapshot doc at shares/{random token}, readable by anyone
+    // who has the link (rules allow get, never list), writable only by its owner.
+    async createShare(token, payload, panelIds = []) {
+      await setDoc(doc(db, 'shares', token), { ...JSON.parse(JSON.stringify(payload)), owner: store.user.uid, updatedAt: Date.now() });
+      // sharedPanels/{panelId} lets someone who scans a panel sticker find its share.
+      for (const pid of panelIds) await setDoc(doc(db, 'sharedPanels', pid), { token, owner: store.user.uid }).catch(() => {});
+    },
+    async lookupPanelShare(panelId) {
+      try {
+        const s = await getDoc(doc(db, 'sharedPanels', panelId));
+        return s.exists() ? s.data().token : null;
+      } catch {
+        return null;
+      }
+    },
+    async getShare(token) {
+      const s = await getDoc(doc(db, 'shares', token));
+      return s.exists() ? s.data() : null;
+    },
+    async deleteShare(token, panelIds = []) {
+      for (const pid of panelIds) await deleteDoc(doc(db, 'sharedPanels', pid)).catch(() => {});
+      await deleteDoc(doc(db, 'shares', token));
     },
     onChange(cb) {
       listeners.add(cb);

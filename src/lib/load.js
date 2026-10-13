@@ -56,3 +56,53 @@ export function levelText(level) {
 export function fmtAmps(a) {
   return (Math.round(a * 10) / 10).toFixed(1);
 }
+
+// RV shore power check: adds up every 120V breaker's listed load and compares it to the
+// shore power service. 30A service = 30A at 120V. 50A service = 50A on each of two legs;
+// a double-pole (240V) load counts on both legs. Single-pole loads count on the leg the
+// user picked; loads with no leg picked are reported separately.
+export function shoreCapacity(panel) {
+  const v = panel && panel.shorePower;
+  if (!v) return null;
+  if (v === 'other') {
+    const n = Number(panel.shorePowerOther);
+    return n > 0 ? { amps: n, legs: 1 } : null;
+  }
+  const n = Number(v);
+  if (!(n > 0)) return null;
+  return { amps: n, legs: v === '50' ? 2 : 1 };
+}
+
+function levelFor(amps, cap) {
+  if (!amps) return 'none';
+  const pct = (amps / cap) * 100;
+  return pct > 100 ? 'over' : pct >= 80 ? 'warn' : 'ok';
+}
+
+export function shoreSummary(panel, breakers) {
+  const cap = shoreCapacity(panel);
+  if (!cap) return null;
+  if (cap.legs === 1) {
+    let amps = 0;
+    for (const b of breakers) amps += totalWatts(b.loads || []) / voltsFor(b.poles);
+    return { legs: [{ name: 'Total', amps, cap: cap.amps, pct: (amps / cap.amps) * 100, level: levelFor(amps, cap.amps) }], unassigned: 0 };
+  }
+  let l1 = 0, l2 = 0, unassigned = 0;
+  for (const b of breakers) {
+    const w = totalWatts(b.loads || []);
+    if (!w) continue;
+    if (String(b.poles) === '2') {
+      l1 += w / 240;
+      l2 += w / 240;
+    } else if (b.leg === '1') l1 += w / 120;
+    else if (b.leg === '2') l2 += w / 120;
+    else unassigned += w / 120;
+  }
+  return {
+    legs: [
+      { name: 'Leg 1', amps: l1, cap: cap.amps, pct: (l1 / cap.amps) * 100, level: levelFor(l1, cap.amps) },
+      { name: 'Leg 2', amps: l2, cap: cap.amps, pct: (l2 / cap.amps) * 100, level: levelFor(l2, cap.amps) },
+    ],
+    unassigned,
+  };
+}

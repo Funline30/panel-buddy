@@ -1,11 +1,10 @@
 // Search across breakers and devices. Understands "breaker 7", "#7", "slot 7",
 // and plain words ("bathroom fan", "gfci", "dead").
 import { labelOf, DEVICE_TYPES, STATUS_OPTIONS, GFCI_OPTIONS } from './options.js';
+import { slotsFor, layoutOf } from './panel.js';
 
-export function breakerSlots(b) {
-  const start = parseInt(b.slot, 10);
-  if (!Number.isFinite(start)) return [];
-  return String(b.poles) === '2' ? [start, start + 2] : [start];
+export function breakerSlots(b, layout = 'two') {
+  return slotsFor(b, layout);
 }
 
 export function parseBreakerQuery(q) {
@@ -46,15 +45,21 @@ function score(hay, toks) {
 }
 
 export function search(query, data) {
-  const { breakers = [], devices = [], panels = [] } = data;
+  const { breakers = [], devices = [], panels = [], fuses = true } = data;
   const panelName = (id) => (panels.find((p) => p.id === id) || {}).name || '';
+  const layoutFor = (b) => layoutOf(panels.find((p) => p.id === b.panelId));
   const breakerById = new Map(breakers.map((b) => [b.id, b]));
   const results = [];
+  const fm = String(query || '').toLowerCase().match(/fuse\s*#?\s*(\d{1,3})/);
+  if (fm) {
+    for (const p of panels) (p.fuses || []).forEach((f, index) => { if (String(f.num) === fm[1]) results.push({ kind: 'fuse', item: f, panel: p, index, score: 100 }); });
+    return results;
+  }
   const slot = parseBreakerQuery(query);
 
   if (slot != null) {
     for (const b of breakers) {
-      if (breakerSlots(b).includes(slot)) {
+      if (breakerSlots(b, layoutFor(b)).includes(slot)) {
         results.push({ kind: 'breaker', item: b, score: 100 });
         for (const d of devices.filter((d) => d.breakerId === b.id)) {
           results.push({ kind: 'device', item: d, breaker: b, score: 90 });
@@ -87,6 +92,15 @@ export function search(query, data) {
     ]);
     const s = score(hay, toks);
     if (s) results.push({ kind: 'device', item: d, breaker: b, score: s + 2 });
+  }
+  if (fuses) {
+    for (const p of panels) {
+      (p.fuses || []).forEach((f, index) => {
+        const hay = hayFor(['fuse', '12v', 'dc', f.num ? 'fuse ' + f.num : '', f.amps + 'a', f.powers, f.notes, p.name]);
+        const s = score(hay, toks);
+        if (s) results.push({ kind: 'fuse', item: f, panel: p, index, score: s });
+      });
+    }
   }
   results.sort((a, b) => b.score - a.score);
   return results;

@@ -26,6 +26,10 @@ export const LOAD_PRESETS = [
   { name: 'Dishwasher', watts: 1500 },
   { name: 'LED bulb', watts: 10 },
   { name: 'Phone charger', watts: 20 },
+  { name: 'RV rooftop AC (running)', watts: 1500 },
+  { name: 'RV water heater element', watts: 1400 },
+  { name: 'RV converter / battery charger', watts: 600 },
+  { name: 'Electric fireplace', watts: 1500 },
 ];
 
 export const PRESET_NOTE =

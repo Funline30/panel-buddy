@@ -22,15 +22,22 @@
 // Panel Buddy - Firestore security rules.
 // Each signed-in user can read and write ONLY their own data under users/{their uid}/.
 // Nobody (signed in or not) can read anyone else&#x27;s data.
+// Exception: shares/{token} - a read-only panel directory snapshot the owner chose to
+// share. Anyone holding the (random, 24+ character) link can open that one document;
+// nobody can list or search shares, and only the owner can change or delete it.
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    function signedIn() {
+      return request.auth != null;
+    }
+
     function isOwner(uid) {
-      return request.auth != null &amp;&amp; request.auth.uid == uid;
+      return signedIn() &amp;&amp; request.auth.uid == uid;
     }
 
     function knownCollection(col) {
-      return col in [&#x27;homes&#x27;, &#x27;panels&#x27;, &#x27;breakers&#x27;, &#x27;devices&#x27;, &#x27;photos&#x27;];
+      return col in [&#x27;homes&#x27;, &#x27;panels&#x27;, &#x27;breakers&#x27;, &#x27;devices&#x27;, &#x27;photos&#x27;, &#x27;customers&#x27;, &#x27;settings&#x27;];
     }
 
     match /users/{uid}/{col}/{docId} {
@@ -42,6 +49,30 @@ service cloud.firestore {
                 &amp;&amp; request.resource.data.data.size() &lt; 900000));
     }
 
+    match /shares/{token} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if signedIn()
+        &amp;&amp; token.size() &gt;= 24
+        &amp;&amp; request.resource.data.owner == request.auth.uid;
+      allow update: if signedIn()
+        &amp;&amp; resource.data.owner == request.auth.uid
+        &amp;&amp; request.resource.data.owner == request.auth.uid;
+      allow delete: if signedIn() &amp;&amp; resource.data.owner == request.auth.uid;
+    }
+
+    // Lets someone who scans a panel&#x27;s QR sticker find that panel&#x27;s share link
+    // (only exists while the owner has sharing turned on).
+    match /sharedPanels/{panelId} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if signedIn() &amp;&amp; request.resource.data.owner == request.auth.uid;
+      allow update: if signedIn()
+        &amp;&amp; resource.data.owner == request.auth.uid
+        &amp;&amp; request.resource.data.owner == request.auth.uid;
+      allow delete: if signedIn() &amp;&amp; resource.data.owner == request.auth.uid;
+    }
+
     // Everything else is closed.
     match /{document=**} {
       allow read, write: if false;
@@ -49,7 +80,7 @@ service cloud.firestore {
   }
 }
 </pre>
-    <p class="small">What it does: each signed-in person can read and write only their own data (under <code>users/their-id/</code>). Everything else is locked.</p>
+    <p class="small">What it does: each signed-in person can read and write only their own data (under <code>users/their-id/</code>). The only exception is a read-only panel directory someone chooses to share: anyone with that exact link can view it, nobody can list or search them, and only the owner can change or delete it. Everything else is locked.</p>
   </section>
 
   <section>

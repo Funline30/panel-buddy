@@ -23,7 +23,7 @@ test('built site: title, viewport, manifest, local assets, no broken placeholder
   assert.ok(existsSync(join(dir, 'sw.js')));
   assert.ok(existsSync(join(dir, 'setup.html')));
   const js = readdirSync(join(dir, 'assets')).filter((f) => f.endsWith('.js')).map((f) => readFileSync(join(dir, 'assets', f), 'utf8')).join('\n');
-  for (const s of ['Load check', 'QR', 'Print', 'GFCI', 'Bedroom 2 - computer, 3D printer, WiFi', 'Demo mode']) assert.ok(js.includes(s), `bundle contains "${s}"`);
+  for (const s of ['Load check', 'QR', 'Print', 'GFCI', 'Bedroom 2 - computer, 3D printer, WiFi', 'Demo mode', 'Shore power', '12V DC fuses', 'Customers', 'Service log', 'Scan']) assert.ok(js.includes(s), `bundle contains "${s}"`);
   assert.doesNotMatch(js, /google-analytics|googletagmanager|gtag\(/, 'no trackers');
   assert.doesNotMatch(html + js, /lorem ipsum|TODO|FIXME/i);
 });

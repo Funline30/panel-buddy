@@ -4,9 +4,9 @@ export function seedData() {
   const now = Date.now();
   const H = 'h_sample';
   const P = 'p_main';
-  const homes = [{ id: H, name: 'Sample mobile home', address: 'Riesel, TX (example)', notes: 'Example data - edit or delete anything.', createdAt: now }];
+  const homes = [{ id: H, type: 'mobile', name: 'Sample mobile home', address: 'Riesel, TX (example)', notes: 'Example data - edit or delete anything.', createdAt: now }];
   const panels = [
-    { id: P, homeId: H, name: 'Main panel', type: 'main', mainAmps: '200', spaces: '24', location: 'Hall closet by back door', notes: 'Main breaker at top. Spaces 23-24 empty.', createdAt: now },
+    { id: P, homeId: H, name: 'Main panel', type: 'main', layout: 'auto', mainAmps: '200', spaces: '24', location: 'Hall closet by back door', notes: 'Main breaker at top. Spaces 23-24 empty.', createdAt: now },
   ];
   const b = (id, slot, poles, amps, label, rooms, extra = {}) => ({
     id, homeId: H, panelId: P, slot: String(slot), poles: String(poles), amps: String(amps), label, rooms, kind: 'standard', notes: '', loads: [], createdAt: now, ...extra,
@@ -61,5 +61,61 @@ export function seedData() {
     d('d16', 'b13', 'outlet', 'TV outlet', 'Living room', 'Under the TV'),
     d('d17', 'b14', 'appliance', 'Microwave', 'Kitchen', 'Over the range'),
   ];
-  return { homes, panels, breakers, devices, photos: [] };
+  // ---- sample camper (RV panel, 30A shore power, 12V fuses)
+  const R = 'h_camper';
+  const RP = 'p_rv';
+  homes.push({ id: R, type: 'rv', name: 'Sample camper', address: 'Travel trailer (example)', notes: 'Example RV data - edit or delete anything.', createdAt: now });
+  panels.push({
+    id: RP, homeId: R, name: 'RV distribution center', type: 'rv', layout: 'auto', shorePower: '30', mainAmps: '30', spaces: '6', location: 'Under the bed, front of the base', createdAt: now,
+    notes: 'Example: AC + microwave + electric water heater together is more than 30A shore power can carry.',
+    fuses: [
+      { num: '1', amps: '15', powers: 'Interior lights', notes: 'Front half' },
+      { num: '2', amps: '15', powers: 'Interior lights', notes: 'Rear half + bath' },
+      { num: '3', amps: '10', powers: 'Water pump', notes: '' },
+      { num: '4', amps: '15', powers: 'Furnace fan', notes: '' },
+      { num: '5', amps: '20', powers: 'Slide-out', notes: '' },
+      { num: '6', amps: '10', powers: 'LP / CO detector', notes: 'Also radio memory' },
+      { num: '7', amps: '15', powers: 'Awning', notes: 'And porch light' },
+    ],
+  });
+  const rb = (id, slot, amps, label, rooms, extra = {}) => ({ id, homeId: R, panelId: RP, slot: String(slot), poles: '1', amps: String(amps), label, rooms, kind: 'standard', notes: '', loads: [], createdAt: now, ...extra });
+  breakers.push(
+    rb('rb1', 1, 20, 'Air conditioner', ['Living / dinette'], { loads: [{ name: 'RV rooftop AC (running)', watts: 1500, qty: 1 }] }),
+    rb('rb2', 2, 20, 'Microwave', ['Galley'], { loads: [{ name: 'Microwave', watts: 1200, qty: 1 }] }),
+    rb('rb3', 3, 20, 'Water heater (electric)', ['Basement / storage'], { loads: [{ name: 'RV water heater element', watts: 1400, qty: 1 }] }),
+    rb('rb4', 4, 15, 'Converter / battery charger', ['Basement / storage']),
+    rb('rb5', 5, 15, 'Galley + bath outlets (GFCI)', ['Galley', 'Bath'], { kind: 'standard' }),
+    rb('rb6', 6, 15, 'Bedroom + exterior outlets', ['Bedroom', 'Exterior'])
+  );
+  devices.push(
+    d('rd1', 'rb5', 'outlet', 'GFCI outlet', 'Galley', 'Backsplash by sink', { homeId: R, gfci: 'gfci_outlet', notes: 'Reset here if the bath or outside outlets die.' }),
+    d('rd2', 'rb5', 'outlet', 'Bath outlet', 'Bath', 'By the mirror', { homeId: R, gfci: 'downstream' }),
+    d('rd3', 'rb6', 'outlet', 'Outside outlet', 'Exterior', 'Door side, by the awning', { homeId: R, gfci: 'downstream' }),
+    d('rd4', 'rb2', 'appliance', 'Microwave', 'Galley', 'Above the stove', { homeId: R })
+  );
+  return { homes, panels, breakers, devices, customers: [], photos: [] };
+}
+
+// Sample customers for Tech / Pro mode demo.
+export function seedPro() {
+  const now = Date.now();
+  const day = 86400000;
+  return {
+    customers: [
+      { id: 'c_smith', name: 'Dana Smith (example)', phone: '555-0101', email: '', notes: 'Gate code 1234. Dog in backyard.', visits: [{ date: '2026-09-30', notes: 'Added 20A circuit for garage freezer. Labeled panel.' }], lastServiced: '2026-09-30', lastOpenedAt: now - day, openCount: 4, createdAt: now - 30 * day },
+      { id: 'c_lopez', name: 'Ray Lopez (example)', phone: '555-0148', email: '', notes: '2019 travel trailer. Brings it to the shop.', visits: [{ date: '2026-10-08', notes: 'Shore power tripping: AC + water heater + microwave at once on 30A. Showed him the load check.' }], lastServiced: '2026-10-08', lastOpenedAt: now - 2 * day, openCount: 2, createdAt: now - 10 * day },
+    ],
+    homes: [
+      { id: 'h_smith', type: 'house', customerId: 'c_smith', name: 'Smith house', address: '12 Example Rd (example)', notes: '', createdAt: now },
+    ],
+    panels: [
+      { id: 'p_smith', homeId: 'h_smith', name: 'Main panel', type: 'main', layout: 'auto', mainAmps: '200', spaces: '20', location: 'Garage', notes: '', createdAt: now },
+    ],
+    breakers: [
+      { id: 'sb1', homeId: 'h_smith', panelId: 'p_smith', slot: '1', poles: '2', amps: '30', label: 'Dryer', rooms: ['Laundry / utility'], kind: 'standard', notes: '', loads: [], createdAt: now },
+      { id: 'sb2', homeId: 'h_smith', panelId: 'p_smith', slot: '2', poles: '1', amps: '20', label: 'Garage freezer (new)', rooms: ['Garage'], kind: 'standard', notes: 'Added Sep 30', loads: [{ name: 'Chest freezer (running)', watts: 200, qty: 1 }], createdAt: now },
+      { id: 'sb4', homeId: 'h_smith', panelId: 'p_smith', slot: '4', poles: '1', amps: '15', label: 'Bedrooms', rooms: ['Bedroom 2', 'Bedroom 3'], kind: 'afci', notes: '', loads: [], createdAt: now },
+    ],
+    devices: [],
+  };
 }

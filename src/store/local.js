@@ -3,7 +3,8 @@ import { seedData } from '../lib/seed.js';
 
 const KEY = 'panelbuddy:data:v1';
 const PHOTO = 'panelbuddy:photo:';
-const COLS = ['homes', 'panels', 'breakers', 'devices'];
+const COLS = ['homes', 'panels', 'breakers', 'devices', 'customers'];
+const SHARE = 'panelbuddy:share:';
 
 export function createLocalStore() {
   let data = null;
@@ -34,7 +35,35 @@ export function createLocalStore() {
         save();
       }
       for (const c of COLS) data[c] = data[c] || [];
+      data.settings = data.settings || { accountType: 'personal' };
       emit();
+    },
+    get settings() {
+      return (data && data.settings) || { accountType: 'personal' };
+    },
+    async saveSettings(next) {
+      data.settings = { ...this.settings, ...next };
+      save();
+      emit();
+    },
+    async addMany(extra) {
+      for (const c of COLS) for (const it of extra[c] || []) if (!data[c].find((x) => x.id === it.id)) data[c].push(it);
+      save();
+      emit();
+    },
+    async createShare(token, payload, panelIds = []) {
+      localStorage.setItem(SHARE + token, JSON.stringify({ ...payload, updatedAt: Date.now() }));
+      for (const pid of panelIds) localStorage.setItem('panelbuddy:sharedPanel:' + pid, token);
+    },
+    async lookupPanelShare(panelId) {
+      return localStorage.getItem('panelbuddy:sharedPanel:' + panelId);
+    },
+    async getShare(token) {
+      try { return JSON.parse(localStorage.getItem(SHARE + token) || 'null'); } catch { return null; }
+    },
+    async deleteShare(token, panelIds = []) {
+      for (const pid of panelIds) localStorage.removeItem('panelbuddy:sharedPanel:' + pid);
+      localStorage.removeItem(SHARE + token);
     },
     onChange(cb) {
       listeners.add(cb);
@@ -70,7 +99,8 @@ export function createLocalStore() {
       localStorage.removeItem(PHOTO + id);
     },
     async replaceAll(next) {
-      data = { homes: [], panels: [], breakers: [], devices: [] };
+      const settings = (next && next.settings) || (data && data.settings) || { accountType: 'personal' };
+      data = { homes: [], panels: [], breakers: [], devices: [], customers: [], settings };
       for (const c of COLS) data[c] = Array.isArray(next[c]) ? next[c] : [];
       save();
       emit();
@@ -79,7 +109,9 @@ export function createLocalStore() {
       Object.keys(localStorage)
         .filter((k) => k.startsWith(PHOTO))
         .forEach((k) => localStorage.removeItem(k));
+      const settings = data && data.settings;
       data = seedData();
+      if (settings) data.settings = settings;
       save();
       emit();
     },

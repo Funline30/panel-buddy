@@ -7,7 +7,11 @@ Free, no-ads web app for mapping your home's breaker panel. Installable on iPhon
 - **QR codes**: every panel, breaker and device gets a QR code that opens that record. Printable sticker sheets (1" x 2-5/8" address labels like Avery 5160, 2" squares, or plain paper).
 - **Load check**: list what's plugged into each circuit (presets or custom watts). Shows amps vs. the breaker rating, warns at 80%, red over 100%. Amps = watts ÷ 120 (÷ 240 for double-pole).
 - **Print & export**: panel-door directory (half page or full page, or Save as PDF), JSON backup/restore, CSV spreadsheets.
-- **Search**: "breaker 7", "bathroom fan", "gfci", "dead".
+- **RVs / campers / travel trailers**: RV distribution center panel type, any number of spaces, one-column layout, shore power (30A / 50A two-leg / household), shore power load check, 12V DC fuse list, RV area names.
+- **Tech / Pro mode** (for electricians and RV techs): Customers tab with customer list (search, recent / most opened / last serviced), each customer's properties and RVs, service log per visit, labels and QR stickers to leave at the job.
+- **Scan**: in-app QR scanner (live camera, or take a photo). Stickers hold only a short link like `https://your-app/#/p/<panelId>`; the owner opens the full record, anyone else gets a sign-in prompt or the read-only shared copy if the owner turned sharing on.
+- **Read-only share links**: a snapshot of a home's panel directory anyone with the link can view (no account). Owner can update or turn it off.
+- **Search**: "breaker 7", "bathroom fan", "fuse 3", "water pump", "gfci", "dead".
 - **Accounts**: email + password (Firebase Auth). Each person's data is private to them.
 - **Demo mode**: until Firebase is set up (or via "Try the demo"), everything is saved in the browser with a sample home.
 
@@ -28,7 +32,7 @@ public/                  manifest, icons, service worker, setup copy page
 test/                    node --test
 ```
 
-Data layout in Firestore: `users/{uid}/homes`, `users/{uid}/panels`, `users/{uid}/breakers`, `users/{uid}/devices`, `users/{uid}/photos`.
+Data layout in Firestore: `users/{uid}/homes`, `.../panels` (12V fuses live on the panel doc), `.../breakers` (loads live on the breaker doc), `.../devices`, `.../photos`, `.../customers`, `.../settings/profile`. Public read-only shares: `shares/{random token}` (get-only, never listable) and `sharedPanels/{panelId}` → token, so a scanned sticker can find the share.
 
 ## Setup
 
@@ -60,5 +64,6 @@ npm run build    # outputs dist/
 
 - **iPhone**: open in Safari → Share → **Add to Home Screen**. Scanning a QR sticker with the Camera opens the link in Safari (iOS doesn't route links into home-screen apps); sign in once in Safari too and everything is there.
 - In demo mode, data lives only in that browser. Use **More → Download backup** to move it, or **Copy demo data into my account** after signing in.
+- Known v1 limit: share links are snapshots (tap "Update shared copy" after changes). `sharedPanels` entries are first-come: someone who already knows a panel's ID could claim that panel's share slot before the owner shares it, so a scan of that sticker would offer their shared copy instead. The owner's private data is never exposed by this.
 - Load presets are rough typical wattages. For a real check, use the watts on the device's label. The 80% line is the guideline for loads that run 3+ hours.
 - Panel Buddy is a record-keeping tool, not electrical advice. Turn the breaker off and verify with a tester before working on wiring.
