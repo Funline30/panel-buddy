@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Panel Buddy - setup (Firestore rules)</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="./icons/icon-192.png" type="image/png">
+<link rel="stylesheet" href="./setup.css">
+</head>
+<body>
+<main>
+  <h1>⚡ Panel Buddy setup</h1>
+  <p>Copy page for the Firebase steps. Nothing here needs editing.</p>
+
+  <section id="rules">
+    <h2>Firestore security rules</h2>
+    <p>Firebase console &rarr; <b>Firestore Database</b> &rarr; <b>Rules</b> tab &rarr; select everything in the box and delete it &rarr; paste this &rarr; <b>Publish</b>.</p>
+    <button class="copy" data-copy="rulesText" type="button">Copy rules</button>
+    <pre id="rulesText">rules_version = &#x27;2&#x27;;
+
+// Panel Buddy - Firestore security rules.
+// Each signed-in user can read and write ONLY their own data under users/{their uid}/.
+// Nobody (signed in or not) can read anyone else&#x27;s data.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isOwner(uid) {
+      return request.auth != null &amp;&amp; request.auth.uid == uid;
+    }
+
+    function knownCollection(col) {
+      return col in [&#x27;homes&#x27;, &#x27;panels&#x27;, &#x27;breakers&#x27;, &#x27;devices&#x27;, &#x27;photos&#x27;];
+    }
+
+    match /users/{uid}/{col}/{docId} {
+      allow read, delete: if isOwner(uid) &amp;&amp; knownCollection(col);
+      allow create, update: if isOwner(uid)
+        &amp;&amp; knownCollection(col)
+        &amp;&amp; (col != &#x27;photos&#x27;
+            || (request.resource.data.data is string
+                &amp;&amp; request.resource.data.data.size() &lt; 900000));
+    }
+
+    // Everything else is closed.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
+</pre>
+    <p class="small">What it does: each signed-in person can read and write only their own data (under <code>users/their-id/</code>). Everything else is locked.</p>
+  </section>
+
+  <section>
+    <h2>Authorized domain (after Vercel)</h2>
+    <p>Firebase &rarr; <b>Authentication</b> &rarr; <b>Settings</b> &rarr; <b>Authorized domains</b> &rarr; <b>Add domain</b> &rarr; paste your Vercel address without https:// (for example <code>panel-buddy.vercel.app</code>).</p>
+  </section>
+  <p class="small"><a href="./">Open the Panel Buddy demo</a></p>
+</main>
+<script src="./setup.js"></script>
+</body>
+</html>
