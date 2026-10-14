@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.funline30.ampmap",
+      "sha256_cert_fingerprints": [
+        "3B:B8:E7:6B:6A:45:6A:CA:AC:B8:90:7B:7A:0C:43:C6:11:CD:52:50:33:61:00:1F:E5:89:6A:E6:90:7D:87:79"
+      ]
+    }
+  }
+]
