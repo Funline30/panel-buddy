@@ -16,7 +16,11 @@ test('built site: title, viewport, manifest, local assets, no broken placeholder
   const refs = [...html.matchAll(/(?:src|href)="([^"]+)"/g)].map((m) => m[1]).filter((u) => !/^(https?:|#|mailto:)/.test(u));
   assert.ok(refs.length >= 4);
   for (const r of refs) assert.ok(existsSync(join(dir, r.replace(/^\.\//, '').replace(/^\//, ''))), `missing asset ${r}`);
-  assert.doesNotMatch(html, /https?:\/\/(?!openapi)/, 'no remote assets in index.html');
+  // Share-preview meta (og:/twitter:) must be absolute URLs to the app's own site; nothing else may be remote.
+  const shareMeta = /<meta (?:property|name)="(?:og|twitter):[^"]+" content="https:\/\/panel-buddy\.vercel\.app\/([^"]*)" \/>/g;
+  for (const m of html.matchAll(shareMeta)) if (m[1]) assert.ok(existsSync(join(dir, m[1])), `missing share asset ${m[1]}`);
+  assert.match(html, /property="og:image" content="https:\/\/panel-buddy\.vercel\.app\/og-image\.png"/);
+  assert.doesNotMatch(html.replace(shareMeta, ''), /https?:\/\/(?!openapi)/, 'no remote assets in index.html');
   const manifest = JSON.parse(readFileSync(join(dir, 'manifest.webmanifest'), 'utf8'));
   assert.equal(manifest.name, 'AmpMap');
   assert.equal(manifest.short_name, 'AmpMap');

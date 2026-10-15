@@ -113,6 +113,7 @@ p { line-height: 1.5; }
 .topbar h1 { font-size: 1.08rem; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .topbar-title { flex: 1; min-width: 0; }
 .logo { flex: none; width: 34px; height: 34px; border-radius: 10px; background: var(--brand); color: var(--brand-ink); display: inline-flex; align-items: center; justify-content: center; font-size: 1.05rem; }
+img.logo { display: block; background: #1f2a3e; object-fit: cover; }
 .home-pick { width: 100%; font-size: 1.05rem; font-weight: 700; background: transparent; border: 0; min-height: 40px; padding: 0 4px; color: var(--ink); font-family: inherit; }
 .icon-btn { display: inline-flex; align-items: center; justify-content: center; min-width: 40px; min-height: 40px; font-size: 1.8rem; line-height: 1; text-decoration: none; color: var(--accent); background: none; border: 0; border-radius: 12px; cursor: pointer; font-family: inherit; }
 .icon-btn.small { min-width: 40px; min-height: 40px; font-size: 0.95rem; color: var(--muted); }
@@ -162,7 +163,7 @@ select.full { margin-top: 0; }
 .auth { max-width: 420px; margin: 0 auto; padding: 56px 18px; text-align: center; display: grid; gap: 14px; }
 .auth .card { text-align: left; }
 .auth form .btn { width: 100%; }
-.auth-logo { font-size: 2.6rem; width: 80px; height: 80px; margin: 0 auto; border-radius: 22px; background: var(--brand); display: flex; align-items: center; justify-content: center; }
+.auth-logo { display: block; width: auto; height: 128px; margin: 0 auto 4px; }
 
 /* panel view */
 .panel-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }

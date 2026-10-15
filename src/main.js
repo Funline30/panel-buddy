@@ -164,7 +164,7 @@ function shell(homeId, active, body, { title = '', back = '' } = {}) {
   return `
   ${store.mode === 'demo' ? `<div class="demo-banner">Demo mode: saved on this device only${isFirebaseConfigured() ? ' · <a href="#/login">Sign in to sync</a>' : ''}</div>` : ''}
   <header class="topbar">
-    ${back ? `<a class="icon-btn" href="${back}" aria-label="Back">‹</a>` : `<span class="logo" aria-hidden="true">⚡</span>`}
+    ${back ? `<a class="icon-btn" href="${back}" aria-label="Back">‹</a>` : `<img class="logo" src="./brand/house-108.png" alt="" aria-hidden="true" width="34" height="34">`}
     <div class="topbar-title">
       ${title ? `<h1>${esc(title)}</h1>` : `<label class="sr-only" for="homePick">Home</label>
       <select id="homePick" class="home-pick">${homeOptions(homes, homeId)}<option value="__new">+ Add a home...</option></select>`}
@@ -278,7 +278,7 @@ function renderLogin() {
   const cloud = store.mode === 'cloud';
   app.innerHTML = `
   <div class="auth">
-    <div class="auth-logo" aria-hidden="true">⚡</div>
+    <img class="auth-logo" src="./brand/badge.png" alt="AmpMap logo" width="116" height="128">
     <h1>AmpMap</h1>
     <p class="muted">Map your breaker panel, every outlet and light, QR stickers and load checks. Free, no ads.</p>
     ${pendingRoute && /^#\/(p|d|b)\//.test(pendingRoute) ? `<div class="alert warn" id="scanBanner">You scanned an AmpMap sticker. Sign in to open it.</div>` : ''}
@@ -359,7 +359,7 @@ function friendlyAuthError(ex) {
 }
 
 function renderFirstHome() {
-  app.innerHTML = `<div class="auth"><div class="auth-logo" aria-hidden="true">⚡</div><h1>Welcome to AmpMap</h1>
+  app.innerHTML = `<div class="auth"><img class="auth-logo" src="./brand/badge.png" alt="AmpMap logo" width="116" height="128"><h1>Welcome to AmpMap</h1>
   <p class="muted">Start by adding your home. You can add more properties later.</p>
   <a class="btn primary" href="#/edit/homes/new">Add my home</a>
   ${store.mode === 'cloud' ? `<p class="tiny muted">Signed in as ${esc(store.user.email)} · <a href="#" id="so">Sign out</a></p>` : ''}</div>`;
@@ -1585,7 +1585,7 @@ async function renderShare(token) {
     doc = null;
   }
   if (!doc) {
-    app.innerHTML = `<div class="auth"><div class="auth-logo" aria-hidden="true">⚡</div><h1>Link not found</h1><p class="muted">This shared panel link was turned off or doesn't exist.</p><a class="btn" href="#/">Open AmpMap</a></div>`;
+    app.innerHTML = `<div class="auth"><img class="auth-logo" src="./brand/badge.png" alt="AmpMap logo" width="116" height="128"><h1>Link not found</h1><p class="muted">This shared panel link was turned off or doesn't exist.</p><a class="btn" href="#/">Open AmpMap</a></div>`;
     return;
   }
   const sections = (doc.panels || []).map((p) => {
@@ -1597,7 +1597,7 @@ async function renderShare(token) {
     </div>`;
   });
   app.innerHTML = `
-  <header class="topbar"><span class="logo" aria-hidden="true">⚡</span><div class="topbar-title"><h1>${esc(doc.home.name)}</h1></div></header>
+  <header class="topbar"><img class="logo" src="./brand/house-108.png" alt="" aria-hidden="true" width="34" height="34"><div class="topbar-title"><h1>${esc(doc.home.name)}</h1></div></header>
   <main class="main share-main">
     <p class="muted no-print">Read-only panel directory shared from AmpMap${doc.updatedAt ? ' · updated ' + new Date(doc.updatedAt).toLocaleDateString() : ''}.</p>
     <div class="row-actions no-print"><button class="btn" id="doPrint">Print / Save as PDF</button><a class="btn ghost" href="#/">Get AmpMap (free)</a></div>
