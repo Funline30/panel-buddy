@@ -14,7 +14,9 @@ import { seedPro } from './lib/seed.js';
 import { LOAD_PRESETS, PRESET_NOTE } from './lib/presets.js';
 import { loadSummary, levelText, fmtAmps, shoreSummary, deviceWatts, voltsFor } from './lib/load.js';
 import { THEME_OPTIONS, getThemePref, setThemePref, applyTheme } from './lib/theme.js';
-import { search } from './lib/search.js';
+import { parseBreakerQuery } from './lib/search.js';
+import { CATALOG, CATEGORIES, CATALOG_NOTE, catById, categoryOf, wattsRange, ampsRange, surgeText, circuitTag } from './lib/catalog.js';
+import { searchHome, searchCatalog, lookupUrl, projectedPct, wattsFromAmps } from './lib/devicesearch.js';
 import { uid, esc, ampsText, sortBreakers, download } from './lib/util.js';
 import { breakersCsv, devicesCsv, fusesCsv } from './lib/csv.js';
 import { compressPhoto } from './lib/photo.js';
@@ -252,7 +254,9 @@ async function render() {
     if (view === 'breaker') return renderBreaker(homeId, id);
     if (view === 'device') return renderDevice(homeId, id);
     if (view === 'rooms') return renderRooms(homeId, q.get('room'));
-    if (view === 'search') return renderSearch(homeId, q.get('q') || '');
+    if (view === 'search' && id === 'dev') return renderCatalogItem(homeId, parts[4], q);
+    if (view === 'search' && id === 'add') return renderAddPicker(homeId, parts[4], q);
+    if (view === 'search') return renderSearch(homeId, q.get('q') || '', q.get('cat') || '');
     if (view === 'load') return renderLoad(homeId);
     if (view === 'more') return renderMore(homeId);
     if (view === 'shop') return renderShop(homeId, q.get('scope'));
@@ -421,6 +425,7 @@ function renderPanel(homeId, panelId) {
   const over = breakers.filter((b) => sumOf(b).level === 'over').length;
   const warn = breakers.filter((b) => sumOf(b).level === 'warn').length;
   const body = `
+  ${searchBarHtml(homeId)}
   <section class="panel-head">
     <div>
       ${panels.length > 1 ? `<label class="sr-only" for="panelPick">Panel</label><select id="panelPick" class="panel-pick">${panels.map((p) => `<option value="${p.id}" ${p.id === panel.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>` : `<h2>${esc(panel.name)}</h2>`}
@@ -448,6 +453,7 @@ function renderPanel(homeId, panelId) {
   <div id="panelExtra"></div>`;
   app.innerHTML = shell(homeId, 'panel', body);
   bindShell();
+  bindSearchBar(homeId);
   const pp = document.getElementById('panelPick');
   if (pp) pp.onchange = () => go(`#/h/${homeId}/panel/${pp.value}`);
   bindFuses(panel);
@@ -565,16 +571,18 @@ function addItemForm(id, { targets = null, button = 'Add' } = {}) {
       <select name="preset"><option value="">Choose a common item...</option>${LOAD_PRESETS.map((p, i) => `<option value="${i}">${esc(p.name)} (~${p.watts}W)</option>`).join('')}<option value="custom">Something else (type it)</option></select>
     </label>
     <div class="two">
-      <label>Name<input name="name" placeholder="e.g. Space heater" autocomplete="off"></label>
+      <label>Name<input name="name" placeholder="e.g. Space heater" autocomplete="off" list="${id}-catalog"></label>
       <label>Watts<input name="watts" type="number" inputmode="numeric" min="0" step="1" placeholder="1500"></label>
     </div>
+    <datalist id="${id}-catalog">${CATALOG.map((c) => `<option value="${esc(c.name)}"></option>`).join('')}</datalist>
+    <div class="prefill-note" hidden></div>
     <details class="watts-help">
-      <summary>❓ How do I find the watts?</summary>
+      <summary>❓ Don't know the watts? Find it, or enter amps</summary>
       <div class="wh-body">
         <p><b>1. Look for the label.</b> Most things have a sticker or stamped plate on the back, bottom, or inside the door (fridge, microwave, washer). Look for a number with <b>W</b> or <b>Watts</b>, like "1500W".</p>
         <p><b>2. Only amps listed?</b> Multiply volts × amps. A label that says "120V 5A" is about 600W. Use the calculator below.</p>
         <p><b>3. Chargers and power bricks:</b> read the <b>Input</b> line (like "100-240V 1.5A"), not the Output line. Use 120 for volts.</p>
-        <p><b>4. No label?</b> Search the model number online with "watts", or check the manual.</p>
+        <p><b>4. No label?</b> Search the model number online with "watts", or check the manual. <a class="lookup-link" data-lookup href="https://www.google.com/search?q=watts" target="_blank" rel="noopener">🔎 Look it up online</a></p>
         <p><b>5. Most accurate:</b> a plug-in watt meter (Kill A Watt style) shows what it really pulls. Plug it in between the outlet and the item.</p>
         <p class="tiny muted">The label is the most it can draw. Heaters, microwaves, hair dryers, and toasters really do pull close to their label. TVs and computers usually pull less.</p>
         <div class="two wh-calc">
@@ -582,6 +590,7 @@ function addItemForm(id, { targets = null, button = 'Add' } = {}) {
           <label>Amps<input name="wamps" type="number" inputmode="decimal" step="0.1" placeholder="5"></label>
         </div>
         <button type="button" class="btn full" data-wcalc>Use volts × amps as the watts</button>
+        <p class="tiny muted">Typing the amps fills in the watts for you (amps × 120, or × 240 for a 240V item).</p>
       </div>
     </details>
     <div class="two">
@@ -606,6 +615,22 @@ function bindAddItemForm(f, onAdd) {
       f.elements.name.focus();
     }
   };
+  // typing a name that's in the device catalog fills in its typical watts
+  f.elements.name.addEventListener('change', () => {
+    const c = CATALOG.find((x) => x.name.toLowerCase() === f.elements.name.value.trim().toLowerCase());
+    if (c && (!f.elements.watts.value || f.dataset.autoWatts === f.elements.watts.value)) {
+      f.elements.watts.value = c.typical;
+      f.dataset.autoWatts = String(c.typical);
+      if (f.elements.wvolts) f.elements.wvolts.value = c.volts;
+      toast(`Typical ${c.name}: ~${c.typical}W`);
+    }
+  });
+  const lk = f.querySelector('[data-lookup]');
+  if (lk) lk.onclick = () => { lk.href = lookupUrl(f.elements.name.value.trim() || 'appliance'); };
+  if (f.elements.wamps) f.elements.wamps.addEventListener('input', () => {
+    const w = wattsFromAmps(f.elements.wamps.value, f.elements.wvolts.value);
+    if (w) f.elements.watts.value = w;
+  });
   const wc = f.querySelector('[data-wcalc]');
   if (wc) wc.onclick = () => {
     const v = Number(f.elements.wvolts.value) || 120;
@@ -695,6 +720,7 @@ function renderBreaker(homeId, id) {
     const el = document.getElementById('qrBox');
     if (el) el.innerHTML = svg;
   });
+  applyPrefill(document.getElementById('loadForm'));
   bindAddItemForm(document.getElementById('loadForm'), async (item, target) => {
     const d = target && byId('devices', target);
     if (d) await store.put('devices', { ...d, loads: [...(d.loads || []), item] });
@@ -788,6 +814,7 @@ function renderDevice(homeId, id) {
       if (el) el.innerHTML = src ? `<img class="photo" src="${src}" alt="Photo of ${esc(d.name)}">` : 'Photo not available offline yet.';
     });
   bindPhoto('devices', d);
+  applyPrefill(document.getElementById('itemForm'));
   bindAddItemForm(document.getElementById('itemForm'), async (item) => {
     await store.put('devices', { ...d, loads: [...(d.loads || []), item] });
   });
@@ -864,6 +891,7 @@ function renderRooms(homeId, roomFilter) {
   const names = [...groups.keys()].sort((a, b) => a.localeCompare(b));
   const shown = roomFilter ? names.filter((n) => n === roomFilter) : names;
   const body = `
+  ${roomFilter ? '' : searchBarHtml(homeId)}
   <div class="section-head"><h2>${roomFilter ? esc(roomFilter) : 'Rooms'}</h2><div class="head-actions"><a class="btn small" href="#/h/${homeId}/shop">🛒 Shopping list</a><a class="btn small primary" href="#/edit/devices/new?home=${homeId}${roomFilter ? `&room=${encodeURIComponent(roomFilter)}` : ''}">+ Add</a></div></div>
   ${roomFilter ? `<p><a href="#/h/${homeId}/rooms">‹ All rooms</a></p>` : `<label class="sr-only" for="roomJump">Jump to room</label><select id="roomJump" class="full"><option value="">Jump to a room...</option>${names.map((n) => `<option>${esc(n)}</option>`).join('')}</select>`}
   ${shown.length ? shown.map((r) => {
@@ -873,41 +901,266 @@ function renderRooms(homeId, roomFilter) {
   }).join('') : `<div class="card empty"><p>No outlets, lights or switches yet. Add one and pick its breaker.</p></div>`}`;
   app.innerHTML = shell(homeId, 'rooms', body);
   bindShell();
+  bindSearchBar(homeId);
   const rj = document.getElementById('roomJump');
   if (rj) rj.onchange = () => rj.value && go(`#/h/${homeId}/rooms?room=${encodeURIComponent(rj.value)}`);
 }
 
 // ---------------------------------------------------------------- search
-function renderSearch(homeId, query) {
-  const body = `
-  <form id="searchForm" class="search-box" role="search">
-    <label class="sr-only" for="sq">Search</label>
-    <input id="sq" type="search" value="${esc(query)}" placeholder="breaker 7, bathroom fan, gfci..." autocomplete="off" enterkeyhint="search">
+// One search for everything: what the user has mapped (loads they listed, outlets, breakers,
+// rooms) comes first, then the built-in catalog of household devices with typical watts/amps.
+const homeData = (homeId) => ({ breakers: inHome('breakers', homeId), devices: inHome('devices', homeId), panels: inHome('panels', homeId), fuses: true });
+const qs = (query) => (query ? '?q=' + encodeURIComponent(query) : '');
+const devName = (d) => d.name || labelOf(DEVICE_TYPES, d.type);
+
+function homeRowHtml(homeId, r) {
+  if (r.kind === 'load') {
+    const l = r.load;
+    const w = (Number(l.watts) || 0) * (Number(l.qty) || 1);
+    const where = r.device ? [r.device.room, devName(r.device)].filter(Boolean).join(' · ') : 'Listed on the breaker';
+    const brk = r.breaker ? `Breaker ${slotText(r.breaker)}${r.breaker.label ? ` (${r.breaker.label})` : ''}` : 'No breaker picked yet';
+    const href = r.device ? `#/h/${homeId}/device/${r.device.id}#plugged` : `#/h/${homeId}/breaker/${r.breaker.id}#loads`;
+    return `<li><a class="row" href="${href}"><span class="row-icon" aria-hidden="true">🔌</span><span class="row-main"><b>${esc(l.name)}${Number(l.qty) > 1 ? ` <span class="muted">×${esc(l.qty)}</span>` : ''}</b><span class="muted wrap">${esc(where)} · ${esc(brk)}</span></span><span class="row-side">${w ? `<span class="pill amber">${wattsText(w)}</span>` : ''}${r.breaker ? `<span class="pill">#${esc(slotText(r.breaker))}</span>` : '<span class="pill gray">?</span>'}</span><span class="chev" aria-hidden="true">›</span></a></li>`;
+  }
+  if (r.kind === 'fuse')
+    return `<li><a class="row" href="#/h/${homeId}/panel/${r.panel.id}#fuses"><span class="fuse-num">${esc(r.item.num)}</span><span class="row-main"><b>${esc(r.item.powers || 'Fuse')}</b><span class="muted">12V fuse · ${esc(r.item.amps === 'other' ? r.item.ampsOther : r.item.amps)}A · ${esc(r.panel.name)}</span></span></a></li>`;
+  if (r.kind === 'breaker')
+    return `<li><a class="row" href="#/h/${homeId}/breaker/${r.item.id}"><span class="big-slot sm">${esc(slotText(r.item))}</span><span class="row-main"><b>${esc(r.item.label || 'Breaker')}</b><span class="muted">Breaker · ${esc(ampsText(r.item))}${(r.item.rooms || []).length ? ' · ' + esc(r.item.rooms.join(', ')) : ''}</span></span><span class="chev" aria-hidden="true">›</span></a></li>`;
+  return deviceRow(homeId, r.item, true);
+}
+
+function catalogRowHtml(homeId, c, query) {
+  const tag = circuitTag(c);
+  const cls = tag === '240V' ? 'blue' : tag === 'Own circuit' || tag === 'Big draw' ? 'amber' : 'gray';
+  return `<li><a class="row" href="#/h/${homeId}/search/dev/${c.id}${qs(query)}"><span class="row-icon" aria-hidden="true">${categoryOf(c.cat).icon}</span><span class="row-main"><b>${esc(c.name)}</b><span class="muted wrap">${esc(wattsRange(c))} · ${esc(ampsRange(c))}</span></span><span class="row-side">${tag ? `<span class="pill ${cls}">${esc(tag)}</span>` : ''}</span><span class="chev" aria-hidden="true">›</span></a></li>`;
+}
+
+function notFoundHtml(homeId, query, partial = false) {
+  return `<div class="card not-found">
+    <h3>${partial ? 'No exact match for that model' : "Not in AmpMap's list yet"}</h3>
+    <p class="muted">Easiest: check the sticker or nameplate on the back or bottom. It lists watts, or amps (watts = amps × 120).</p>
+    <div class="row-actions">
+      <a class="btn" href="${esc(lookupUrl(query))}" target="_blank" rel="noopener">🔎 Look it up online</a>
+      <a class="btn primary" href="#/h/${homeId}/search/add?name=${encodeURIComponent(query.trim())}">+ Add it with its watts</a>
+    </div>
+  </div>`;
+}
+
+function searchResultsHtml(homeId, query, { compact = false, cat = '' } = {}) {
+  const has = query.trim().length > 0;
+  if (!has && !cat) return '';
+  const home = has ? searchHome(query, homeData(homeId)) : [];
+  const cats = searchCatalog(query, { limit: compact ? 5 : 80, cat });
+  const homeShown = compact ? home.slice(0, 4) : home;
+  let html = '';
+  if (homeShown.length)
+    html += `<h3 class="sr-head">In your home <span class="muted">${home.length}</span></h3><ul class="list card sr-list">${homeShown.map((r) => homeRowHtml(homeId, r)).join('')}</ul>`;
+  const partial = cats.length && cats[0].partial;
+  if (partial && !compact) html += notFoundHtml(homeId, query, true);
+  if (cats.length)
+    html += `<h3 class="sr-head">${partial ? 'Closest matches' : cat && !has ? esc(categoryOf(cat).label) : 'Typical power use'} <span class="muted">estimates</span></h3><ul class="list card sr-list">${cats.map((h) => catalogRowHtml(homeId, h.entry, query)).join('')}</ul>`;
+  if (has && !cats.length && parseBreakerQuery(query) == null) html += notFoundHtml(homeId, query);
+  else if (has && !homeShown.length && !cats.length) html += `<p class="muted center">Nothing matches "${esc(query)}".</p>`;
+  if (has && cats.length && !compact) html += `<p class="tiny muted sr-foot">Values are typical estimates. Check the nameplate. <a href="${esc(lookupUrl(query))}" target="_blank" rel="noopener">🔎 Look up "${esc(query.trim())}" online</a></p>`;
+  if (compact && (home.length > homeShown.length || cats.length >= 5 || has))
+    html += `<a class="btn full sr-all" href="#/h/${homeId}/search${qs(query)}">See all results ›</a>`;
+  return html;
+}
+
+// Search bar at the top of the Panel and Rooms screens. Results show right under it as you type.
+function searchBarHtml(homeId) {
+  return `<form class="search-box sbar" role="search" data-sbar>
+    <label class="sr-only" for="sbarIn">Search devices, outlets and breakers</label>
+    <span class="sb-icon" aria-hidden="true">⌕</span>
+    <input id="sbarIn" type="search" placeholder="Search anything plugged in, or a breaker" autocomplete="off" autocorrect="off" enterkeyhint="search">
   </form>
-  <div class="chips examples">${(inHome('panels', homeId).some((p) => p.type === 'rv') ? ['breaker 2', 'water pump', 'fuse 3', 'gfci', 'microwave'] : ['breaker 11', 'bathroom fan', 'dining', 'gfci', 'dead', '3D printer']).map((x) => `<button class="chip" data-ex="${esc(x)}">${esc(x)}</button>`).join('')}</div>
-  <div id="results"></div>`;
-  app.innerHTML = shell(homeId, 'search', body);
+  <div id="sbarResults" class="sbar-results" aria-live="polite"></div>`;
+}
+function bindSearchBar(homeId) {
+  const f = app.querySelector('[data-sbar]');
+  const input = document.getElementById('sbarIn');
+  const out = document.getElementById('sbarResults');
+  if (!f || !input || !out) return;
+  input.oninput = () => (out.innerHTML = searchResultsHtml(homeId, input.value, { compact: true }));
+  f.onsubmit = (e) => {
+    e.preventDefault();
+    if (input.value.trim()) go(`#/h/${homeId}/search${qs(input.value.trim())}`);
+  };
+}
+
+function renderSearch(homeId, query, cat = '') {
+  const rv = inHome('panels', homeId).some((p) => p.type === 'rv');
+  const tries = rv ? ['breaker 2', 'water pump', 'fuse 3', 'microwave', 'air fryer', 'space heater'] : ["where's the fridge", 'breaker 11', 'gfci', 'air fryer', 'space heater', 'PS5', 'well pump', 'stock tank heater'];
+  const body = `
+  <form id="searchForm" class="search-box sbar" role="search">
+    <label class="sr-only" for="sq">Search</label>
+    <span class="sb-icon" aria-hidden="true">⌕</span>
+    <input id="sq" type="search" value="${esc(query)}" placeholder="Fridge, air fryer, breaker 7, well pump..." autocomplete="off" autocorrect="off" enterkeyhint="search">
+  </form>
+  <div id="results"></div>
+  <div id="searchHome" ${query || cat ? 'hidden' : ''}>
+    <p class="muted search-lead">Type anything that plugs in (or is wired in) to see its typical watts and amps, whether it needs its own circuit, and where it is in your home.</p>
+    <div class="chips examples">${tries.map((x) => `<button type="button" class="chip" data-ex="${esc(x)}">${esc(x)}</button>`).join('')}</div>
+    <h3 class="sr-head">Browse by type <span class="muted">${CATALOG.length} devices</span></h3>
+    <div class="cat-grid">${CATEGORIES.map((c) => `<a class="cat-tile" href="#/h/${homeId}/search?cat=${c.id}"><span aria-hidden="true">${c.icon}</span>${esc(c.label)}</a>`).join('')}</div>
+    <p class="tiny muted">${esc(CATALOG_NOTE)}</p>
+  </div>`;
+  const title = cat && !query ? categoryOf(cat).label : '';
+  app.innerHTML = shell(homeId, 'search', body, title ? { title, back: `#/h/${homeId}/search` } : {});
   bindShell();
   const input = document.getElementById('sq');
+  let curCat = cat;
   const run = () => {
     const qv = input.value;
-    history.replaceState(null, '', `#/h/${homeId}/search${qv ? '?q=' + encodeURIComponent(qv) : ''}`);
-    const data = { breakers: inHome('breakers', homeId), devices: inHome('devices', homeId), panels: inHome('panels', homeId), fuses: true };
-    const res = search(qv, data);
-    const el = document.getElementById('results');
-    if (!qv.trim()) return (el.innerHTML = `<p class="muted center">Try "what's on breaker 7" or "which breaker is the bathroom fan".</p>`);
-    if (!res.length) return (el.innerHTML = `<p class="muted center">Nothing matches "${esc(qv)}".</p>`);
-    el.innerHTML = `<ul class="list card">${res.map((r) => r.kind === 'fuse'
-      ? `<li><a class="row" href="#/h/${homeId}/panel/${r.panel.id}#fuses"><span class="fuse-num">${esc(r.item.num)}</span><span class="row-main"><b>${esc(r.item.powers || 'Fuse')}</b><span class="muted">12V fuse · ${esc(r.item.amps === 'other' ? r.item.ampsOther : r.item.amps)}A · ${esc(r.panel.name)}</span></span></a></li>`
-      : r.kind === 'breaker'
-      ? `<li><a class="row" href="#/h/${homeId}/breaker/${r.item.id}"><span class="big-slot sm">${esc(slotText(r.item))}</span><span class="row-main"><b>${esc(r.item.label || 'Breaker')}</b><span class="muted">Breaker · ${esc(ampsText(r.item))} · ${esc((r.item.rooms || []).join(', '))}</span></span></a></li>`
-      : deviceRow(homeId, r.item, true)).join('')}</ul>`;
+    if (qv.trim()) curCat = '';
+    const url = `#/h/${homeId}/search${qv ? '?q=' + encodeURIComponent(qv) : curCat ? '?cat=' + curCat : ''}`;
+    history.replaceState(null, '', url);
+    lastHash = location.hash;
+    document.getElementById('searchHome').hidden = !!(qv.trim() || curCat);
+    document.getElementById('results').innerHTML = searchResultsHtml(homeId, qv, { cat: curCat });
   };
   input.oninput = run;
   document.getElementById('searchForm').onsubmit = (e) => { e.preventDefault(); input.blur(); };
   app.querySelectorAll('[data-ex]').forEach((b) => (b.onclick = () => { input.value = b.dataset.ex; run(); }));
   run();
-  if (!query) setTimeout(() => input.focus(), 50);
+  if (!query && !cat) setTimeout(() => input.focus(), 50);
+}
+
+// Where a catalog device already shows up in this home (loads, outlets, breakers).
+function homeMatchesFor(homeId, c) {
+  const res = searchHome(c.aka[0] && c.name.length > 18 ? c.aka[0] : c.name, homeData(homeId));
+  return res.filter((r) => r.kind === 'load' || r.score >= 200);
+}
+
+function renderCatalogItem(homeId, id, q) {
+  const c = catById(id);
+  if (!c) return renderNotFound();
+  const cat = categoryOf(c.cat);
+  const query = q.get('q') || '';
+  const back = query ? `#/h/${homeId}/search${qs(query)}` : `#/h/${homeId}/search?cat=${c.cat}`;
+  const mine = homeMatchesFor(homeId, c).slice(0, 6);
+  const f = (n) => Number(n).toLocaleString('en-US');
+  const body = `
+  <section class="detail-head">
+    <div class="big-icon" aria-hidden="true">${cat.icon}</div>
+    <div><h2>${esc(c.name)}</h2><p class="muted">${esc(cat.label)}${c.hardwired ? ' · usually hardwired' : ''}</p></div>
+  </section>
+  <div class="card dev-stats">
+    <div class="stat"><span>Running watts</span><b>${esc(wattsRange(c))}</b></div>
+    <div class="stat"><span>Amps</span><b>${esc(ampsRange(c))}</b></div>
+    <div class="stat"><span>Startup surge</span><b>${c.surge ? `~${f(c.surge[0])}-${f(c.surge[1])}W` : 'Little or none'}</b></div>
+    <div class="stat"><span>Voltage</span><b>${c.volts === 240 ? '240V (2-pole breaker)' : '120V outlet'}</b></div>
+    <p class="tiny muted stat-foot">Load check uses about ${f(c.typical)}W (${fmtAmps(c.typical / c.volts)}A) unless you change it.</p>
+  </div>
+  <div class="card circuit-note">
+    <h3>⚡ What circuit it needs</h3>
+    <p>${esc(c.note)}</p>
+    ${c.cont ? '<p class="muted">It runs for hours at a time, so keep the whole circuit under 80% (12A on a 15A breaker, 16A on a 20A).</p>' : ''}
+    ${c.surge ? `<p class="muted">The startup surge (${esc(surgeText(c))}) is why a motor can trip a breaker that's already loaded up.</p>` : ''}
+  </div>
+  <p class="estimate-note">ⓘ ${esc(CATALOG_NOTE)} <a href="${esc(lookupUrl(c.name))}" target="_blank" rel="noopener">🔎 Look up exact specs online</a></p>
+  <a class="btn primary full add-cta" href="#/h/${homeId}/search/add/${c.id}">+ Add to an outlet or breaker</a>
+  ${mine.length ? `<h3 class="sr-head">Already in your home</h3><ul class="list card sr-list">${mine.map((r) => homeRowHtml(homeId, r)).join('')}</ul>` : ''}
+  ${c.aka.length ? `<p class="tiny muted">Also found by: ${esc(c.aka.slice(0, 8).join(', '))}</p>` : ''}`;
+  app.innerHTML = shell(homeId, 'search', body, { title: 'Device', back });
+  bindShell();
+}
+
+// "Add to an outlet or breaker": pick where it plugs in, then the normal add form opens pre-filled.
+function renderAddPicker(homeId, id, q) {
+  const c = id ? catById(id) : null;
+  const name = c ? c.name : (q.get('name') || '').trim();
+  if (!name) return renderNotFound();
+  const watts = c ? c.typical : 0;
+  const addQ = c ? `add=${c.id}` : `addname=${encodeURIComponent(name)}`;
+  const breakers = sortBreakers(inHome('breakers', homeId).filter((b) => b.kind !== 'spare'));
+  const devices = inHome('devices', homeId);
+  const is240 = c && c.volts === 240;
+  const proj = (b) => {
+    if (!b) return '';
+    const s = sumOf(b);
+    if (!s.rating) return '';
+    if (!watts) return `<span class="pill gray">${s.level === 'none' ? '0' : Math.round(s.pct)}% now</span>`;
+    const after = projectedPct(s, watts);
+    const lvl = after > 100 ? 'red' : after >= 80 ? 'amber' : 'green';
+    return `<span class="pill ${lvl}" title="Breaker load now and after adding it">${Math.round(s.pct)}% → ${Math.round(after)}%</span>`;
+  };
+  const rooms = new Map();
+  for (const d of devices) {
+    const r = d.room || 'No room set';
+    if (!rooms.has(r)) rooms.set(r, []);
+    rooms.get(r).push(d);
+  }
+  const roomNames = [...rooms.keys()].sort((a, b) => a.localeCompare(b));
+  const bList = is240 ? [...breakers.filter((b) => String(b.poles) === '2'), ...breakers.filter((b) => String(b.poles) !== '2')] : breakers;
+  const body = `
+  <section class="detail-head">
+    <div class="big-icon" aria-hidden="true">${c ? categoryOf(c.cat).icon : '🔌'}</div>
+    <div><h2>Add ${esc(name)}</h2><p class="muted">${c ? `Typical ~${Number(watts).toLocaleString('en-US')}W · you can change it next` : 'You will type the watts (or amps) next'}</p></div>
+  </section>
+  ${breakers.length + devices.length > 8 ? `<form class="search-box sbar pick-filter" onsubmit="return false"><label class="sr-only" for="pickFilter">Filter outlets and breakers</label><span class="sb-icon" aria-hidden="true">⌕</span><input id="pickFilter" type="search" placeholder="Filter: room, outlet or breaker #" autocomplete="off" enterkeyhint="done"></form>` : ''}
+  ${is240 ? '<div class="alert warn">This is a 240V item, so it goes on a 2-pole (240V) breaker. Those are listed first.</div>' : ''}
+  ${!breakers.length && !devices.length ? `<div class="card empty"><p>Map a breaker first, then you can add what's plugged into it.</p><a class="btn primary" href="#/edit/breakers/new?home=${homeId}">+ Add a breaker</a></div>` : ''}
+  ${devices.length && !is240 ? `<h3 class="sr-head">Pick the outlet it's plugged into</h3>
+  ${roomNames.map((r) => `<div class="card room-card pick-card"><div class="room-head"><h3>${esc(r)}</h3></div><ul class="list">${rooms.get(r).map((d) => {
+    const b = byId('breakers', d.breakerId);
+    return `<li><a class="row" href="#/h/${homeId}/device/${d.id}?${addQ}#plugged"><span class="row-icon" aria-hidden="true">${deviceIcon(d.type)}</span><span class="row-main"><b>${esc(devName(d))}</b><span class="muted">${b ? `Breaker ${esc(slotText(b))}${b.label ? ' · ' + esc(b.label) : ''}` : 'No breaker picked'}</span></span><span class="row-side">${proj(b)}</span><span class="chev" aria-hidden="true">›</span></a></li>`;
+  }).join('')}</ul></div>`).join('')}` : ''}
+  ${breakers.length ? `<h3 class="sr-head">${devices.length && !is240 ? 'Or put it straight on a breaker' : 'Pick the breaker'}</h3>
+  <ul class="list card sr-list pick-breakers">${bList.map((b) => `<li><a class="row" href="#/h/${homeId}/breaker/${b.id}?${addQ}#loads"><span class="big-slot sm">${esc(slotText(b))}</span><span class="row-main"><b>${esc(b.label || 'Breaker')}</b><span class="muted">${esc(ampsText(b))}${String(b.poles) === '2' ? ' · 240V' : ''}${(b.rooms || []).length ? ' · ' + esc(b.rooms.join(', ')) : ''}</span></span><span class="row-side">${proj(b)}</span><span class="chev" aria-hidden="true">›</span></a></li>`).join('')}</ul>` : ''}
+  <p class="tiny muted">The % is the breaker's load check now → after adding it (typical watts). Over 80% is too much for things that run 3+ hours.</p>`;
+  app.innerHTML = shell(homeId, 'search', body, { title: 'Add to...', back: c ? `#/h/${homeId}/search/dev/${c.id}` : `#/h/${homeId}/search${qs(name)}` });
+  bindShell();
+  const pf = document.getElementById('pickFilter');
+  if (pf)
+    pf.oninput = () => {
+      const t = pf.value.trim().toLowerCase().replace(/^#/, '');
+      app.querySelectorAll('.pick-card').forEach((card) => {
+        const roomHit = !t || card.querySelector('.room-head').textContent.toLowerCase().includes(t);
+        let any = false;
+        card.querySelectorAll('li').forEach((li) => {
+          const show = roomHit || li.textContent.toLowerCase().includes(t);
+          li.hidden = !show;
+          any = any || show;
+        });
+        card.hidden = !any;
+      });
+      app.querySelectorAll('.pick-breakers li').forEach((li) => (li.hidden = !!t && !li.textContent.toLowerCase().includes(t)));
+    };
+}
+
+// Breaker / outlet screens: when opened from search ("?add=<catalog id>" or "?addname=<name>"),
+// open the normal add form pre-filled. The parameter is removed right away so saving
+// (which re-renders the screen) doesn't fill the form again.
+function applyPrefill(f) {
+  if (!f) return;
+  const { q, parts, anchor } = parseRoute();
+  const id = q.get('add');
+  const nm = q.get('addname');
+  if (!id && !nm) return;
+  const c = id ? catById(id) : null;
+  f.elements.name.value = c ? c.name : nm;
+  if (c) {
+    f.elements.watts.value = c.typical;
+    f.dataset.autoWatts = String(c.typical);
+    if (f.elements.wvolts) f.elements.wvolts.value = c.volts;
+  }
+  const det = f.closest('details');
+  if (det) det.open = true;
+  const note = f.querySelector('.prefill-note');
+  if (note) {
+    note.hidden = false;
+    note.innerHTML = c
+      ? `Pre-filled with a <b>typical</b> ${esc(c.name)} (${esc(wattsRange(c))}). If its label says different, change the watts.`
+      : `Type the watts from its label. Only know the amps? Open the help below and enter them.`;
+  }
+  if (!c) {
+    const wh = f.querySelector('.watts-help');
+    if (wh) wh.open = true;
+  }
+  history.replaceState(null, '', `#/${parts.join('/')}${anchor ? '#' + anchor : ''}`);
+  lastHash = location.hash;
+  setTimeout(() => f.scrollIntoView({ block: 'center', behavior: 'smooth' }), 160);
 }
 
 // ---------------------------------------------------------------- load check
