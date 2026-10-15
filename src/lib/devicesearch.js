@@ -253,8 +253,9 @@ export function searchHome(query, data) {
     });
   }
   // 2. breakers / outlets whose own name is the thing ("Refrigerator", "Dryer")
+  const shownBreakers = new Set(out.map((r) => r.breaker && r.breaker.id).filter(Boolean));
   for (const b of breakers) {
-    if (linked(b.label)) add({ kind: 'breaker', item: b, score: 200 + exact(b.label) });
+    if (linked(b.label) && !shownBreakers.has(b.id)) add({ kind: 'breaker', item: b, score: 200 + exact(b.label) });
   }
   for (const d of devices) {
     if (linked(d.name)) add({ kind: 'device', item: d, breaker: breakerById.get(d.breakerId) || null, score: 200 + exact(d.name) });
@@ -264,7 +265,7 @@ export function searchHome(query, data) {
   const loadBreakerIds = new Set(out.filter((r) => r.kind === 'load' && !r.device).map((r) => r.breaker.id));
   for (const r of homeSearch(toks.join(' '), { breakers, devices, panels, fuses: true })) {
     if (r.kind === 'device' && loadDeviceIds.has(r.item.id)) continue; // already shown via its load
-    if (r.kind === 'breaker' && loadBreakerIds.has(r.item.id) && r.score < 200) continue;
+    if (r.kind === 'breaker' && (loadBreakerIds.has(r.item.id) || shownBreakers.has(r.item.id))) continue;
     add({ ...r, score: 100 + (r.score || 0) });
   }
   out.sort((a, b) => b.score - a.score);

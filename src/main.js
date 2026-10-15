@@ -1092,7 +1092,8 @@ function renderAddPicker(homeId, id, q) {
     rooms.get(r).push(d);
   }
   const roomNames = [...rooms.keys()].sort((a, b) => a.localeCompare(b));
-  const bList = is240 ? [...breakers.filter((b) => String(b.poles) === '2'), ...breakers.filter((b) => String(b.poles) !== '2')] : breakers;
+  // 240V items: 2-pole breakers first. 120V items never go on a 2-pole (240V) breaker.
+  const bList = is240 ? [...breakers.filter((b) => String(b.poles) === '2'), ...breakers.filter((b) => String(b.poles) !== '2')] : breakers.filter((b) => String(b.poles) !== '2');
   const body = `
   <section class="detail-head">
     <div class="big-icon" aria-hidden="true">${c ? categoryOf(c.cat).icon : '🔌'}</div>
