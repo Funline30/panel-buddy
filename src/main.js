@@ -1254,7 +1254,7 @@ function renderMove(homeId, q) {
     if (!b || !counts || (curB && curB.id === b.id)) return '';
     const s = sumOf(b);
     const after = s.rating ? projectedPct(s, w) : 0;
-    return after > 100 ? `<span class="over-note">${esc(l.name)} here → ${Math.round(after)}% ⚠️ try another outlet</span>` : '';
+    return after > 100 ? `<span class="over-note">Too much here, try another outlet</span>` : '';
   };
   const target = (kind, id, icon, title, sub, b) => `<li><button type="button" class="row pick-row" data-move-to="${kind}:${esc(id)}">${kind === 'b' ? icon : `<span class="row-icon" aria-hidden="true">${icon}</span>`}<span class="row-main"><b>${esc(title)}</b><span class="muted">${esc(sub)}</span>${overNote(b)}</span><span class="row-side">${proj(b)}</span></button></li>`;
   const rooms = new Map();
