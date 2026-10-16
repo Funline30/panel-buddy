@@ -282,36 +282,35 @@ test('tandem / 2-pole / quad: old breakers unchanged, each half its own circuit 
   // 2 numbers per space (Eaton BR 32): 1 & 3 share the first space
   const br = { layout: 'two', spaces: '32', numbering: 'half' };
   assert.deepEqual(groupPlan('tandem', 1, br).map((p) => slotLabel(p, br)), ['1', '3']);
-  assert.deepEqual(groupPlan('quad', 5, br).map((p) => slotLabel(p, br)), ['5', '7/9', '11']);
-  assert.equal(slotLabel({ slot: '10', poles: '2' }, br), '10/14'); // full-size 2-pole range
+  assert.deepEqual(groupPlan('quad', 5, br).map((p) => slotLabel(p, br)), ['5', '7–9', '11']);
+  assert.equal(slotLabel({ slot: '10', poles: '2' }, br), '10–16'); // full-size 2-pole range, like the sticker
   assert.deepEqual(slotsFor({ slot: '10', poles: '2' }, br), [10, 12, 14, 16]);
-  assert.equal(slotLabel({ slot: '1', poles: '1' }, br), '1'); // full-size single uses 1 (& blocks 3)
+  assert.equal(slotLabel({ slot: '1', poles: '1' }, br), '1/3'); // full-size single fills 1 & 3, like the sticker
   assert.ok(overlaps({ slot: '1', poles: '1' }, { slot: '3', size: 'half', poles: '1' }, br));
   assert.ok(!overlaps({ slot: '1', size: 'half', poles: '1' }, { slot: '3', size: 'half', poles: '1' }, br));
 });
 
 test('tandem panel: load check counts each half separately, 2-pole at 240V', () => {
   const data = seedData();
-  const tp = data.panels.find((p) => p.id === 'p_tandem');
+  const tp = data.panels.find((p) => p.id === 'p_rows');
   const bs = data.breakers.filter((b) => b.panelId === tp.id);
-  const fridge = bs.find((b) => b.label === 'Fridge');
+  const washer = bs.find((b) => b.label === 'Washer');
   const micro = bs.find((b) => b.label === 'Microwave');
-  assert.equal(fridge.groupId, micro.groupId); // same physical tandem breaker
-  assert.equal(loadSummary(fridge).watts, 400);
+  assert.equal(washer.groupId, micro.groupId); // same physical tandem breaker
+  assert.equal(loadSummary(washer).watts, 500);
   assert.equal(loadSummary(micro).watts, 1200);
   assert.equal(loadSummary(micro).amps, 10); // 1200W / 120V on its own 20A half
   const dryer = bs.find((b) => b.label === 'Dryer');
-  assert.equal(slotLabel(dryer, tp), '7/9');
-  assert.equal(loadSummary(dryer).amps, 20); // 4800W / 240V
-  assert.equal(loadSummary(bs.find((b) => b.label === 'Gen #5')).level, 'warn'); // 1500W on 15A = 83%
+  assert.equal(slotLabel(dryer, tp), '5–11');
+  assert.equal(Math.round(loadSummary(dryer).amps * 10) / 10, 20.8); // 5000W / 240V
   // directory: every circuit number listed once, halves with their own names
   const rows = directoryRows(tp, bs);
-  assert.equal(rows.length, 16);
+  assert.equal(rows.length, 20);
   const named = rows.flatMap((r) => r.cells).filter((c) => c.items.some((i) => !i.cont));
   assert.equal(named.length, bs.length);
   assert.deepEqual(rows[0].cells.map((c) => c.num), ['1', '2']);
   assert.deepEqual(rows[1].cells.map((c) => c.num), ['3', '4']);
-  assert.equal(rows[1].cells[1].items[0].b.label, 'Kitchen counter');
+  assert.equal(rows[1].cells[1].items[0].b.label, '#2 Dining room');
   assert.equal(rows[1].cells[0].items[0].cont, true); // 3 is the other half of full-size 1
   // search "breaker 8" finds the microwave half
   assert.ok(search('breaker 8', { ...data, breakers: bs }).some((r) => r.item.id === micro.id));

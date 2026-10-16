@@ -61,7 +61,10 @@ export function cellsFor(b, arg = 'two') {
   const half = sizeOf(b) === 'half';
   const poles = isTwoPole(b) ? 2 : 1;
   const len = (half ? 1 : 2) * poles;
-  const start = numbering === 'half' ? idxOf(n, layout) : 2 * idxOf(n, layout) + (half && b.half === 'B' ? 1 : 0);
+  let start = numbering === 'half' ? idxOf(n, layout) : 2 * idxOf(n, layout) + (half && b.half === 'B' ? 1 : 0);
+  // 2 numbers per row: a full-size breaker always fills whole rows, so one saved at the
+  // bottom number of a row (3, 7, 4, 8...) sits in that row with the top number (1/3, 5/7).
+  if (numbering === 'half' && !half && start % 2) start -= 1;
   return { col: colOf(n, layout), start, len, half, poles };
 }
 
@@ -92,18 +95,25 @@ export function overlaps(a, b, arg = 'two') {
   return keysFor(b, arg).some((k) => ka.includes(k));
 }
 
-// The number(s) printed on the label: "7", "5/7", "10/14", "5A", "5B/7A".
+// The number(s) printed on the label.
+//  1 number per space: "7", "5/7" (2-pole), "5A", "5B/7A" (quad middle).
+//  2 numbers per row, like the panel sticker: "1/3" (full-size single fills the row),
+//  "2" (one half of a tandem), "5–11" (full-size 2-pole spans 2 rows), "15–17" (quad middle).
 export function slotLabel(b, arg = 'two') {
   if (!b) return '';
   const c = cellsFor(b, arg);
   if (!c) return b.slot || '?';
   const { layout, numbering } = ctx(arg);
+  if (numbering === 'half') {
+    const nums = slotsFor(b, arg);
+    if (nums.length === 1) return String(nums[0]);
+    return c.poles === 2 ? `${nums[0]}–${nums[nums.length - 1]}` : nums.join('/');
+  }
   const per = c.half ? 1 : 2; // half-rows per pole
   const parts = [];
   for (let p = 0; p < c.poles; p++) {
     const h = c.start + p * per;
-    if (numbering === 'half') parts.push(String(numAt(c.col, h, layout)));
-    else if (c.half) parts.push(`${numAt(c.col, Math.floor(h / 2), layout)}${h % 2 ? 'B' : 'A'}`);
+    if (c.half) parts.push(`${numAt(c.col, Math.floor(h / 2), layout)}${h % 2 ? 'B' : 'A'}`);
     else parts.push(String(numAt(c.col, Math.floor(h / 2), layout)));
   }
   return parts.join('/');
@@ -202,4 +212,60 @@ export function directoryRows(panel, breakers) {
     for (let h = 0; h < rows; h += 2) out.push({ space: h / 2, cells: cols.map((c) => cellAt(c, [h, h + 1])) });
   }
   return out;
+}
+
+// ---------------------------------------------------------------- picking a type
+// The positions a new breaker of type btype at slot fills, after snapping to where that
+// kind of breaker can physically sit. Same shape as groupPlan(): { slot, half, size,
+// poles, role }. Single / double = 1 position, tandem = 2, quad = 3.
+export function snapSlot(btype, slot, arg = 'two') {
+  const n = parseInt(slot, 10);
+  if (!Number.isFinite(n) || n < 1) return n;
+  const { layout, numbering } = ctx(arg);
+  if (numbering !== 'half') return n;
+  // every type starts at the top number of a row (1, 5, 9 on the left; 2, 6, 10 right)
+  return idxOf(n, layout) % 2 ? n - stepOf(arg) : n;
+}
+
+export function planFor(btype, slot, arg = 'two') {
+  const n = snapSlot(btype, slot, arg);
+  if (!Number.isFinite(n) || n < 1) return [];
+  if (btype === 'tandem' || btype === 'quad') return groupPlan(btype, n, arg);
+  return [{ slot: n, half: '', size: 'full', poles: btype === 'double' ? '2' : '1', role: btype === 'double' ? 'Double-pole' : 'Single' }];
+}
+
+// "Covers 5–11 · one 240V circuit" for the type picker.
+export function coversText(btype, slot, arg = 'two') {
+  const plan = planFor(btype, slot, arg);
+  if (!plan.length) return '';
+  const labs = plan.map((p) => slotLabel(p, arg));
+  const nums = [...new Set(plan.flatMap((p) => slotsFor(p, arg)))];
+  if (btype === 'double') return `Covers ${labs[0]} · one 240V circuit`;
+  if (btype === 'tandem') return `${labs[0]} and ${labs[1]} · 2 circuits, one breaker`;
+  if (btype === 'quad') return `${labs[0]}, ${labs[1]} (240V) and ${labs[2]} · 3 circuits`;
+  return nums.length > 1 ? `Covers ${labs[0]} · one circuit` : `Space ${labs[0]} · one circuit`;
+}
+
+// First clash between the positions a breaker would fill and the other breakers on the
+// panel: { pos, other } or null.
+export function findClash(positions, others, arg = 'two') {
+  for (const pos of positions || []) {
+    const other = (others || []).find((o) => overlaps(o, pos, arg));
+    if (other) return { pos, other };
+  }
+  return null;
+}
+
+export function clashText(clash, arg = 'two') {
+  if (!clash) return '';
+  const o = clash.other;
+  const name = [slotLabel(o, arg), (o.label || 'a breaker').toUpperCase()].filter(Boolean).join(' ');
+  return `${slotLabel(clash.pos, arg)} runs into ${name}. Pick another number, or edit that breaker first.`;
+}
+
+// Text for the label maker, like the panel sticker: "5–11 DRYER 30A".
+export function stickerText(b, arg = 'two') {
+  if (!b) return '';
+  const a = b.amps === 'other' ? b.ampsOther : b.amps;
+  return [slotLabel(b, arg), (b.label || '').trim().toUpperCase(), a ? `${a}A` : ''].filter(Boolean).join(' ');
 }

@@ -105,32 +105,34 @@ export function seedData() {
 
 // Example of a tandem-ready panel for the demo home (also added on request with
 // ?example=tandem to a demo that was started before it existed; adds only missing ids).
+// Laid out like a real Cutler-Hammer BR 40-circuit panel whose sticker numbers 2 per row
+// (left 1/3, 5/7...; right 2/4, 6/8...): full-size singles fill a row (1/3), tandems put 2
+// circuits in one row (2 and 4), full-size double-poles span 2 rows (Dryer 5–11), and a
+// quad has 2 singles with a 240V in the middle (13, 15–17, 19).
 export function tandemExample(H = 'h_sample', now = Date.now()) {
-  // Example of a tandem-ready panel (Eaton BR style, 2 numbers per space: 1 & 3 share
-  // the first space). Shows full-size, tandem, quad and 2-pole breakers.
-  const TP = 'p_tandem';
-  const panels = [{ id: TP, homeId: H, name: 'Tandem example (Eaton BR 32)', type: 'sub', layout: 'two', numbering: 'half', mainAmps: '200', spaces: '32', location: 'Example panel - edit or delete', notes: 'Example: 1 & 3 share the first space. Tandem breakers give each half its own number.', createdAt: now }];
+  const TP = 'p_rows';
+  const panels = [{ id: TP, homeId: H, name: 'Example: 2 numbers per row', type: 'sub', layout: 'two', numbering: 'half', mainAmps: '200', spaces: '40', location: 'Example panel - edit or delete', notes: 'Example: the sticker numbers 2 per row (1/3, 5/7 on the left; 2/4, 6/8 on the right), so tandem breakers fit.', createdAt: now }];
   const t = (id, slot, amps, label, extra = {}) => ({ id, homeId: H, panelId: TP, slot: String(slot), poles: '1', amps: String(amps), label, rooms: [], kind: 'standard', notes: '', loads: [], createdAt: now, ...extra });
+  const dbl = { poles: '2', btype: 'double' };
   const tan = (g, half) => ({ size: 'half', btype: 'tandem', groupId: g, half });
   const quad = (g, half, poles = '1') => ({ size: 'half', btype: 'quad', groupId: g, half, poles });
   const breakers = [
-    t('t1', 1, 15, 'Gen #4', { btype: 'single' }),
-    t('t5', 5, 15, 'Gen #5', { ...quad('gq5', 'A'), loads: [{ name: 'Space heater', watts: 1500, qty: 1 }] }),
-    t('t7', 7, 30, 'Dryer', { ...quad('gq5', 'B', '2'), loads: [{ name: 'Dryer', watts: 4800, qty: 1 }] }),
-    t('t11', 11, 15, 'Gen #6', quad('gq5', 'B')),
-    t('t13', 13, 15, 'GFI #8 bath', tan('gt13', 'A')),
-    t('t15', 15, 15, 'Gen #7', tan('gt13', 'B')),
-    t('t17', 17, 60, 'Furnace', { poles: '2', btype: 'double' }),
-    t('t25', 25, 15, 'Gen #1', tan('gt25', 'A')),
-    t('t27', 27, 15, 'Gen #2', tan('gt25', 'B')),
-    t('t29', 29, 20, 'Gen #3', { btype: 'single' }),
-    t('t2', 2, 20, 'Kitchen GFI', tan('gt2', 'A')),
-    t('t4', 4, 20, 'Kitchen counter', tan('gt2', 'B')),
-    t('t6', 6, 20, 'Fridge', { ...tan('gt6', 'A'), loads: [{ name: 'Refrigerator (running)', watts: 400, qty: 1 }] }),
-    t('t8', 8, 20, 'Microwave', { ...tan('gt6', 'B'), loads: [{ name: 'Microwave', watts: 1200, qty: 1 }] }),
-    t('t10', 10, 40, 'Range', { poles: '2', btype: 'double' }),
-    t('t18', 18, 20, 'Water heater', { poles: '2', btype: 'double' }),
-    t('t26', 26, 15, 'Lights', { btype: 'single' }),
+    // left side
+    t('pr1', 1, 15, 'Gen #4', { btype: 'single', loads: [{ name: 'Lights', watts: 300, qty: 1 }] }),
+    t('pr5', 5, 30, 'Dryer', { ...dbl, rooms: ['Laundry / utility'], loads: [{ name: 'Clothes dryer (electric)', watts: 5000, qty: 1 }] }),
+    t('pr13', 13, 15, 'GFI #8 Bath', { ...quad('gq13', 'A'), rooms: ['Bathroom'], loads: [{ name: 'Hair dryer', watts: 1500, qty: 1, on: false, portable: true }] }),
+    t('pr15', 15, 30, 'Furnace', { ...quad('gq13', 'B', '2'), loads: [{ name: 'Furnace blower', watts: 1200, qty: 1 }] }),
+    t('pr19', 19, 15, 'Dishwasher', { ...quad('gq13', 'B'), rooms: ['Kitchen'], loads: [{ name: 'Dishwasher', watts: 1200, qty: 1, on: false }] }),
+    t('pr21', 21, 60, 'Furnace heat', { ...dbl, loads: [{ name: 'Electric heat strips', watts: 9600, qty: 1, on: false }] }),
+    // right side
+    t('pr2', 2, 20, 'GFI #1 Kitchen', { ...tan('gt2', 'A'), rooms: ['Kitchen'], loads: [{ name: 'Coffee maker', watts: 900, qty: 1 }, { name: 'Toaster', watts: 1100, qty: 1, on: false }] }),
+    t('pr4', 4, 20, '#2 Dining room', { ...tan('gt2', 'B'), rooms: ['Dining room'] }),
+    t('pr6', 6, 20, 'Washer', { ...tan('gt6', 'A'), rooms: ['Laundry / utility'], loads: [{ name: 'Washing machine', watts: 500, qty: 1 }] }),
+    t('pr8', 8, 20, 'Microwave', { ...tan('gt6', 'B'), rooms: ['Kitchen'], loads: [{ name: 'Microwave', watts: 1200, qty: 1 }] }),
+    t('pr10', 10, 40, 'Range', { ...dbl, rooms: ['Kitchen'], loads: [{ name: 'Electric range (oven + burners)', watts: 8000, qty: 1, on: false }] }),
+    t('pr18', 18, 20, 'Water heater', { ...dbl, loads: [{ name: 'Water heater (electric)', watts: 3500, qty: 1 }] }),
+    t('pr26', 26, 15, '', { btype: 'single' }),
+    t('pr30', 30, 15, '', { btype: 'single' }),
   ];
   return { panels, breakers };
 }
