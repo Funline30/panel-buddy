@@ -1,5 +1,7 @@
 // Sample home for demo mode, loosely based on a real single-wide/double-wide setup.
 // Everything here is example data a user can edit or delete.
+import { mobileHomeTemplate } from './floorplan.js';
+
 export function seedData() {
   const now = Date.now();
   const H = 'h_sample';
@@ -147,12 +149,14 @@ export function tandemExample(H = 'h_sample', now = Date.now()) {
 // what is plugged in (a real-life layout). Also added on request with ?example=house.
 export function houseExample(now = Date.now()) {
   const H = 'h_house';
-  const homes = [{ id: H, type: 'mobile', name: 'Example house', address: 'Example data', notes: 'Example: rooms, plugs and the breaker for each. Edit or delete anything.', createdAt: now }];
+  // floor plan: a 16 x 76 ft single-wide laid out with the starter template and his room names
+  const floorplan = { w: 16, h: 76, rooms: mobileHomeTemplate({ w: 16, h: 76, rooms: [] }, ["Daughter's room", 'Boys room']) };
+  const homes = [{ id: H, type: 'mobile', name: 'Example house', address: 'Example data', notes: 'Example: rooms, plugs and the breaker for each. Edit or delete anything.', floorplan, createdAt: now }];
   const ex = tandemExample(H, now);
   const d = (id, breakerId, type, name, room, location, extra = {}) => ({
     id, homeId: H, breakerId, type, name, room, location, gfci: 'unknown', afci: 'unknown', status: 'working', notes: '', readings: [], createdAt: now, ...extra,
   });
-  const devices = [
+  const devices0 = [
     // Living room + the whole boys room: one 15A breaker
     d('hd1', 'pr29', 'outlet', 'TV outlet', 'Living room', 'Under the TV', { notes: 'TV, soundbar and chargers on a power strip.', loads: [{ name: 'TV', watts: 120, qty: 1 }, { name: 'Vizio soundbar + sub', watts: 60, qty: 1 }, { name: 'MSI laptop charger', watts: 360, qty: 1, portable: true, note: 'Label: 3A' }, { name: 'Phone chargers', watts: 12, qty: 2, note: 'USB 2.4A output = about 12W each' }] }),
     d('hd2', 'pr29', 'outlet', 'Window AC outlet', 'Living room', 'Under the window', { loads: [{ name: 'Window AC', watts: 900, qty: 1 }] }),
@@ -179,6 +183,12 @@ export function houseExample(now = Date.now()) {
     d('hd20', 'pr30', 'fan', 'Light + vent fan', 'Guest bath', 'Ceiling'),
     d('hd21', 'pr30', 'outlet', 'Sink outlet', 'Guest bath', 'Next to the sink', { gfci: 'gfci_outlet' }),
   ];
+  // where each one is on the plan (ft). The dishwasher is left off so the demo shows the
+  // "Not on the plan yet" list.
+  const POS = {
+    hd1: [16, 29], hd2: [0, 27], hd3: [0, 71], hd4: [16, 72], hd5: [8, 71.5], hd6: [16, 39.5], hd7: [16, 42.5], hd8: [16, 46.5], hd9: [16, 49], hd11: [0, 6], hd12: [16, 7], hd13: [8, 6.5], hd14: [0, 17.5], hd15: [0, 15], hd16: [12.5, 17], hd17: [0, 62], hd18: [16, 61], hd19: [8, 62.5], hd20: [4, 55], hd21: [0, 54.5],
+  };
+  const devices = devices0.map((x) => (POS[x.id] ? { ...x, pos: { x: POS[x.id][0], y: POS[x.id][1] } } : x));
   return { homes, panels: ex.panels, breakers: ex.breakers, devices };
 }
 

@@ -22,8 +22,9 @@ import { searchHome, searchCatalog, lookupUrl, projectedPct, wattsFromAmps } fro
 import { uid, esc, ampsText, sortBreakers, download } from './lib/util.js';
 import { breakersCsv, devicesCsv, fusesCsv } from './lib/csv.js';
 import { compressPhoto } from './lib/photo.js';
-import { buildHouseMap, outletsOnBreaker, NO_ROOM } from './lib/housemap.js';
+import { buildHouseMap, outletsOnBreaker, NO_ROOM, roomSort } from './lib/housemap.js';
 import { planBulk, BULK_TYPES, partsOf } from './lib/bulk.js';
+import { planOf, planToSave, clampRoom, moveRoom, resizeRoom, resizePlan, roomAt, snapPin, inBounds, pinKind, PIN_KINDS, kindFields, splitPlaced, pinsByBreaker, roomsOnBreaker, newRoomSpot, TEMPLATES, applyTemplate, floorOfPos } from './lib/floorplan.js';
 
 const app = document.getElementById('app');
 const MODE_KEY = 'panelbuddy:mode';
@@ -1073,6 +1074,8 @@ function renderRooms(homeId, roomFilter) {
 // that feeds it (color = that breaker's Typical %). Tap a breaker tag = light up every plug
 // on it in every room; tap a plug = show its breaker. ?b=breakerId / ?o=deviceId deep-link.
 function renderMap(homeId, q) {
+  if (q.get('view')) localStorage.setItem(MAPVIEW_KEY, q.get('view') === 'plan' ? 'plan' : 'rooms');
+  if ((q.get('view') || localStorage.getItem(MAPVIEW_KEY)) === 'plan') return renderPlan(homeId, q);
   const data = { breakers: inHome('breakers', homeId), devices: inHome('devices', homeId), panels: inHome('panels', homeId) };
   const map = buildHouseMap(data);
   const multi = data.panels.length > 1;
@@ -1104,6 +1107,7 @@ function renderMap(homeId, q) {
   };
   const body = `
   <div class="section-head"><h2>House map</h2><div class="head-actions"><a class="btn small primary" href="#/edit/devices/new?home=${homeId}">+ Add</a></div></div>
+  ${mapToggle(homeId, 'rooms')}
   ${rooms.length ? `
   <p class="muted tiny map-help">Tap a breaker to light up every plug it feeds. Tap a plug to see its breaker. Colors = Typical load.</p>
   <div class="map-brks" role="list" aria-label="Breakers">${used.map((i) => `<span role="listitem">${tag(i.breaker.id)}</span>`).join('')}</div>
@@ -1167,6 +1171,444 @@ function renderMap(homeId, q) {
   });
   if (q.get('o') && byId('devices', q.get('o'))) show(byId('devices', q.get('o')).breakerId, q.get('o'));
   else if (q.get('b') && map.breakers[q.get('b')]) show(q.get('b'));
+}
+
+// ---------------------------------------------------------------- floor plan
+// Map tab, "Floor plan": a top-down 2D plan of the home in feet. Rooms are rectangles he can
+// add / drag / resize (1-ft grid) and name; plugs, switches and lights are pins on the walls,
+// each linked to an outlet (device) and colored by its breaker's Typical %. Tap a breaker or a
+// pin = light up every pin on that breaker. Saved as optional fields: home.floorplan and
+// device.pos (lib/floorplan.js). The optional background photo is a normal photo doc.
+const MAPVIEW_KEY = 'panelbuddy:mapView';
+const PLAN_PAD = 1; // ft of margin around the outline
+const planUI = { home: '', mode: 'view', sel: '', kind: 'outlet', placing: '', z: 0, bid: '', oid: '', drop: null, photo: null, floor: '', picker: false };
+const PIN_ICON = {
+  outlet: '<path d="M9.6 7.8v4.6M14.4 7.8v4.6" stroke-width="2.3"/><circle cx="12" cy="16" r="1.5" fill="#fff" stroke="none"/>',
+  gfci: '<text x="12" y="16.4" text-anchor="middle" font-size="12.5" font-weight="800" fill="#fff" stroke="none" font-family="system-ui,-apple-system,sans-serif">G</text>',
+  switch: '<rect x="8.5" y="5.5" width="7" height="13" rx="1.6"/><path d="M12 8.3v4.4" stroke-width="2.6"/>',
+  light: '<circle cx="12" cy="10.4" r="4.7"/><path d="M10 16.6h4M10.6 19.1h2.8"/>',
+  fan: '<circle cx="12" cy="12" r="1.8" fill="#fff" stroke="none"/><path d="M12 10.2V5.4M13.6 12.9l4.2 2.5M10.4 12.9l-4.2 2.5" stroke-width="2.4"/>',
+  appliance: '<rect x="6.6" y="6" width="10.8" height="12.6" rx="1.6"/><circle cx="12" cy="13.2" r="2.8"/>',
+  other: '<path d="M13 4.5 7.5 13h4.5l-1 6.5 5.5-8.5h-4.5z" fill="#fff" stroke="none"/>',
+};
+const pinIconSvg = (k) => `<svg viewBox="0 0 24 24" width="18" height="18" class="pk-ic" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">${PIN_ICON[k] || PIN_ICON.other}</g></svg>`;
+// lastHash is updated too, so the next render does not jump to the top
+const quietHash = (h) => { history.replaceState(null, '', h); lastHash = location.hash; planUI.qh = location.hash; };
+
+function mapToggle(homeId, active) {
+  return `<div class="map-toggle" role="tablist" aria-label="Map style">
+    <a role="tab" href="#/h/${homeId}/map?view=rooms" class="${active === 'rooms' ? 'on' : ''}" ${active === 'rooms' ? 'aria-selected="true"' : ''}>Rooms</a>
+    <a role="tab" href="#/h/${homeId}/map?view=plan" class="${active === 'plan' ? 'on' : ''}" ${active === 'plan' ? 'aria-selected="true"' : ''}>Floor plan</a>
+  </div>`;
+}
+
+function renderPlan(homeId, q) {
+  const home = byId('homes', homeId);
+  if (planUI.home !== homeId) Object.assign(planUI, { home: homeId, mode: 'view', sel: '', placing: '', z: 0, bid: '', oid: '', drop: null, photo: null, floor: '', picker: false });
+  // ?b= / ?o= / ?mode= deep links apply once per address (not again on every save)
+  if (location.hash !== planUI.qh) {
+    planUI.qh = location.hash;
+    if (q.get('b')) { planUI.bid = q.get('b'); planUI.oid = ''; }
+    if (q.get('o')) { planUI.oid = q.get('o'); planUI.bid = (byId('devices', q.get('o')) || {}).breakerId || ''; }
+    if (q.get('mode') && ['view', 'rooms', 'add'].includes(q.get('mode'))) planUI.mode = q.get('mode');
+    if (q.get('templates')) planUI.picker = true;
+    if (q.get('floor')) planUI.floor = q.get('floor');
+  }
+  let plan = planOf(home, planUI.floor);
+  // a pin picked on another floor: show that floor
+  if (planUI.oid && !q.get('floor')) { const d0 = byId('devices', planUI.oid); if (d0 && d0.pos && floorOfPos(d0.pos, plan) !== plan.floor) plan = planOf(home, floorOfPos(d0.pos, plan)); }
+  planUI.floor = plan.floor;
+  const data = { breakers: inHome('breakers', homeId), devices: inHome('devices', homeId), panels: inHome('panels', homeId) };
+  const map = buildHouseMap(data);
+  const multi = data.panels.length > 1;
+  const { placed, unplaced, elsewhere } = splitPlaced(data.devices, plan);
+  // 52 px = the margin kept around the outline for pins on the outside walls (P below)
+  const fitW = (Math.min(window.innerWidth || 390, 760) - 32 - 52) / plan.w;
+  const fitAll = Math.max(3, Math.min(fitW, ((window.innerHeight || 844) - 380) / plan.h));
+  if (!planUI.z) planUI.z = Math.min(fitW, 16);
+  const P = Math.max(PLAN_PAD, 26 / planUI.z); // room for pins on the outside walls
+  const pinS = Math.min(1, Math.max(0.68, planUI.z / 16)); // pins shrink a little when zoomed out
+  const knownRooms = [...new Set([...map.rooms.map((r) => r.name).filter((n) => n !== NO_ROOM), ...plan.rooms.map((r) => r.name)].filter(Boolean))];
+  const lvlOf = (d) => (d.breakerId && map.breakers[d.breakerId] ? map.breakers[d.breakerId].level : 'none');
+  const savePlan = (next) => store.put('homes', { ...byId('homes', homeId), floorplan: planToSave(next) });
+  const tag = (id) => {
+    const i = id && map.breakers[id];
+    if (!i) return '';
+    return `<button type="button" class="btag lvl-${i.level} ${planUI.bid === id ? 'on' : ''}" data-b="${esc(id)}" aria-label="${esc(i.tag)}, typical ${Math.round(i.pct)} percent. Light up its plugs">${esc(i.tag)}</button>`;
+  };
+  const byBrk = pinsByBreaker(data.devices, plan);
+  const legend = Object.values(map.breakers)
+    .filter((i) => byBrk[i.breaker.id] || (i.breaker.rooms || []).some((n) => plan.rooms.some((r) => r.name.toLowerCase() === n.toLowerCase())))
+    .sort((a, b) => (a.panel !== b.panel ? data.panels.indexOf(a.panel) - data.panels.indexOf(b.panel) : (parseInt(a.breaker.slot, 10) || 999) - (parseInt(b.breaker.slot, 10) || 999)));
+
+  // ---- the drawing (re-drawn in place while dragging)
+  const svgInner = (pl, { pins = placed, ghost = null } = {}) => {
+    const z = planUI.z;
+    const px = (n) => n / z; // screen px -> ft
+    const hitRooms = new Set(planUI.bid ? roomsOnBreaker(pl, byId('breakers', planUI.bid), data.devices) : []);
+    const editing = planUI.mode === 'rooms';
+    let s = `<defs><pattern id="pg1" width="1" height="1" patternUnits="userSpaceOnUse"><path d="M1 0H0V1" fill="none" class="pl-g1" stroke-width="${px(1)}"/></pattern>
+      <pattern id="pg5" width="5" height="5" patternUnits="userSpaceOnUse"><path d="M5 0H0V5" fill="none" class="pl-g5" stroke-width="${px(1)}"/></pattern></defs>`;
+    const open = pl.outline === 'rooms';
+    s += `<rect class="pl-floor ${open ? 'open' : ''}" x="0" y="0" width="${pl.w}" height="${pl.h}"/>`;
+    if (open) for (const r of pl.rooms) s += `<rect class="pl-floor" x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}"/>`;
+    if (pl.photoId && planUI.photo && planUI.photo.id === pl.photoId && planUI.photo.url) {
+      const rot = (pl.photoRot || 0) % 180 === 90;
+      const iw = rot ? pl.h : pl.w, ih = rot ? pl.w : pl.h;
+      s += `<image href="${planUI.photo.url}" x="${(pl.w - iw) / 2}" y="${(pl.h - ih) / 2}" width="${iw}" height="${ih}" preserveAspectRatio="none" opacity="${pl.photoOpacity}" transform="rotate(${pl.photoRot || 0} ${pl.w / 2} ${pl.h / 2})"/>`;
+    }
+    s += `<rect x="0" y="0" width="${pl.w}" height="${pl.h}" fill="url(#pg1)" class="pl-grid ${editing || planUI.mode === 'add' ? 'strong' : ''}"/><rect x="0" y="0" width="${pl.w}" height="${pl.h}" fill="url(#pg5)" class="pl-grid ${editing ? 'strong' : ''}"/>`;
+    for (const r of pl.rooms) {
+      const fs = Math.min(px(13.5), (r.w * 0.88) / Math.max(4, (r.name || 'Room').length * 0.64), r.h / 2.4);
+      s += `<g class="pl-room ${planUI.sel === r.id ? 'sel' : ''} ${hitRooms.has(r.id) ? 'hit' : ''}" data-r="${esc(r.id)}">
+        <rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" stroke-width="${px(2)}"/>
+        <text x="${r.x + r.w / 2}" y="${editing ? r.y + r.h / 2 - fs * 0.15 : r.y + Math.min(r.h / 2, fs * 1.6 + px(4))}" font-size="${fs}" text-anchor="middle" class="pl-rname">${esc(r.name || 'Room')}</text>
+        ${editing ? `<text x="${r.x + r.w / 2}" y="${r.y + r.h / 2 + fs * 1.15}" font-size="${Math.min(px(11.5), fs * 0.85)}" text-anchor="middle" class="pl-rdim">${r.w} × ${r.h} ft</text>` : ''}
+      </g>`;
+    }
+    if (!open) s += `<rect class="pl-outline" x="0" y="0" width="${pl.w}" height="${pl.h}" stroke-width="${px(4)}"/>`;
+    else for (const r of pl.rooms) s += `<rect class="pl-outline thin" x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" stroke-width="${px(3)}"/>`;
+    if (editing && planUI.sel) {
+      const r = pl.rooms.find((x) => x.id === planUI.sel);
+      if (r) {
+        s += `<g class="pl-h h-move" data-h="move" transform="translate(${r.x + r.w / 2} ${r.y + r.h / 2 + px(30)}) scale(${px(1)})"><circle r="24" class="h-hit"/><circle r="17" class="h-dot"/><path d="M0 -10V10M-10 0H10M0 -10l-3.5 3.5M0 -10l3.5 3.5M0 10l-3.5-3.5M0 10l3.5-3.5M-10 0l3.5-3.5M-10 0l3.5 3.5M10 0l-3.5-3.5M10 0l-3.5 3.5" class="h-ic"/></g>
+          <g class="pl-h h-size" data-h="size" transform="translate(${r.x + r.w} ${r.y + r.h}) scale(${px(1)})"><circle r="24" class="h-hit"/><rect x="-13" y="-13" width="20" height="20" rx="4" class="h-dot"/><path d="M-7 1 1 -7M-2 2 2 -2" class="h-ic"/></g>`;
+      }
+    }
+    for (const d of pins) {
+      const cls = planUI.bid ? (d.breakerId === planUI.bid ? 'hit' : 'dim') : '';
+      s += `<g class="pin lvl-${lvlOf(d)} ${cls} ${planUI.oid === d.id ? 'sel' : ''} ${editing ? 'mute' : ''}" data-o="${esc(d.id)}" transform="translate(${d.pos.x} ${d.pos.y}) scale(${px(pinS)})">
+        <circle r="23" class="pin-hit"/><circle r="17" class="pin-ring"/><circle r="12.5" class="pin-dot"/>
+        <g transform="translate(-12 -12)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round">${PIN_ICON[pinKind(d)]}</g><title>${esc(devName(d))}</title></g>`;
+    }
+    if (ghost) s += `<g class="pin ghost" transform="translate(${ghost.x} ${ghost.y}) scale(${px(pinS)})"><circle r="17" class="pin-ring"/><circle r="12.5" class="pin-dot"/><g transform="translate(-12 -12)" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round">${PIN_ICON[planUI.kind] || PIN_ICON.other}</g></g>`;
+    return s;
+  };
+  const svgAttrs = () => {
+    const z = planUI.z;
+    return `viewBox="${-P} ${-P} ${plan.w + 2 * P} ${plan.h + 2 * P}" width="${Math.round((plan.w + 2 * P) * z)}" height="${Math.round((plan.h + 2 * P) * z)}"`;
+  };
+
+  // ---- toolbar per mode
+  const m = planUI.mode;
+  const kinds = PIN_KINDS.map((k) => `<button type="button" class="pk ${planUI.kind === k.v ? 'on' : ''}" data-kind="${k.v}" aria-pressed="${planUI.kind === k.v}">${pinIconSvg(k.v)}<span>${k.t}</span></button>`).join('');
+  const placingDev = planUI.placing && byId('devices', planUI.placing);
+  let tools = '';
+  if (m === 'rooms') {
+    tools = `<div class="pl-tools">
+      <button type="button" class="btn small" id="plAddRoom">+ Room</button>
+      <button type="button" class="btn small" id="plTemplates">Templates</button>
+      <label class="btn small pl-photo-btn">📷 Photo<input type="file" accept="image/*" id="plPhoto" hidden></label>
+      <button type="button" class="btn small primary" id="plDone">Done</button>
+    </div>
+    <div class="pl-size"><span>House size</span><label>W <input id="plW" type="number" inputmode="numeric" min="6" max="200" value="${plan.w}"></label><span>×</span><label>L <input id="plH" type="number" inputmode="numeric" min="6" max="200" value="${plan.h}"></label><span>ft</span>
+      <label class="pl-check" title="L-shape, a garage sticking out: the rooms are the outline"><input type="checkbox" id="plOpen" ${plan.outline === 'rooms' ? 'checked' : ''}> L-shape</label></div>
+    ${plan.photoId ? `<div class="pl-size pl-photo-row"><span>Photo</span><label class="pl-fade">Fade <input id="plFade" type="range" min="10" max="90" step="5" value="${Math.round(plan.photoOpacity * 100)}"></label><button type="button" class="btn small" id="plRot" aria-label="Turn photo">↻ Turn</button><button type="button" class="btn small" id="plPhotoDel">Remove</button></div>` : ''}
+    <p class="muted tiny pl-hint">Tap a room, then drag ✥ to move or the corner to resize (1-ft grid).${plan.photoId ? ' The photo stays on this phone' + (store.mode === 'cloud' ? ' and in your account' : '') + '.' : ''}</p>`;
+  } else if (m === 'add') {
+    tools = `<div class="pl-tools">${placingDev ? `<b class="pl-placing">${pinIconSvg(pinKind(placingDev))} ${esc(devName(placingDev))}</b>` : `<div class="pk-row">${kinds}</div>`}<button type="button" class="btn small" id="plCancel">Cancel</button></div>
+    <p class="pl-hint add">${placingDev ? `Tap where <b>${esc(devName(placingDev))}</b> is${placingDev.room ? ` (${esc(placingDev.room)})` : ''}.` : 'Tap the wall where it is.'} It snaps to the nearest wall.</p>`;
+  } else {
+    tools = `<div class="pl-tools">
+      <button type="button" class="btn small primary" id="plAdd">+ Plug</button>
+      <button type="button" class="btn small" id="plEdit">${plan.rooms.length ? 'Edit rooms' : 'Draw rooms'}</button>
+      <span class="pl-zoom"><button type="button" class="icon-btn small" id="plOut" aria-label="Zoom out">−</button><button type="button" class="icon-btn small" id="plIn" aria-label="Zoom in">+</button></span>
+    </div>
+    <p class="muted tiny pl-hint">Tap a breaker or a plug to light up everything on it. Drag a plug to move it.</p>`;
+  }
+  // template picker: shown on an empty plan, or from "Templates"
+  const thumb = (tp) => {
+    const f = applyTemplate(tp.v, plan, []);
+    const rooms = f.floors[0].rooms;
+    const W = f.w, H = f.h, s = 64 / Math.max(W, H);
+    return `<svg class="tp-thumb" viewBox="-1 -1 ${W + 2} ${H + 2}" width="${Math.round((W + 2) * s)}" height="${Math.round((H + 2) * s)}" aria-hidden="true">${f.outline === 'rooms' ? '' : `<rect x="0" y="0" width="${W}" height="${H}" class="tp-out" stroke-width="${1.6 / s}"/>`}${rooms.map((r) => `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" class="tp-room" stroke-width="${1 / s}"/>`).join('')}${tp.v === 'blank' ? `<path d="M${W / 2 - 4 / s} ${H / 2}h${8 / s}M${W / 2} ${H / 2 - 4 / s}v${8 / s}" class="tp-plus" stroke-width="${1.6 / s}"/>` : ''}</svg>`;
+  };
+  const showPicker = planUI.picker || (!plan.rooms.length && plan.floors.length === 1 && m === 'view');
+  const picker = showPicker ? `<div class="card pl-empty"><div class="card-head"><b>${plan.rooms.length ? 'Start over from a template' : 'Draw your home'}</b>${planUI.picker ? '<button type="button" class="icon-btn small" id="plPickClose" aria-label="Close">✕</button>' : ''}</div>
+    <p class="muted tiny">Pick the closest layout, then drag the rooms to match. You can change the size and names after.</p>
+    <div class="tp-grid">${TEMPLATES.map((tp) => `<button type="button" class="tp" data-tpl="${tp.v}">${thumb(tp)}<b>${esc(tp.t)}</b><small>${esc(tp.sub)}</small></button>`).join('')}</div>
+    <label class="btn small pl-photo-btn tp-photo">📷 Trace over a photo or sketch<input type="file" accept="image/*" id="plPhoto" hidden></label></div>` : '';
+  const empty = picker;
+  const floorTabs = plan.floors.length > 1 || m === 'rooms' ? `<div class="pl-floors" role="tablist" aria-label="Floors">${plan.floors.map((f) => `<button type="button" role="tab" class="${f.id === plan.floor ? 'on' : ''}" aria-selected="${f.id === plan.floor}" data-floor="${esc(f.id)}">${esc(f.name)}</button>`).join('')}${m === 'rooms' ? `<button type="button" class="add" id="plAddFloor">+ Floor</button>${plan.floors.length > 1 && !plan.rooms.length && !placed.length ? '<button type="button" class="add" id="plDelFloor">Remove this floor</button>' : ''}` : ''}</div>` : '';
+  const byRoom = new Map();
+  for (const d of unplaced) { const r = d.room || NO_ROOM; if (!byRoom.has(r)) byRoom.set(r, []); byRoom.get(r).push(d); }
+  const notPlaced = unplaced.length && m === 'view' ? `<div class="card pl-unplaced"><div class="card-head"><h3>Not on the plan yet <span class="count">${unplaced.length}</span></h3></div>
+    <p class="muted tiny">Tap one, then tap where it is on the plan.</p>
+    ${[...byRoom.entries()].sort((a, b) => roomSort(a[0], b[0])).map(([r, list]) => `<div class="pl-ur"><small class="muted">${esc(r)}</small><div class="pl-uchips">${list.map((d) => `<button type="button" class="pl-uchip lvl-${lvlOf(d)}" data-place="${esc(d.id)}">${pinIconSvg(pinKind(d))}<span>${esc(devName(d))}</span></button>`).join('')}</div></div>`).join('')}</div>` : '';
+
+  const body = `
+  <div class="section-head"><h2>House map</h2><div class="head-actions"><a class="btn small" href="#/edit/devices/new?home=${homeId}">+ Add</a></div></div>
+  ${mapToggle(homeId, 'plan')}
+  ${empty}
+  <div class="pl-top">${tools}</div>
+  ${floorTabs}
+  <div class="pl-wrap ${m === 'add' ? 'adding' : ''} ${m === 'rooms' ? 'editing' : ''}" id="plWrap"><svg id="planSvg" class="plan" ${svgAttrs()} role="img" aria-label="Floor plan, ${plan.w} by ${plan.h} feet">${svgInner(plan)}</svg></div>
+  ${notPlaced}
+  ${legend.length && m === 'view' ? `<div class="pl-legend"><div class="map-brks" role="list" aria-label="Breakers">${legend.map((i) => `<span role="listitem">${tag(i.breaker.id)}</span>`).join('')}</div>
+  <div class="legend"><span class="dot lvl-ok"></span>under 80% <span class="dot lvl-warn"></span>80%+ <span class="dot lvl-over"></span>over 100% <span class="dot lvl-none"></span>no loads</div></div>` : ''}
+  <div class="map-bar pl-bar" id="mapBar" hidden></div>`;
+  app.innerHTML = shell(homeId, 'map', body);
+  bindShell();
+  const svg = document.getElementById('planSvg');
+  const bar = document.getElementById('mapBar');
+  const redraw = (opts) => { svg.innerHTML = svgInner(plan, opts); };
+  const rerender = () => renderPlan(homeId, new URLSearchParams());
+
+  // background photo: loaded once, then drawn
+  if (plan.photoId && !(planUI.photo && planUI.photo.id === plan.photoId)) {
+    planUI.photo = { id: plan.photoId, url: '' };
+    store.getPhoto(plan.photoId).then((url) => { if (planUI.photo && planUI.photo.id === plan.photoId) { planUI.photo.url = url || ''; if (document.body.contains(svg)) redraw(); } });
+  }
+
+  // ---- bottom bar
+  const barFor = () => {
+    if (m === 'view' && (planUI.bid || planUI.oid)) {
+      const i = planUI.bid && map.breakers[planUI.bid];
+      const d = planUI.oid && byId('devices', planUI.oid);
+      let html = d ? `<div class="mb-line">${pinIconSvg(pinKind(d))} <b>${esc(devName(d))}</b> <span class="muted">(${esc(d.room || NO_ROOM)})</span>${i ? ' is on' : ''}</div>` : '';
+      if (i) {
+        const s = sumOf(i.breaker);
+        const n = (byBrk[i.breaker.id] || []).length;
+        const other = elsewhere.filter((d) => d.breakerId === i.breaker.id);
+        const otherTxt = other.length ? ` · ${other.length} on ${[...new Set(other.map((d) => (plan.floors.find((f) => f.id === floorOfPos(d.pos, plan)) || {}).name))].join(', ')}` : '';
+        const rms = roomsOnBreaker(plan, i.breaker, data.devices).map((id) => plan.rooms.find((r) => r.id === id).name);
+        html += `<div class="mb-top"><span class="btag lvl-${i.level} big static">${esc(i.tag)}</span><b class="mb-label">${esc(i.breaker.label || 'Unlabeled')}</b><button type="button" class="icon-btn small" id="mbClose" aria-label="Close">✕</button></div>
+        <div class="mb-sub">${n} on ${plan.floors.length > 1 ? esc((plan.floors.find((f) => f.id === plan.floor) || {}).name) : 'the plan'}${rms.length ? ` · ${esc(rms.join(', '))}` : ''}${esc(otherTxt)}${multi && i.panel ? ` · ${esc(i.panel.name)}` : ''}</div>
+        <div class="mb-sub"><b class="lvl-text ${s.level}">Typical ${Math.round(s.pct)}%</b> · ${esc(fmtAmps(s.amps))} of ${s.rating || '?'}A${s.allPct > 100 ? ` · <span class="lvl-text over">⚠️ Peak ${Math.round(s.allPct)}%</span>` : ` · Peak ${Math.round(s.allPct)}%`}</div>
+        <div class="mb-actions">${d ? `<a class="btn small" href="#/h/${homeId}/device/${d.id}">Open plug</a>` : ''}<a class="btn small primary" href="#/h/${homeId}/breaker/${i.breaker.id}">Open breaker ›</a></div>`;
+      } else if (d) {
+        html += `<div class="mb-top"><b class="mb-label">No breaker set yet</b><button type="button" class="icon-btn small" id="mbClose" aria-label="Close">✕</button></div><div class="mb-actions"><a class="btn small primary" href="#/edit/devices/${d.id}?home=${homeId}">Pick its breaker</a></div>`;
+      }
+      if (d) html += `<button type="button" class="linkish tiny" id="plUnplace">Take it off the plan</button>`;
+      return html;
+    }
+    if (m === 'rooms' && planUI.sel) {
+      const r = plan.rooms.find((x) => x.id === planUI.sel);
+      if (!r) return '';
+      return `<div class="mb-top"><label class="pl-rn"><span class="sr-only">Room name</span><input id="plRoomName" list="plRoomNames" value="${esc(r.name)}" placeholder="Room name" autocomplete="off"></label><button type="button" class="icon-btn small" id="mbClose" aria-label="Close">✕</button></div>
+        <datalist id="plRoomNames">${knownRooms.map((n) => `<option value="${esc(n)}">`).join('')}</datalist>
+        <div class="pl-steps"><span>W</span><button type="button" class="icon-btn small" data-step="w-">−</button><b>${r.w} ft</b><button type="button" class="icon-btn small" data-step="w+">+</button>
+          <span>L</span><button type="button" class="icon-btn small" data-step="h-">−</button><b>${r.h} ft</b><button type="button" class="icon-btn small" data-step="h+">+</button></div>
+        <div class="mb-actions"><button type="button" class="btn small danger-ghost" id="plDelRoom">Delete room</button><button type="button" class="btn small primary" id="plRoomOk">Done</button></div>`;
+    }
+    if (m === 'add' && planUI.drop) {
+      const room = roomAt(plan, planUI.drop.x, planUI.drop.y);
+      const rn = room ? room.name : '';
+      const same = (d) => rn && (d.room || '').toLowerCase() === rn.toLowerCase();
+      const picks = [...unplaced].sort((a, b) => same(b) - same(a)).slice(0, 8);
+      const guessB = planUI.bid || (data.breakers.find((b) => rn && (b.rooms || []).some((n) => n.toLowerCase() === rn.toLowerCase())) || {}).id || '';
+      const kt = (PIN_KINDS.find((k) => k.v === planUI.kind) || {}).t || 'Outlet';
+      return `<div class="mb-top"><b class="mb-label">What's here?${rn ? ` <span class="muted">${esc(rn)}</span>` : ''}</b><button type="button" class="icon-btn small" id="mbClose" aria-label="Cancel">✕</button></div>
+        ${picks.length ? `<div class="pl-uchips pl-picks">${picks.map((d) => `<button type="button" class="pl-uchip lvl-${lvlOf(d)}" data-pick="${esc(d.id)}">${pinIconSvg(pinKind(d))}<span>${esc(devName(d))}<small>${esc(d.room || '')}</small></span></button>`).join('')}</div><div class="mb-sub muted">or a new ${esc(kt.toLowerCase())}:</div>` : ''}
+        <form id="plNew" class="pl-new"><input name="name" placeholder="${esc(kt)}${rn ? ' in ' + esc(rn) : ''}" aria-label="Name" autocomplete="off">
+          <select name="breakerId" aria-label="Breaker"><option value="">Breaker: not sure yet</option>${sortBreakers(data.breakers).map((b) => `<option value="${esc(b.id)}" ${b.id === guessB ? 'selected' : ''}>${esc((map.breakers[b.id] || {}).tag || '')} ${esc(b.label || '')}</option>`).join('')}</select>
+          <button class="btn small primary" type="submit">Save</button></form>`;
+    }
+    return '';
+  };
+  const showBar = () => {
+    const html = barFor();
+    bar.innerHTML = html;
+    bar.hidden = !html;
+    const c = document.getElementById('mbClose');
+    if (c) c.onclick = () => { planUI.bid = ''; planUI.oid = ''; planUI.sel = ''; planUI.drop = null; if (m === 'add') { planUI.mode = 'view'; planUI.placing = ''; } quietHash(`#/h/${homeId}/map?view=plan`); rerender(); };
+    bindBar();
+  };
+  const select = (bid, oid = '') => {
+    planUI.bid = bid || ''; planUI.oid = oid || '';
+    quietHash(`#/h/${homeId}/map?view=plan${oid ? '&o=' + encodeURIComponent(oid) : bid ? '&b=' + encodeURIComponent(bid) : ''}`);
+    rerender();
+  };
+  const setMode = (mode) => { quietHash(`#/h/${homeId}/map?view=plan`); planUI.mode = mode; planUI.picker = false; planUI.sel = ''; planUI.drop = null; if (mode !== 'add') planUI.placing = ''; if (mode !== 'view') { planUI.oid = ''; } rerender(); };
+  const placeAt = async (d, pos) => { await store.put('devices', { ...d, pos }); };
+
+  function bindBar() {
+    const un = document.getElementById('plUnplace');
+    if (un) un.onclick = async () => { const d = byId('devices', planUI.oid); if (!d) return; const { pos, ...rest } = d; void pos; planUI.oid = ''; quietHash(`#/h/${homeId}/map?view=plan${planUI.bid ? '&b=' + encodeURIComponent(planUI.bid) : ''}`); await store.put('devices', rest); toast('Taken off the plan'); };
+    // room editing
+    const nm = document.getElementById('plRoomName');
+    if (nm) nm.onchange = () => { plan.rooms = plan.rooms.map((r) => (r.id === planUI.sel ? { ...r, name: nm.value.trim() } : r)); savePlan(plan); };
+    bar.querySelectorAll('[data-step]').forEach((b) => (b.onclick = () => {
+      const [k, sgn] = [b.dataset.step[0], b.dataset.step[1] === '+' ? 1 : -1];
+      plan.rooms = plan.rooms.map((r) => (r.id === planUI.sel ? resizeRoom(r, k === 'w' ? sgn : 0, k === 'h' ? sgn : 0, plan) : r));
+      savePlan(plan);
+    }));
+    const del = document.getElementById('plDelRoom');
+    if (del) del.onclick = () => { plan.rooms = plan.rooms.filter((r) => r.id !== planUI.sel); planUI.sel = ''; savePlan(plan); };
+    const ok = document.getElementById('plRoomOk');
+    if (ok) ok.onclick = () => { if (nm && nm.value.trim() !== (plan.rooms.find((r) => r.id === planUI.sel) || {}).name) nm.onchange(); planUI.sel = ''; rerender(); };
+    // add: pick an existing outlet, or make a new one
+    bar.querySelectorAll('[data-pick]').forEach((b) => (b.onclick = async () => {
+      const d = byId('devices', b.dataset.pick);
+      const pos = planUI.drop;
+      Object.assign(planUI, { mode: 'view', drop: null, placing: '', oid: d.id, bid: d.breakerId || '' });
+      await placeAt(d, pos);
+      toast(`${devName(d)} placed`);
+    }));
+    const f = document.getElementById('plNew');
+    if (f) f.onsubmit = async (e) => {
+      e.preventDefault();
+      const pos = planUI.drop;
+      const room = roomAt(plan, pos.x, pos.y);
+      const kt = (PIN_KINDS.find((k) => k.v === planUI.kind) || {}).t || 'Outlet';
+      const next = { id: uid(), homeId, ...kindFields(planUI.kind), name: f.name.value.trim() || kt, room: room ? room.name : '', location: '', breakerId: f.breakerId.value, afci: 'unknown', status: 'working', notes: '', readings: [], style: planUI.kind === 'gfci' ? 'gfci' : '', qty: 1, box: '', replace: '', pos, createdAt: Date.now() };
+      Object.assign(planUI, { mode: 'view', drop: null, placing: '', oid: next.id, bid: next.breakerId || '' });
+      await store.put('devices', next);
+      toast(`${next.name} added`);
+    };
+  }
+
+  // ---- toolbar
+  const on = (id, fn) => { const el = document.getElementById(id); if (el) el.onclick = fn; };
+  on('plAdd', () => { planUI.bid = ''; setMode('add'); });
+  on('plEdit', () => setMode('rooms'));
+    on('plDone', () => setMode('view'));
+  on('plCancel', () => setMode('view'));
+  on('plIn', () => { planUI.z = Math.min(48, planUI.z * 1.4); rerender(); });
+  on('plOut', () => { planUI.z = Math.max(fitAll, planUI.z / 1.4); rerender(); });
+  document.querySelectorAll('[data-kind]').forEach((b) => (b.onclick = () => { planUI.kind = b.dataset.kind; rerender(); }));
+  document.querySelectorAll('[data-place]').forEach((b) => (b.onclick = () => {
+    Object.assign(planUI, { mode: 'add', placing: b.dataset.place, drop: null, bid: '', oid: '' });
+    rerender();
+    document.getElementById('plWrap').scrollIntoView({ block: 'start' });
+  }));
+  document.querySelectorAll('.pl-legend [data-b]').forEach((b) => (b.onclick = () => (planUI.bid === b.dataset.b && !planUI.oid ? select('') : select(b.dataset.b))));
+  on('plAddRoom', () => {
+    const spot = newRoomSpot(plan, Math.min(10, plan.w), 10);
+    const r = clampRoom({ id: 'fr' + uid().slice(0, 6), name: '', ...spot }, plan);
+    plan.rooms = [...plan.rooms, r];
+    planUI.sel = r.id; planUI.mode = 'rooms';
+    savePlan(plan);
+  });
+  on('plTemplates', () => { planUI.picker = true; planUI.sel = ''; rerender(); window.scrollTo(0, 0); });
+  on('plPickClose', () => { planUI.picker = false; rerender(); });
+  document.querySelectorAll('[data-tpl]').forEach((b) => (b.onclick = async () => {
+    const any = plan.floors.some((f) => f.rooms.length);
+    if (any && !confirm('Replace your rooms with this layout? Plugs stay where they are.')) return;
+    const f = applyTemplate(b.dataset.tpl, plan, knownRooms);
+    plan = { ...plan, w: f.w, h: f.h, outline: f.outline, floors: f.floors, floor: f.floors[0].id, rooms: f.floors[0].rooms };
+    Object.assign(planUI, { picker: false, mode: 'rooms', sel: '', floor: plan.floor, z: 0 });
+    await savePlan(plan);
+    toast(b.dataset.tpl === 'blank' ? 'Tap + Room to start drawing.' : 'Layout added. Drag rooms to match your home.');
+  }));
+  document.querySelectorAll('[data-floor]').forEach((b) => (b.onclick = () => { Object.assign(planUI, { floor: b.dataset.floor, sel: '', bid: planUI.bid, oid: '' }); quietHash(`#/h/${homeId}/map?view=plan`); rerender(); }));
+  on('plAddFloor', () => {
+    const n = plan.floors.length + 1;
+    let id = 'f' + n;
+    while (plan.floors.some((f) => f.id === id)) id += 'x';
+    plan = { ...plan, floors: [...plan.floors.map((f) => (f.id === plan.floor ? { ...f, rooms: plan.rooms } : f)), { id, name: `Floor ${n}`, rooms: [] }], floor: id, rooms: [] };
+    planUI.floor = id; planUI.sel = '';
+    savePlan(plan);
+  });
+  on('plDelFloor', () => {
+    const floors = plan.floors.filter((f) => f.id !== plan.floor);
+    plan = { ...plan, floors, floor: floors[0].id, rooms: floors[0].rooms };
+    planUI.floor = plan.floor;
+    savePlan(plan);
+  });
+  const op = document.getElementById('plOpen');
+  if (op) op.onchange = () => { plan.outline = op.checked ? 'rooms' : 'box'; savePlan(plan); };
+  const sz = () => { const w = Number(document.getElementById('plW').value), h = Number(document.getElementById('plH').value); if (w >= 6 && h >= 6) { plan = resizePlan(plan, w, h); planUI.z = 0; savePlan(plan); } };
+  ['plW', 'plH'].forEach((id) => { const el = document.getElementById(id); if (el) el.onchange = sz; });
+  const fade = document.getElementById('plFade');
+  if (fade) { fade.oninput = () => { plan.photoOpacity = Number(fade.value) / 100; redraw(); }; fade.onchange = () => savePlan(plan); }
+  on('plRot', () => { plan.photoRot = ((plan.photoRot || 0) + 90) % 360; savePlan(plan); });
+  on('plPhotoDel', async () => { if (!confirm('Remove the photo?')) return; const id = plan.photoId; plan.photoId = ''; planUI.photo = null; await savePlan(plan); if (id) store.removePhoto(id).catch(() => {}); });
+  const ph = document.getElementById('plPhoto');
+  if (ph) ph.onchange = async () => {
+    const file = ph.files && ph.files[0];
+    if (!file) return;
+    toast('Shrinking photo...');
+    try {
+      const url = await compressPhoto(file, { maxSide: 1400, maxBytes: 300_000 });
+      const pid = plan.photoId || 'ph_' + uid();
+      await store.putPhoto(pid, url);
+      planUI.photo = { id: pid, url };
+      plan.photoId = pid;
+      planUI.mode = 'rooms';
+      await savePlan(plan);
+      toast('Photo added. Trace your rooms over it.');
+    } catch (e) {
+      console.error(e);
+      toast("Couldn't use that photo");
+    }
+  };
+
+  // ---- pointer: tap / drag pins, rooms, handles
+  const ptOf = (e) => { const r = svg.getBoundingClientRect(); return { x: (e.clientX - r.left) / planUI.z - P, y: (e.clientY - r.top) / planUI.z - P }; };
+  // stop the page from scrolling when a drag starts on a pin or a handle (iOS)
+  svg.addEventListener('touchstart', (e) => { if (e.target.closest && e.target.closest(planUI.mode === 'view' ? '.pin' : planUI.mode === 'rooms' ? '.pl-h' : '.none')) e.preventDefault(); }, { passive: false });
+  let drag = null;
+  svg.addEventListener('pointerdown', (e) => {
+    const t = e.target;
+    const pin = t.closest('.pin[data-o]');
+    const h = t.closest('.pl-h');
+    const room = t.closest('.pl-room');
+    drag = { start: ptOf(e), sx: e.clientX, sy: e.clientY, moved: false, pin: m === 'view' && pin ? pin.dataset.o : '', h: m === 'rooms' && h ? h.dataset.h : '', room: room ? room.dataset.r : '', id: e.pointerId };
+    if (drag.pin || drag.h) { svg.setPointerCapture(e.pointerId); e.preventDefault(); }
+  });
+  svg.addEventListener('pointermove', (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    if (!drag.moved && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 6) return;
+    drag.moved = true;
+    const p = ptOf(e);
+    if (drag.pin) {
+      const at = snapPin(plan, p.x, p.y);
+      drag.at = at;
+      redraw({ pins: placed.map((d) => (d.id === drag.pin ? { ...d, pos: at } : d)) });
+    } else if (drag.h) {
+      const r0 = plan.rooms.find((r) => r.id === planUI.sel);
+      if (!r0) return;
+      const dx = p.x - drag.start.x, dy = p.y - drag.start.y;
+      const r = drag.h === 'move' ? moveRoom(r0, dx, dy, plan) : resizeRoom(r0, dx, dy, plan);
+      drag.room1 = r;
+      svg.innerHTML = svgInner({ ...plan, rooms: plan.rooms.map((x) => (x.id === r.id ? r : x)) });
+    }
+  });
+  const end = async (e) => {
+    if (!drag || (e && e.pointerId !== drag.id)) return;
+    const dr = drag;
+    drag = null;
+    if (e && e.type === 'pointercancel') return redraw();
+    if (dr.moved) {
+      if (dr.pin && dr.at) { const d = byId('devices', dr.pin); if (d) await placeAt(d, dr.at); return; }
+      if (dr.h && dr.room1) { plan.rooms = plan.rooms.map((x) => (x.id === dr.room1.id ? dr.room1 : x)); savePlan(plan); }
+      return;
+    }
+    // a tap
+    if (m === 'view') {
+      if (dr.pin) { const d = byId('devices', dr.pin); return planUI.oid === dr.pin ? select('') : select(d.breakerId || '', dr.pin); }
+      if (planUI.bid || planUI.oid) return select('');
+      return;
+    }
+    if (m === 'rooms') {
+      if (dr.h) return;
+      planUI.sel = dr.room || '';
+      rerender();
+      // keep the picked room (and its handles) above the bottom sheet
+      const el = planUI.sel && document.querySelector(`.pl-room[data-r="${CSS.escape(planUI.sel)}"] rect`);
+      if (el) { const b = el.getBoundingClientRect(); const room = window.innerHeight - 300; if (b.bottom + 30 > room || b.top < 70) window.scrollBy(0, Math.min(b.top - 90, b.bottom + 40 - room)); }
+      return;
+    }
+    if (m === 'add') {
+      const at = snapPin(plan, dr.start.x, dr.start.y);
+      if (!inBounds(at, plan)) return;
+      if (placingDev) {
+        Object.assign(planUI, { mode: 'view', placing: '', drop: null, oid: placingDev.id, bid: placingDev.breakerId || '' });
+        await placeAt(placingDev, at);
+        return toast(`${devName(placingDev)} placed`);
+      }
+      planUI.drop = at;
+      redraw({ ghost: at });
+      showBar();
+    }
+  };
+  svg.addEventListener('pointerup', end);
+  svg.addEventListener('pointercancel', end);
+
+  if (planUI.drop && m === 'add') redraw({ ghost: planUI.drop });
+  showBar();
+  if (q.get('o') || q.get('b')) setTimeout(() => { const el = svg.querySelector('.pin.sel') || svg.querySelector('.pin.hit'); if (el) el.scrollIntoView({ block: 'center' }); }, 60);
 }
 
 // ---------------------------------------------------------------- bulk add
@@ -1939,6 +2381,7 @@ function renderMore(homeId) {
     const data = JSON.parse(JSON.stringify(D()));
     const photos = {};
     for (const c of ['panels', 'devices']) for (const it of data[c]) if (it.photoId) photos[it.photoId] = await store.getPhoto(it.photoId);
+    for (const h of data.homes) if (h.floorplan && h.floorplan.photoId) photos[h.floorplan.photoId] = await store.getPhoto(h.floorplan.photoId);
     download(`ampmap-backup-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify({ app: 'panel-buddy', version: 1, exportedAt: new Date().toISOString(), ...data, settings: store.settings, photos }, null, 2));
   };
   $('expBrk').onclick = () => download('ampmap-breakers.csv', breakersCsv(D()), 'text/csv');
@@ -2724,6 +3167,7 @@ function renderEdit(col, id, q) {
       if (col === 'homes') {
         if (existing.shareToken) await store.deleteShare(existing.shareToken, inHome('panels', id).map((p) => p.id)).catch(() => {});
         for (const c of ['devices', 'breakers', 'panels']) for (const it of inHome(c, id)) { if (it.photoId) await store.removePhoto(it.photoId); await store.remove(c, it.id); }
+        if (existing.floorplan && existing.floorplan.photoId) await store.removePhoto(existing.floorplan.photoId).catch(() => {});
         await store.remove('homes', id);
         localStorage.removeItem(HOME_KEY);
         return go('#/');

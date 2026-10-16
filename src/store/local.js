@@ -48,6 +48,11 @@ export function createLocalStore() {
             // older demos had the example panel inside the sample home: move it over
             if (!cur) { data[c].push(it); changed = true; }
             else if (cur.homeId !== it.homeId) { data[c][i] = it; changed = true; }
+            // floor plan (home.floorplan, device.pos) added later: fill it in if missing
+            else if ((it.floorplan && !cur.floorplan) || (it.pos && !cur.pos)) {
+              data[c][i] = { ...cur, ...(it.floorplan ? { floorplan: it.floorplan } : {}), ...(it.pos ? { pos: it.pos } : {}) };
+              changed = true;
+            }
           }
         if (changed) save();
       }
