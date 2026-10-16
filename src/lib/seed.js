@@ -97,9 +97,11 @@ export function seedData() {
     d('rd4', 'rb2', 'appliance', 'Microwave', 'Galley', 'Above the stove', { homeId: R })
   );
 
-  const ex = tandemExample(H, now);
+  const ex = houseExample(now);
+  homes.push(...ex.homes);
   panels.push(...ex.panels);
   breakers.push(...ex.breakers);
+  devices.push(...ex.devices);
   return { homes, panels, breakers, devices, customers: [], photos: [] };
 }
 
@@ -120,7 +122,7 @@ export function tandemExample(H = 'h_sample', now = Date.now()) {
     // left side
     t('pr1', 1, 15, 'Gen #4', { btype: 'single', loads: [{ name: 'Lights', watts: 300, qty: 1 }] }),
     t('pr5', 5, 30, 'Dryer', { ...dbl, rooms: ['Laundry / utility'], loads: [{ name: 'Clothes dryer (electric)', watts: 5000, qty: 1 }] }),
-    t('pr13', 13, 15, 'GFI #8 Bath', { ...quad('gq13', 'A'), rooms: ['Bathroom'], loads: [{ name: 'Hair dryer', watts: 1500, qty: 1, on: false, portable: true }] }),
+    t('pr13', 13, 15, 'GFI #8 Bath', { ...quad('gq13', 'A'), rooms: ['Master bath'], loads: [{ name: 'Hair dryer', watts: 1500, qty: 1, on: false, portable: true }] }),
     t('pr15', 15, 30, 'Furnace', { ...quad('gq13', 'B', '2'), loads: [{ name: 'Furnace blower', watts: 1200, qty: 1 }] }),
     t('pr19', 19, 15, 'Dishwasher', { ...quad('gq13', 'B'), rooms: ['Kitchen'], loads: [{ name: 'Dishwasher', watts: 1200, qty: 1, on: false }] }),
     t('pr21', 21, 60, 'Furnace heat', { ...dbl, loads: [{ name: 'Electric heat strips', watts: 9600, qty: 1, on: false }] }),
@@ -131,10 +133,53 @@ export function tandemExample(H = 'h_sample', now = Date.now()) {
     t('pr8', 8, 20, 'Microwave', { ...tan('gt6', 'B'), rooms: ['Kitchen'], loads: [{ name: 'Microwave', watts: 1200, qty: 1 }] }),
     t('pr10', 10, 40, 'Range', { ...dbl, rooms: ['Kitchen'], loads: [{ name: 'Range (GE GRF40HSVSS)', watts: 5760, qty: 1, note: '240V · 24A running' }] }),
     t('pr18', 18, 20, 'Water heater', { ...dbl, loads: [{ name: 'Water heater (electric)', watts: 3500, qty: 1 }] }),
-    t('pr26', 26, 15, '', { btype: 'single' }),
-    t('pr30', 30, 15, '', { btype: 'single' }),
+    t('pr26', 26, 15, 'Master bedroom + bath + closet', { btype: 'single', rooms: ['Master bedroom', 'Master bath', 'Master closet'], loads: [{ name: 'LED bulb', watts: 10, qty: 4, use: 'hours' }] }),
+    t('pr30', 30, 15, "Daughter's room + Guest bath", { btype: 'single', rooms: ["Daughter's room", 'Guest bath'], loads: [{ name: 'LED bulb', watts: 10, qty: 3, use: 'hours' }] }),
+    // left side, below the furnace heat. Example slot: move it to the real one.
+    t('pr29', 29, 15, 'Living room + Boys room', { btype: 'single', rooms: ['Living room', 'Boys room'], notes: 'One 15A breaker feeds the living room and the whole boys room. Example slot number: change it to the real one.', loads: [{ name: 'Ceiling fan', watts: 75, qty: 1 }, { name: 'Porch light', watts: 15, qty: 1 }] }),
+    // right side. Example slot: move it to the real one.
+    t('pr34', 34, 20, 'Refrigerator', { btype: 'single', rooms: ['Kitchen'], notes: 'Example slot number: change it to the real one.' }),
   ];
   return { panels, breakers };
+}
+
+// Example house for the House Map: the 2-per-row panel above plus the rooms, plugs and
+// what is plugged in (a real-life layout). Also added on request with ?example=house.
+export function houseExample(now = Date.now()) {
+  const H = 'h_house';
+  const homes = [{ id: H, type: 'mobile', name: 'Example house', address: 'Example data', notes: 'Example: rooms, plugs and the breaker for each. Edit or delete anything.', createdAt: now }];
+  const ex = tandemExample(H, now);
+  const d = (id, breakerId, type, name, room, location, extra = {}) => ({
+    id, homeId: H, breakerId, type, name, room, location, gfci: 'unknown', afci: 'unknown', status: 'working', notes: '', readings: [], createdAt: now, ...extra,
+  });
+  const devices = [
+    // Living room + the whole boys room: one 15A breaker
+    d('hd1', 'pr29', 'outlet', 'TV outlet', 'Living room', 'Under the TV', { notes: 'TV, soundbar and chargers on a power strip.', loads: [{ name: 'TV', watts: 120, qty: 1 }, { name: 'Vizio soundbar + sub', watts: 60, qty: 1 }, { name: 'MSI laptop charger', watts: 360, qty: 1, portable: true, note: 'Label: 3A' }, { name: 'Phone chargers', watts: 12, qty: 2, note: 'USB 2.4A output = about 12W each' }] }),
+    d('hd2', 'pr29', 'outlet', 'Window AC outlet', 'Living room', 'Under the window', { loads: [{ name: 'Window AC', watts: 900, qty: 1 }] }),
+    d('hd3', 'pr29', 'outlet', 'Outlet by bed', 'Boys room', 'Next to the bed', { loads: [{ name: 'Standing fan', watts: 50, qty: 1 }, { name: 'Sound machine (charging)', watts: 10, qty: 1 }, { name: 'Bambu Lab puck light', watts: 5, qty: 1 }] }),
+    d('hd4', 'pr29', 'outlet', 'TV outlet', 'Boys room', 'Across from the bed', { notes: 'TV + Roku stick going in Oct 16.', loads: [{ name: 'TV', watts: 100, qty: 1 }, { name: 'Roku stick', watts: 5, qty: 1 }] }),
+    d('hd5', 'pr29', 'light', 'Ceiling light', 'Boys room', 'Center of ceiling'),
+    // Kitchen
+    d('hd6', 'pr34', 'outlet', 'Fridge outlet', 'Kitchen', 'Behind the fridge', { gfci: 'gfci_outlet', loads: [{ name: 'Refrigerator', watts: 600, qty: 1, note: 'Label: 5.0A' }] }),
+    d('hd7', 'pr2', 'outlet', 'Counter outlets', 'Kitchen', 'By the sink', { gfci: 'gfci_outlet', notes: 'GFI #1.' }),
+    d('hd8', 'pr8', 'outlet', 'Microwave outlet', 'Kitchen', 'Over the range'),
+    d('hd9', 'pr10', 'outlet', 'Range outlet (240V)', 'Kitchen', 'Behind the range'),
+    d('hd10', 'pr19', 'appliance', 'Dishwasher', 'Kitchen', 'Under the counter'),
+    // Master bedroom + bath + closet: 26/28 15A (bath outlet on the quad's GFI #8)
+    d('hd11', 'pr26', 'outlet', 'Outlet by bed', 'Master bedroom', 'Left of the bed', { loads: [{ name: 'Phone charger', watts: 10, qty: 2 }, { name: 'Lamp', watts: 9, qty: 1 }] }),
+    d('hd12', 'pr26', 'outlet', 'TV outlet', 'Master bedroom', 'On the dresser wall', { loads: [{ name: 'TV', watts: 100, qty: 1 }] }),
+    d('hd13', 'pr26', 'fan', 'Ceiling fan + light', 'Master bedroom', 'Center of ceiling', { loads: [{ name: 'Ceiling fan', watts: 60, qty: 1 }] }),
+    d('hd14', 'pr26', 'light', 'Vanity light', 'Master bath', 'Over the sink'),
+    d('hd15', 'pr13', 'outlet', 'Sink outlet (GFI #8)', 'Master bath', 'Next to the sink', { gfci: 'gfci_outlet' }),
+    d('hd16', 'pr26', 'light', 'Closet light', 'Master closet', 'Just inside the door'),
+    // Daughter's room + guest bath: 30/32 15A
+    d('hd17', 'pr30', 'outlet', 'Outlet by bed', "Daughter's room", 'Next to the bed', { loads: [{ name: 'Tablet charger', watts: 10, qty: 1 }, { name: 'Night light', watts: 1, qty: 1, use: 'always' }] }),
+    d('hd18', 'pr30', 'outlet', 'Desk outlet', "Daughter's room", 'By the window', { loads: [{ name: 'Desk lamp', watts: 9, qty: 1 }] }),
+    d('hd19', 'pr30', 'light', 'Ceiling light', "Daughter's room", 'Center of ceiling'),
+    d('hd20', 'pr30', 'fan', 'Light + vent fan', 'Guest bath', 'Ceiling'),
+    d('hd21', 'pr30', 'outlet', 'Sink outlet', 'Guest bath', 'Next to the sink', { gfci: 'gfci_outlet' }),
+  ];
+  return { homes, panels: ex.panels, breakers: ex.breakers, devices };
 }
 
 export function sampleHome(now = Date.now()) {

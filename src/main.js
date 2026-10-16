@@ -22,6 +22,8 @@ import { searchHome, searchCatalog, lookupUrl, projectedPct, wattsFromAmps } fro
 import { uid, esc, ampsText, sortBreakers, download } from './lib/util.js';
 import { breakersCsv, devicesCsv, fusesCsv } from './lib/csv.js';
 import { compressPhoto } from './lib/photo.js';
+import { buildHouseMap, outletsOnBreaker, NO_ROOM } from './lib/housemap.js';
+import { planBulk, BULK_TYPES, partsOf } from './lib/bulk.js';
 
 const app = document.getElementById('app');
 const MODE_KEY = 'panelbuddy:mode';
@@ -160,6 +162,7 @@ function shell(homeId, active, body, { title = '', back = '' } = {}) {
   const nav = [
     ...(isPro() ? [['customers', '👥', 'Customers', '#/customers']] : []),
     ['panel', '▦', 'Panel', `#/h/${homeId}/panel`],
+    ['map', '◫', 'Map', `#/h/${homeId}/map`],
     ['rooms', '⌂', 'Rooms', `#/h/${homeId}/rooms`],
     ['search', '⌕', 'Search', `#/h/${homeId}/search`],
     ['load', '⚡', 'Load', `#/h/${homeId}/load`],
@@ -176,7 +179,7 @@ function shell(homeId, active, body, { title = '', back = '' } = {}) {
     <a class="scan-btn" href="#/scan" aria-label="Scan a QR sticker"><span aria-hidden="true">⌗</span>Scan</a>
   </header>
   <main id="main" class="main">${body}</main>
-  <nav class="bottomnav ${isPro() ? 'six' : ''}" aria-label="Sections">
+  <nav class="bottomnav ${isPro() ? 'seven' : 'six'}" aria-label="Sections">
     ${nav.map(([k, ic, l, h]) => `<a href="${h}" class="${active === k ? 'active' : ''}" ${active === k ? 'aria-current="page"' : ''}><span aria-hidden="true">${ic}</span>${l}</a>`).join('')}
   </nav>`;
   void home;
@@ -258,6 +261,8 @@ async function render() {
     if (view === 'breaker') return renderBreaker(homeId, id);
     if (view === 'device') return renderDevice(homeId, id);
     if (view === 'rooms') return renderRooms(homeId, q.get('room'));
+    if (view === 'map') return renderMap(homeId, q);
+    if (view === 'bulk') return renderBulk(homeId, q);
     if (view === 'search' && id === 'dev') return renderCatalogItem(homeId, parts[4], q);
     if (view === 'search' && id === 'add') return renderAddPicker(homeId, parts[4], q);
     if (view === 'search') return renderSearch(homeId, q.get('q') || '', q.get('cat') || '');
@@ -455,6 +460,7 @@ function renderPanel(homeId, panelId) {
   ${panel.type === 'rv' || one ? '' : halfNum ? `<p class="tiny muted numbering-note">Numbered 2 per row, like a tandem-ready sticker (1/3, 5/7…). <a href="#/edit/panels/${panel.id}?home=${homeId}">Change</a></p>` : `<p class="tiny muted numbering-note">Does your panel sticker say 1/3, 5/7… (2 numbers per row)? <a href="#/edit/panels/${panel.id}?home=${homeId}">Switch to 2 numbers per row</a></p>`}
   <div class="row-actions">
     <a class="btn" href="#/edit/breakers/new?home=${homeId}&panel=${panel.id}">+ Breaker</a>
+    ${panel.type === 'rv' ? '' : `<a class="btn" href="#/h/${homeId}/bulk?panel=${panel.id}">+ Several at once</a>`}
     <a class="btn" href="#/edit/panels/new?home=${homeId}">+ Panel</a>
     <a class="btn" href="#/h/${homeId}/print/directory/${panel.id}">Print label</a>
   </div>
@@ -1060,6 +1066,225 @@ function renderRooms(homeId, roomFilter) {
   bindSearchBar(homeId);
   const rj = document.getElementById('roomJump');
   if (rj) rj.onchange = () => rj.value && go(`#/h/${homeId}/rooms?room=${encodeURIComponent(rj.value)}`);
+}
+
+// ---------------------------------------------------------------- house map
+// Rooms as tiles: each room's plugs / lights / devices with a colored tag for the breaker
+// that feeds it (color = that breaker's Typical %). Tap a breaker tag = light up every plug
+// on it in every room; tap a plug = show its breaker. ?b=breakerId / ?o=deviceId deep-link.
+function renderMap(homeId, q) {
+  const data = { breakers: inHome('breakers', homeId), devices: inHome('devices', homeId), panels: inHome('panels', homeId) };
+  const map = buildHouseMap(data);
+  const multi = data.panels.length > 1;
+  const tag = (id, { big = false } = {}) => {
+    const i = id && map.breakers[id];
+    if (!i) return `<span class="btag none">No breaker</span>`;
+    return `<button type="button" class="btag lvl-${i.level} ${big ? 'big' : ''}" data-b="${esc(id)}" aria-label="${esc(i.tag)}, typical ${Math.round(i.pct)} percent. Show everything on this breaker">${esc(i.tag)}</button>`;
+  };
+  const used = Object.values(map.breakers).filter((i) => i.rooms.length).sort((a, b) => {
+    if (a.panel !== b.panel) return data.panels.indexOf(a.panel) - data.panels.indexOf(b.panel);
+    return (parseInt(a.breaker.slot, 10) || 999) - (parseInt(b.breaker.slot, 10) || 999);
+  });
+  const loadNames = (loads) => (loads || []).map((l) => l.name + ((Number(l.qty) || 1) > 1 ? ` ×${l.qty}` : '')).join(' · ');
+  const rooms = map.rooms.filter((r) => r.outlets.length || r.circuit.length || r.breakerIds.length);
+  const tile = (r) => {
+    const mixed = !r.wholeRoom;
+    const items = [
+      ...r.outlets.map((d) => `<li class="map-item" data-ob="${esc(d.breakerId || '')}" data-o="${esc(d.id)}">
+        <button type="button" class="map-o" data-o="${esc(d.id)}"><span class="map-ic" aria-hidden="true">${deviceIcon(d.type)}</span><span class="map-txt"><b>${esc(devName(d))}${qtyOf(d) > 1 ? ` ×${qtyOf(d)}` : ''}</b>${(d.loads || []).length ? `<small>${esc(loadNames(d.loads))}</small>` : d.location ? `<small class="muted">${esc(d.location)}</small>` : ''}</span></button>
+        ${mixed ? tag(d.breakerId) : ''}</li>`),
+      ...r.circuit.map((c) => `<li class="map-item circuit" data-ob="${esc(c.breakerId)}"><span class="map-o static"><span class="map-ic" aria-hidden="true">⚡</span><span class="map-txt"><b>Listed on the breaker</b><small>${esc(loadNames(c.loads))}</small></span></span>${mixed ? tag(c.breakerId) : ''}</li>`),
+    ];
+    const add = `#/edit/devices/new?home=${homeId}&room=${encodeURIComponent(r.name === NO_ROOM ? '' : r.name)}${r.wholeRoom ? `&breaker=${r.wholeRoom}` : ''}`;
+    return `<section class="map-room" data-room="${esc(r.name)}">
+      <div class="map-room-head"><h3>${esc(r.name)}</h3>${r.wholeRoom ? `<span class="map-whole"><small>all on</small>${tag(r.wholeRoom, { big: true })}</span>` : r.breakerIds.length > 1 ? `<small class="muted">${r.breakerIds.length} breakers</small>` : ''}</div>
+      ${items.length ? `<ul class="map-list">${items.join('')}</ul>` : '<p class="muted tiny map-empty">No plugs added yet.</p>'}
+      <a class="map-add" href="${add}">+ Add a plug or light</a>
+    </section>`;
+  };
+  const body = `
+  <div class="section-head"><h2>House map</h2><div class="head-actions"><a class="btn small primary" href="#/edit/devices/new?home=${homeId}">+ Add</a></div></div>
+  ${rooms.length ? `
+  <p class="muted tiny map-help">Tap a breaker to light up every plug it feeds. Tap a plug to see its breaker. Colors = Typical load.</p>
+  <div class="map-brks" role="list" aria-label="Breakers">${used.map((i) => `<span role="listitem">${tag(i.breaker.id)}</span>`).join('')}</div>
+  <div class="map-grid" id="mapGrid">${rooms.map(tile).join('')}</div>
+  <div class="legend"><span class="dot lvl-ok"></span>under 80% <span class="dot lvl-warn"></span>80%+ <span class="dot lvl-over"></span>over 100% <span class="dot lvl-none"></span>no loads listed</div>
+  <div class="map-bar" id="mapBar" hidden></div>` : `<div class="card empty"><p>No rooms yet. Add outlets, lights or devices and pick their room and breaker, and they show up here.</p><a class="btn primary" href="#/edit/devices/new?home=${homeId}">+ Add an outlet</a></div>`}`;
+  app.innerHTML = shell(homeId, 'map', body);
+  bindShell();
+  const grid = document.getElementById('mapGrid');
+  if (!grid) return;
+  const bar = document.getElementById('mapBar');
+  const root = document.getElementById('main');
+  const clear = () => {
+    root.classList.remove('map-pick');
+    root.querySelectorAll('.hit, .sel, .room-hit').forEach((el) => el.classList.remove('hit', 'sel', 'room-hit'));
+    root.querySelectorAll('.btag.on').forEach((el) => el.classList.remove('on'));
+    bar.hidden = true;
+    history.replaceState(null, '', `#/h/${homeId}/map`);
+  };
+  const show = (bid, oid = '') => {
+    const i = map.breakers[bid];
+    clear();
+    if (!i && !oid) return;
+    root.classList.add('map-pick');
+    if (i) {
+      root.querySelectorAll(`.map-item[data-ob="${CSS.escape(bid)}"]`).forEach((el) => { el.classList.add('hit'); el.closest('.map-room').classList.add('room-hit'); });
+      root.querySelectorAll(`.btag[data-b="${CSS.escape(bid)}"]`).forEach((el) => el.classList.add('on'));
+      root.querySelectorAll(`.map-room-head .btag[data-b="${CSS.escape(bid)}"]`).forEach((el) => el.closest('.map-room').classList.add('room-hit'));
+    }
+    let head = '';
+    if (oid) {
+      const el = root.querySelector(`.map-item[data-o="${CSS.escape(oid)}"]`);
+      if (el) { el.classList.add('sel'); el.closest('.map-room').classList.add('room-hit'); }
+      const d = byId('devices', oid);
+      head = `<div class="mb-line"><b>${esc(devName(d))}</b> <span class="muted">(${esc(d.room || NO_ROOM)})</span> is on</div>`;
+    }
+    const plugs = i ? outletsOnBreaker(map, bid) : [];
+    const s = i ? sumOf(i.breaker) : null;
+    bar.innerHTML = `${head}${i ? `<div class="mb-top"><span class="btag lvl-${i.level} big static">${esc(i.tag)}</span><b class="mb-label">${esc(i.breaker.label || 'Unlabeled')}</b><button type="button" class="icon-btn small" id="mbClose" aria-label="Close">✕</button></div>
+      <div class="mb-sub">${plugs.length} plug${plugs.length === 1 ? '' : 's'} in ${i.rooms.length} room${i.rooms.length === 1 ? '' : 's'}: ${esc(i.rooms.join(', '))}${multi && i.panel ? ` · ${esc(i.panel.name)}` : ''}</div>
+      <div class="mb-sub"><b class="lvl-text ${s.level}">Typical ${Math.round(s.pct)}%</b> · ${esc(fmtAmps(s.amps))} of ${s.rating || '?'}A${s.allPct > 100 ? ` · <span class="lvl-text over">⚠️ Peak ${Math.round(s.allPct)}%</span>` : ` · Peak ${Math.round(s.allPct)}%`}</div>
+      <div class="mb-actions">${oid ? `<a class="btn small" href="#/h/${homeId}/device/${oid}">Open plug</a>` : ''}<a class="btn small primary" href="#/h/${homeId}/breaker/${bid}">Open breaker ›</a></div>`
+      : `<div class="mb-top"><b>No breaker set yet</b><button type="button" class="icon-btn small" id="mbClose" aria-label="Close">✕</button></div><div class="mb-actions"><a class="btn small primary" href="#/edit/devices/${oid}?home=${homeId}">Pick its breaker</a></div>`}`;
+    bar.hidden = false;
+    document.getElementById('mbClose').onclick = clear;
+    history.replaceState(null, '', `#/h/${homeId}/map?${oid ? 'o=' + encodeURIComponent(oid) : 'b=' + encodeURIComponent(bid)}`);
+  };
+  root.addEventListener('click', (e) => {
+    const t = e.target.closest('.btag[data-b]');
+    if (t) {
+      e.preventDefault();
+      if (t.classList.contains('on') && !root.querySelector('.map-item.sel')) return clear();
+      return show(t.dataset.b);
+    }
+    const o = e.target.closest('.map-o[data-o]');
+    if (o) {
+      const li = o.closest('.map-item');
+      if (li.classList.contains('sel')) return clear();
+      return show(li.dataset.ob, o.dataset.o);
+    }
+  });
+  if (q.get('o') && byId('devices', q.get('o'))) show(byId('devices', q.get('o')).breakerId, q.get('o'));
+  else if (q.get('b') && map.breakers[q.get('b')]) show(q.get('b'));
+}
+
+// ---------------------------------------------------------------- bulk add
+// Several breakers in one screen: one row each (slot, type, amps, label, rooms), one Save.
+// Same slot math / overlap rules as the one-breaker form, checked per row (lib/bulk.js).
+const BULK_AMPS = ['15', '20', '25', '30', '40', '50', '60', '70', '80', '100'];
+function bulkRowHtml(i) {
+  return `<div class="card bulk-row" data-i="${i}">
+    <div class="bulk-top"><b class="bulk-n">Row ${i + 1}</b><span class="bulk-covers tiny muted"></span><button type="button" class="icon-btn small bulk-rm" aria-label="Remove this row">✕</button></div>
+    <div class="bulk-grid">
+      <label>Slot #<input name="slot" type="number" inputmode="numeric" min="1" max="84" placeholder="e.g. 26"></label>
+      <label>Type<select name="btype">${BULK_TYPES.map((t) => `<option value="${t.v}">${esc(t.t)}</option>`).join('')}</select></label>
+      <label>Amps<select name="amps">${opt(BULK_AMPS, '15')}</select></label>
+    </div>
+    <label class="bulk-l1"><span class="bulk-l1-t">Label</span><input name="label" placeholder="e.g. Master bedroom + bath"></label>
+    <div class="bulk-mates" hidden>${[1, 2].map((k) => `<div class="bulk-mate" data-k="${k}"><label><span class="bm-t"></span><input name="m${k}label" placeholder="Label"></label><label>Amps<select name="m${k}amps">${opt(BULK_AMPS, k === 1 ? '20' : '15')}</select></label></div>`).join('')}</div>
+    <label>Room(s)<input name="rooms" list="roomList" placeholder="Separate with commas"></label>
+    <p class="bulk-err" role="alert"></p>
+  </div>`;
+}
+
+function renderBulk(homeId, q) {
+  const panels = inHome('panels', homeId).filter((p) => p.type !== 'rv');
+  if (!panels.length) return go(`#/h/${homeId}/panel`);
+  const panel = panels.find((p) => p.id === q.get('panel')) || panels[0];
+  const rooms = [...new Set([...inHome('devices', homeId).map((d) => d.room), ...inHome('breakers', homeId).flatMap((b) => b.rooms || []), ...HOME_ROOMS].filter(Boolean))].sort();
+  const half = numberingOf(panel) === 'half';
+  const body = `
+  <form id="bulkForm" class="form bulk-form" novalidate>
+    ${panels.length > 1 ? `<label>Panel<select name="panelId">${opt(panels.map((p) => ({ value: p.id, label: p.name })), panel.id)}</select></label>` : `<p class="muted"><b>${esc(panel.name)}</b></p>`}
+    <p class="tiny muted">${half ? 'Numbered 2 per row, like your sticker (1/3, 5/7…). ' : ''}One row per breaker. Type the number from the panel sticker; tandems and quads fill in their other switches.</p>
+    <div id="bulkRows">${[0, 1, 2].map(bulkRowHtml).join('')}</div>
+    <button type="button" class="btn full-w" id="bulkAdd">+ Add another row</button>
+    <datalist id="roomList">${rooms.map((r) => `<option value="${esc(r)}">`).join('')}</datalist>
+    <div class="bulk-save"><span id="bulkCount" class="muted">Nothing to save yet</span><button type="submit" class="btn primary">Save all</button></div>
+  </form>`;
+  app.innerHTML = shell(homeId, 'panel', body, { title: 'Add several breakers', back: `#/h/${homeId}/panel/${panel.id}` });
+  const f = document.getElementById('bulkForm');
+  const box = document.getElementById('bulkRows');
+  let tried = false;
+  const curPanel = () => byId('panels', f.elements.panelId ? f.elements.panelId.value : panel.id) || panel;
+  const rowEls = () => [...box.querySelectorAll('.bulk-row')];
+  const readRow = (el) => {
+    const v = (n) => (el.querySelector(`[name="${n}"]`) || {}).value || '';
+    return { slot: v('slot'), btype: v('btype'), amps: v('amps'), label: v('label'), rooms: v('rooms'), labels: [v('m1label'), v('m2label')], ampsList: [v('m1amps'), v('m2amps')] };
+  };
+  const check = () => {
+    const P = curPanel();
+    const els = rowEls();
+    const rows = els.map(readRow);
+    const res = planBulk(rows, P, inHome('breakers', homeId), { homeId, makeId: () => 'b_' + uid() });
+    els.forEach((el, i) => {
+      const r = res.rows[i];
+      const row = rows[i];
+      el.querySelector('.bulk-n').textContent = `Row ${i + 1}`;
+      const n = partsOf(row.btype);
+      const mates = el.querySelector('.bulk-mates');
+      mates.hidden = n < 2;
+      const plan = planFor(row.btype, row.slot, P);
+      const names = row.btype === 'tandem' ? ['Top switch', 'Bottom switch'] : row.btype === 'quad' ? ['Top single', 'Middle 240V', 'Bottom single'] : ['Label'];
+      const at = (k) => (plan[k] ? ` (${slotLabel(plan[k], P)})` : '');
+      el.querySelector('.bulk-l1-t').textContent = n > 1 ? `${names[0]}${at(0)} label` : 'Label';
+      el.querySelectorAll('.bulk-mate').forEach((m) => {
+        const k = Number(m.dataset.k);
+        m.hidden = k >= n;
+        m.querySelector('.bm-t').textContent = `${names[k] || ''}${at(k)} label`;
+      });
+      el.querySelector('.bulk-covers').textContent = r.blank ? '' : r.covers;
+      const show = r.error && (tried || String(row.slot).trim() !== '');
+      el.querySelector('.bulk-err').textContent = show ? `⚠️ ${r.error}` : '';
+      el.classList.toggle('bad', !!show);
+    });
+    const live = res.rows.filter((r) => !r.blank);
+    const bad = live.filter((r) => r.error).length;
+    document.getElementById('bulkCount').textContent = !live.length ? 'Nothing to save yet' : bad ? `${bad} row${bad > 1 ? 's' : ''} to fix` : `${res.count} breaker${res.count === 1 ? '' : 's'} ready`;
+    return res;
+  };
+  box.addEventListener('input', check);
+  box.addEventListener('change', (e) => {
+    const el = e.target.closest('.bulk-row');
+    if (e.target.name === 'amps') e.target.dataset.touched = '1';
+    if (e.target.name === 'btype' && el) {
+      const a = el.querySelector('[name="amps"]');
+      if (!a.dataset.touched) a.value = e.target.value === 'double' ? '30' : e.target.value === 'tandem' || e.target.value === 'quad' ? '20' : '15';
+      if (e.target.value === 'quad') el.querySelector('[name="m1amps"]').value = '30';
+      else el.querySelector('[name="m1amps"]').value = '20';
+    }
+    check();
+  });
+  box.addEventListener('click', (e) => {
+    const rm = e.target.closest('.bulk-rm');
+    if (!rm) return;
+    if (rowEls().length === 1) { rm.closest('.bulk-row').querySelectorAll('input').forEach((x) => (x.value = '')); return check(); }
+    rm.closest('.bulk-row').remove();
+    check();
+  });
+  document.getElementById('bulkAdd').onclick = () => {
+    box.insertAdjacentHTML('beforeend', bulkRowHtml(rowEls().length));
+    check();
+    const last = rowEls().at(-1);
+    last.querySelector('[name="slot"]').focus();
+  };
+  if (f.elements.panelId) f.elements.panelId.addEventListener('change', check);
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    tried = true;
+    const res = check();
+    if (!res.ok) {
+      const first = box.querySelector('.bulk-row.bad');
+      if (first) first.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      return toast(res.rows.every((r) => r.blank) ? 'Fill in at least one row' : 'Fix the rows marked ⚠️');
+    }
+    const all = res.rows.flatMap((r) => r.breakers);
+    for (const b of all) await store.put('breakers', b);
+    toast(`Saved ${all.length} breaker${all.length === 1 ? '' : 's'}`);
+    go(`#/h/${homeId}/panel/${curPanel().id}`);
+  };
+  check();
 }
 
 // ---------------------------------------------------------------- search

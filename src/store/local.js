@@ -1,5 +1,5 @@
 // Demo / local mode: everything lives in this browser's localStorage.
-import { seedData, tandemExample, sampleHome } from '../lib/seed.js';
+import { seedData, houseExample } from '../lib/seed.js';
 
 const KEY = 'panelbuddy:data:v1';
 const PHOTO = 'panelbuddy:photo:';
@@ -35,12 +35,20 @@ export function createLocalStore() {
         save();
       }
       for (const c of COLS) data[c] = data[c] || [];
-      // ?example=tandem adds the tandem example panel to an older demo (missing ids only)
-      if (typeof location !== 'undefined' && /[?&]example=tandem/.test(location.search)) {
-        const ex = tandemExample();
-        const add = { homes: data.homes.some((h) => h.id === 'h_sample') ? [] : [sampleHome()], panels: ex.panels, breakers: ex.breakers };
+      // ?example=house (or the older ?example=tandem) puts the example house (2-per-row
+      // panel + rooms and plugs for the House Map) into a demo started before it existed.
+      // Only the example's own ids are written; nothing else is touched.
+      if (typeof location !== 'undefined' && /[?&]example=(tandem|house)/.test(location.search)) {
+        const ex = houseExample();
         let changed = false;
-        for (const c of ['homes', 'panels', 'breakers']) for (const it of add[c]) if (!data[c].find((x) => x.id === it.id)) { data[c].push(it); changed = true; }
+        for (const c of ['homes', 'panels', 'breakers', 'devices'])
+          for (const it of ex[c]) {
+            const i = data[c].findIndex((x) => x.id === it.id);
+            const cur = i === -1 ? null : data[c][i];
+            // older demos had the example panel inside the sample home: move it over
+            if (!cur) { data[c].push(it); changed = true; }
+            else if (cur.homeId !== it.homeId) { data[c][i] = it; changed = true; }
+          }
         if (changed) save();
       }
       data.settings = data.settings || { accountType: 'personal' };
