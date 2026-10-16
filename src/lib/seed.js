@@ -4,7 +4,7 @@ export function seedData() {
   const now = Date.now();
   const H = 'h_sample';
   const P = 'p_main';
-  const homes = [{ id: H, type: 'mobile', name: 'Sample mobile home', address: 'Riesel, TX (example)', notes: 'Example data - edit or delete anything.', createdAt: now }];
+  const homes = [{ id: H, type: 'mobile', name: 'Sample mobile home', address: 'Riesel, TX (example)', notes: 'Example data - edit or delete anything.', createdAt: now, portables: [{ name: 'Vacuum (upright)', watts: 1000, qty: 1, note: 'Typical estimate', portable: true }, { name: 'Carpet cleaner', watts: 1200, qty: 1, note: 'Typical estimate', portable: true }] }];
   const panels = [
     { id: P, homeId: H, name: 'Main panel', type: 'main', layout: 'auto', mainAmps: '200', spaces: '24', location: 'Hall closet by back door', notes: 'Main breaker at top. Spaces 23-24 empty.', createdAt: now },
   ];
@@ -20,8 +20,8 @@ export function seedData() {
     b('b9', 9, 1, 15, 'Master bedroom + master bath + closet lights', ['Master bedroom', 'Master bath', 'Master closet'], { notes: 'One circuit feeds the master bedroom, the master bath lights and the closet light.', loads: [{ name: 'LED bulb', watts: 10, qty: 6 }, { name: 'TV', watts: 150, qty: 1 }, { name: 'Phone charger', watts: 20, qty: 2 }] }),
     b('b10', 10, 1, 20, 'Dining room outlets', ['Dining room'], { notes: 'First outlet is a GFCI. Its LOAD side feeds the rest of the dining outlets.', loads: [{ name: 'Space heater', watts: 1500, qty: 1 }] }),
     b('b11', 11, 1, 15, 'Bedroom 2 - computer, 3D printer, WiFi', ['Bedroom 2'], { notes: 'Office/bedroom. PC, 3D printer and WiFi share this one. Also feeds the ceiling light. What is plugged in is listed on each outlet.', loads: [{ name: 'LED bulb', watts: 10, qty: 2 }] }),
-    b('b12', 12, 1, 20, 'Bathroom outlets', ['Hall bath'], { kind: 'gfci', loads: [{ name: 'Hair dryer', watts: 1500, qty: 1 }] }),
-    b('b13', 13, 1, 15, 'Living room outlets + lights', ['Living room'], { loads: [{ name: 'TV', watts: 150, qty: 1 }, { name: 'Game console', watts: 200, qty: 1 }, { name: 'LED bulb', watts: 10, qty: 4 }] }),
+    b('b12', 12, 1, 20, 'Bathroom outlets', ['Hall bath'], { kind: 'gfci', loads: [{ name: 'Hair dryer', watts: 1500, qty: 1, portable: true, on: false }] }),
+    b('b13', 13, 1, 15, 'Living room outlets + lights', ['Living room'], { loads: [{ name: 'TV', watts: 150, qty: 1 }, { name: 'Game console', watts: 200, qty: 1 }, { name: 'LED bulb', watts: 10, qty: 4 }, { name: 'Window AC', watts: 900, qty: 1, on: false, note: 'Off for fall' }, { name: 'Gaming laptop charger', watts: 330, qty: 1, portable: true }] }),
     b('b14', 14, 1, 20, 'Microwave', ['Kitchen'], { loads: [{ name: 'Microwave', watts: 1200, qty: 1 }] }),
     b('b15', 15, 1, 15, 'Hall bath lights + vent fan', ['Hall bath'], { notes: 'Vent fan motor is dead (switch tests good).' }),
     b('b16', 16, 1, 20, 'Washer', ['Utility room'], { loads: [{ name: 'Washer', watts: 500, qty: 1 }] }),

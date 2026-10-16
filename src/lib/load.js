@@ -13,47 +13,80 @@ export function breakerAmps(breaker) {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
-export function totalWatts(loads = []) {
-  return loads.reduce((sum, l) => {
-    const w = Number(l.watts) || 0;
-    const q = Number(l.qty) || 1;
-    return sum + w * q;
-  }, 0);
+// On / off: a load with on === false is listed but switched off / unplugged right now.
+// Missing field = on, so every load saved before this feature reads as on.
+export const isOn = (l) => !(l && l.on === false);
+
+function lineWatts(l) {
+  const w = Number(l && l.watts) || 0;
+  const q = Number(l && l.qty) || 1;
+  return w * q;
+}
+
+// Every listed load (on or off). onlyOn: count only loads that are on.
+export function totalWatts(loads = [], { onlyOn = false } = {}) {
+  return (loads || []).reduce((sum, l) => (onlyOn && !isOn(l) ? sum : sum + lineWatts(l)), 0);
+}
+
+// Watts of loads that are on right now ("Using now").
+export function onWatts(loads = []) {
+  return totalWatts(loads, { onlyOn: true });
 }
 
 // Watts plugged into one outlet / device (its own "what's plugged in" list).
-export function deviceWatts(device) {
-  return totalWatts((device && device.loads) || []);
+// Default = every load (the max); { onlyOn: true } = what is on now.
+export function deviceWatts(device, opts = {}) {
+  return totalWatts((device && device.loads) || [], opts);
 }
 
-// Devices that belong to this breaker AND have something listed as plugged in.
+// Devices that belong to this breaker AND have something listed as plugged in (on or off).
 export function devicesWithLoads(breaker, devices = []) {
   if (!breaker) return [];
   return (devices || []).filter((d) => d && d.breakerId === breaker.id && deviceWatts(d) > 0);
 }
 
-// Total watts on a circuit = loads listed on the breaker itself + every outlet's own list.
+// Watts on a circuit = loads listed on the breaker itself + every outlet's own list.
 // Each item lives in exactly one place (breaker OR outlet), so nothing is counted twice.
-export function breakerWatts(breaker, devices = []) {
-  const own = totalWatts((breaker && breaker.loads) || []);
-  return own + devicesWithLoads(breaker, devices).reduce((s, d) => s + deviceWatts(d), 0);
+// Default = what is ON now (what warnings use); { all: true } = everything as if all on.
+export function breakerWatts(breaker, devices = [], { all = false } = {}) {
+  const opts = { onlyOn: !all };
+  const own = totalWatts((breaker && breaker.loads) || [], opts);
+  return own + devicesWithLoads(breaker, devices).reduce((s, d) => s + deviceWatts(d, opts), 0);
+}
+
+function levelOf(watts, pct, rating) {
+  if (!watts) return 'none';
+  if (rating && pct > 100) return 'over';
+  if (rating && pct >= 80) return 'warn';
+  return 'ok';
 }
 
 // devices is optional (older callers pass only the breaker): pass the home's devices to
 // include what's plugged into each outlet on this circuit.
+// watts / amps / pct / level = "Using now" (only loads that are on). The bar and color
+// warnings follow these. allWatts / allAmps / allPct / allLevel = "If everything's on".
 export function loadSummary(breaker, devices = []) {
   const volts = voltsFor(breaker && breaker.poles);
-  const ownWatts = totalWatts((breaker && breaker.loads) || []);
-  const parts = devicesWithLoads(breaker, devices).map((d) => ({ device: d, watts: deviceWatts(d) }));
+  const ownLoads = (breaker && breaker.loads) || [];
+  const ownWatts = onWatts(ownLoads);
+  const ownAllWatts = totalWatts(ownLoads);
+  const outlets = devicesWithLoads(breaker, devices);
+  const parts = outlets.map((d) => ({ device: d, watts: deviceWatts(d, { onlyOn: true }), allWatts: deviceWatts(d) }));
   const outletWatts = parts.reduce((s, x) => s + x.watts, 0);
+  const outletAllWatts = parts.reduce((s, x) => s + x.allWatts, 0);
   const watts = ownWatts + outletWatts;
+  const allWatts = ownAllWatts + outletAllWatts;
   const amps = watts / volts;
+  const allAmps = allWatts / volts;
   const rating = breakerAmps(breaker);
   const pct = rating ? (amps / rating) * 100 : 0;
-  let level = 'ok';
-  if (rating && pct > 100) level = 'over';
-  else if (rating && pct >= 80) level = 'warn';
-  if (!watts) level = 'none';
+  const allPct = rating ? (allAmps / rating) * 100 : 0;
+  const allLevel = levelOf(allWatts, allPct, rating);
+  // Something is listed but all of it is off: 0% and OK, not "no loads listed".
+  const level = !watts && allWatts ? 'ok' : levelOf(watts, pct, rating);
+  const every = [...ownLoads, ...outlets.flatMap((d) => d.loads || [])];
+  const loadCount = every.length;
+  const offCount = every.filter((l) => !isOn(l)).length;
   return {
     volts,
     watts,
@@ -61,9 +94,17 @@ export function loadSummary(breaker, devices = []) {
     rating,
     pct,
     level,
+    allWatts,
+    allAmps,
+    allPct,
+    allLevel,
+    loadCount,
+    offCount,
     limit80: rating * 0.8,
     ownWatts,
+    ownAllWatts,
     outletWatts,
+    outletAllWatts,
     parts,
   };
 }
