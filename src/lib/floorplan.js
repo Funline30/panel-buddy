@@ -242,3 +242,102 @@ export function newRoomSpot(plan, w = 10, h = 10) {
   for (let y = 0; y + h <= plan.h; y++) for (let x = 0; x + w <= plan.w; x++) if (!hit(x, y)) return { x, y, w, h };
   return { x: 0, y: 0, w, h };
 }
+
+// ---- moving / swapping / rotating rooms (pins go with their room)
+
+// Rooms that overlap another room (by area, touching walls don't count) -> Set of ids.
+export function overlapping(rooms) {
+  const out = new Set();
+  for (let i = 0; i < rooms.length; i++)
+    for (let j = i + 1; j < rooms.length; j++) {
+      const a = rooms[i], b = rooms[j];
+      if (a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y) { out.add(a.id); out.add(b.id); }
+    }
+  return out;
+}
+
+const inside = (p, r) => p.x >= r.x - 1e-6 && p.x <= r.x + r.w + 1e-6 && p.y >= r.y - 1e-6 && p.y <= r.y + r.h + 1e-6;
+
+// The room a placed pin belongs to (for moving it with the room): a pin on a shared wall
+// touches two rooms, so the one named like the plug's room wins, else the smaller one.
+export function roomOfPin(plan, d) {
+  if (!d || !d.pos) return null;
+  const hits = plan.rooms.filter((r) => inside(d.pos, r));
+  if (!hits.length) return null;
+  const named = hits.find((r) => r.name && d.room && r.name.toLowerCase() === d.room.toLowerCase());
+  return named || hits.reduce((a, b) => (b.w * b.h < a.w * a.h ? b : a));
+}
+
+// Ids of the pins (on this floor) that belong to a room.
+export function pinsInRoom(plan, room, devices) {
+  if (!room) return [];
+  return splitPlaced(devices, plan).placed.filter((d) => { const r = roomOfPin(plan, d); return r && r.id === room.id; }).map((d) => d.id);
+}
+
+// A point in room `from` -> the same spot in room `to` (same place along each wall, so a plug
+// on the left wall stays on the left wall when the room moves, grows or shrinks).
+// turn = true: the room was turned a quarter (w and h swapped), the point turns with it.
+export function mapPoint(p, from, to, plan, { turn = false } = {}) {
+  let u = from.w ? (p.x - from.x) / from.w : 0.5;
+  let v = from.h ? (p.y - from.y) / from.h : 0.5;
+  if (turn) [u, v] = [1 - v, u]; // clockwise
+  const out = clampPoint({ x: to.x + u * to.w, y: to.y + v * to.h }, plan);
+  return p.floor ? { ...out, floor: p.floor } : out;
+}
+
+// New positions for the pins of rooms that moved: { [deviceId]: pos }.
+// moves = [{ from: room, to: room, turn? }]; ownership is read from the plan BEFORE the move.
+export function movePins(plan, devices, moves) {
+  const out = {};
+  for (const mv of moves) {
+    if (!mv.from || !mv.to) continue;
+    const same = mv.from.x === mv.to.x && mv.from.y === mv.to.y && mv.from.w === mv.to.w && mv.from.h === mv.to.h && !mv.turn;
+    if (same) continue;
+    for (const id of pinsInRoom(plan, mv.from, devices)) {
+      const d = devices.find((x) => x.id === id);
+      out[id] = mapPoint(d.pos, mv.from, mv.to, plan, { turn: mv.turn });
+    }
+  }
+  return out;
+}
+
+// Resize from any corner ('nw' | 'ne' | 'sw' | 'se'): the opposite corner stays put.
+// dx/dy are how far the dragged corner moved (ft). Snaps to 1 ft, stays >= MIN_ROOM and in bounds.
+export function resizeCorner(r, corner, dx, dy, plan) {
+  let x0 = r.x, y0 = r.y, x1 = r.x + r.w, y1 = r.y + r.h;
+  if (corner.includes('w')) x0 = clamp(snap(x0 + dx), 0, x1 - MIN_ROOM); else x1 = clamp(snap(x1 + dx), x0 + MIN_ROOM, plan.w);
+  if (corner.includes('n')) y0 = clamp(snap(y0 + dy), 0, y1 - MIN_ROOM); else y1 = clamp(snap(y1 + dy), y0 + MIN_ROOM, plan.h);
+  return { ...r, x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
+// Turn a room a quarter: w and h swap around its middle, then it's pulled back inside.
+export function rotateRoom(r, plan) {
+  const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+  return clampRoom({ ...r, w: r.h, h: r.w, x: cx - r.h / 2, y: cy - r.w / 2 }, plan);
+}
+
+// Two rooms trade places -> { a, b } (the new rectangles).
+//  - side by side (same row or column, touching): they swap order and each keeps its size;
+//  - otherwise each keeps its own size at the other's corner if it fits there (in bounds and
+//    not on top of another room); if either doesn't fit, they trade rectangles.
+export function swapRooms(a, b, plan) {
+  const sameCol = a.x === b.x && a.w === b.w, sameRow = a.y === b.y && a.h === b.h;
+  if (sameCol && (a.y + a.h === b.y || b.y + b.h === a.y)) {
+    const top = Math.min(a.y, b.y), [first] = a.y < b.y ? [a] : [b];
+    const second = first === a ? b : a;
+    const s = { ...second, y: top }, f = { ...first, y: top + second.h };
+    return first === a ? { a: f, b: s } : { a: s, b: f };
+  }
+  if (sameRow && (a.x + a.w === b.x || b.x + b.w === a.x)) {
+    const left = Math.min(a.x, b.x), first = a.x < b.x ? a : b;
+    const second = first === a ? b : a;
+    const s = { ...second, x: left }, f = { ...first, x: left + second.w };
+    return first === a ? { a: f, b: s } : { a: s, b: f };
+  }
+  const others = plan.rooms.filter((r) => r.id !== a.id && r.id !== b.id);
+  const fits = (r) => r.x >= 0 && r.y >= 0 && r.x + r.w <= plan.w && r.y + r.h <= plan.h && !overlapping([r, ...others]).has(r.id);
+  const a1 = { ...a, x: b.x, y: b.y }, b1 = { ...b, x: a.x, y: a.y };
+  if (a.w === b.w && a.h === b.h) return { a: a1, b: b1 };
+  if (fits(a1) && fits(b1) && !overlapping([a1, b1]).size) return { a: a1, b: b1 };
+  return { a: { ...a, x: b.x, y: b.y, w: b.w, h: b.h }, b: { ...b, x: a.x, y: a.y, w: a.w, h: a.h } };
+}

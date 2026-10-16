@@ -24,7 +24,7 @@ import { breakersCsv, devicesCsv, fusesCsv } from './lib/csv.js';
 import { compressPhoto } from './lib/photo.js';
 import { buildHouseMap, outletsOnBreaker, NO_ROOM, roomSort } from './lib/housemap.js';
 import { planBulk, BULK_TYPES, partsOf } from './lib/bulk.js';
-import { planOf, planToSave, clampRoom, moveRoom, resizeRoom, resizePlan, roomAt, snapPin, inBounds, pinKind, PIN_KINDS, kindFields, splitPlaced, pinsByBreaker, roomsOnBreaker, newRoomSpot, TEMPLATES, applyTemplate, floorOfPos } from './lib/floorplan.js';
+import { planOf, planToSave, clampRoom, moveRoom, resizeRoom, resizePlan, roomAt, snapPin, inBounds, pinKind, PIN_KINDS, kindFields, splitPlaced, pinsByBreaker, roomsOnBreaker, newRoomSpot, TEMPLATES, applyTemplate, floorOfPos, swapRooms, movePins, resizeCorner, rotateRoom, overlapping } from './lib/floorplan.js';
 
 const app = document.getElementById('app');
 const MODE_KEY = 'panelbuddy:mode';
@@ -1181,7 +1181,9 @@ function renderMap(homeId, q) {
 // device.pos (lib/floorplan.js). The optional background photo is a normal photo doc.
 const MAPVIEW_KEY = 'panelbuddy:mapView';
 const PLAN_PAD = 1; // ft of margin around the outline
-const planUI = { home: '', mode: 'view', sel: '', kind: 'outlet', placing: '', z: 0, bid: '', oid: '', drop: null, photo: null, floor: '', picker: false };
+const planUI = { home: '', mode: 'view', sel: '', kind: 'outlet', placing: '', z: 0, bid: '', oid: '', drop: null, photo: null, floor: '', picker: false, swap: '', undo: [] };
+const ROOM_HOLD_VIEW = 400; // ms: press and hold a room to pick it up in the normal view (quick swipes still scroll)
+const ROOM_HOLD_EDIT = 180; // ms: in Move rooms, a short press picks up any room (the picked one moves at once)
 const PIN_ICON = {
   outlet: '<path d="M9.6 7.8v4.6M14.4 7.8v4.6" stroke-width="2.3"/><circle cx="12" cy="16" r="1.5" fill="#fff" stroke="none"/>',
   gfci: '<text x="12" y="16.4" text-anchor="middle" font-size="12.5" font-weight="800" fill="#fff" stroke="none" font-family="system-ui,-apple-system,sans-serif">G</text>',
@@ -1191,6 +1193,7 @@ const PIN_ICON = {
   appliance: '<rect x="6.6" y="6" width="10.8" height="12.6" rx="1.6"/><circle cx="12" cy="13.2" r="2.8"/>',
   other: '<path d="M13 4.5 7.5 13h4.5l-1 6.5 5.5-8.5h-4.5z" fill="#fff" stroke="none"/>',
 };
+const MOVE_IC = '<svg viewBox="0 0 24 24" width="18" height="18" class="pk-ic" aria-hidden="true"><path d="M12 3v18M3 12h18M12 3 9 6M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const pinIconSvg = (k) => `<svg viewBox="0 0 24 24" width="18" height="18" class="pk-ic" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">${PIN_ICON[k] || PIN_ICON.other}</g></svg>`;
 // lastHash is updated too, so the next render does not jump to the top
 const quietHash = (h) => { history.replaceState(null, '', h); lastHash = location.hash; planUI.qh = location.hash; };
@@ -1204,7 +1207,7 @@ function mapToggle(homeId, active) {
 
 function renderPlan(homeId, q) {
   const home = byId('homes', homeId);
-  if (planUI.home !== homeId) Object.assign(planUI, { home: homeId, mode: 'view', sel: '', placing: '', z: 0, bid: '', oid: '', drop: null, photo: null, floor: '', picker: false });
+  if (planUI.home !== homeId) Object.assign(planUI, { home: homeId, mode: 'view', sel: '', placing: '', z: 0, bid: '', oid: '', drop: null, photo: null, floor: '', picker: false, swap: '', undo: [] });
   // ?b= / ?o= / ?mode= deep links apply once per address (not again on every save)
   if (location.hash !== planUI.qh) {
     planUI.qh = location.hash;
@@ -1242,11 +1245,12 @@ function renderPlan(homeId, q) {
     .sort((a, b) => (a.panel !== b.panel ? data.panels.indexOf(a.panel) - data.panels.indexOf(b.panel) : (parseInt(a.breaker.slot, 10) || 999) - (parseInt(b.breaker.slot, 10) || 999)));
 
   // ---- the drawing (re-drawn in place while dragging)
-  const svgInner = (pl, { pins = placed, ghost = null } = {}) => {
+  const svgInner = (pl, { pins = placed, ghost = null, lift = '' } = {}) => {
     const z = planUI.z;
     const px = (n) => n / z; // screen px -> ft
     const hitRooms = new Set(planUI.bid ? roomsOnBreaker(pl, byId('breakers', planUI.bid), data.devices) : []);
     const editing = planUI.mode === 'rooms';
+    const over = overlapping(pl.rooms);
     let s = `<defs><pattern id="pg1" width="1" height="1" patternUnits="userSpaceOnUse"><path d="M1 0H0V1" fill="none" class="pl-g1" stroke-width="${px(1)}"/></pattern>
       <pattern id="pg5" width="5" height="5" patternUnits="userSpaceOnUse"><path d="M5 0H0V5" fill="none" class="pl-g5" stroke-width="${px(1)}"/></pattern></defs>`;
     const open = pl.outline === 'rooms';
@@ -1258,9 +1262,12 @@ function renderPlan(homeId, q) {
       s += `<image href="${planUI.photo.url}" x="${(pl.w - iw) / 2}" y="${(pl.h - ih) / 2}" width="${iw}" height="${ih}" preserveAspectRatio="none" opacity="${pl.photoOpacity}" transform="rotate(${pl.photoRot || 0} ${pl.w / 2} ${pl.h / 2})"/>`;
     }
     s += `<rect x="0" y="0" width="${pl.w}" height="${pl.h}" fill="url(#pg1)" class="pl-grid ${editing || planUI.mode === 'add' ? 'strong' : ''}"/><rect x="0" y="0" width="${pl.w}" height="${pl.h}" fill="url(#pg5)" class="pl-grid ${editing ? 'strong' : ''}"/>`;
-    for (const r of pl.rooms) {
+    // the room being dragged is drawn last, on top of the others
+    const order = lift ? [...pl.rooms.filter((r) => r.id !== lift), ...pl.rooms.filter((r) => r.id === lift)] : pl.rooms;
+    for (const r of order) {
       const fs = Math.min(px(13.5), (r.w * 0.88) / Math.max(4, (r.name || 'Room').length * 0.64), r.h / 2.4);
-      s += `<g class="pl-room ${planUI.sel === r.id ? 'sel' : ''} ${hitRooms.has(r.id) ? 'hit' : ''}" data-r="${esc(r.id)}">
+      const rc = [planUI.sel === r.id ? 'sel' : '', hitRooms.has(r.id) ? 'hit' : '', over.has(r.id) ? 'overlap' : '', lift === r.id ? 'lift' : '', planUI.swap ? (planUI.swap === r.id ? 'swapfrom' : 'swapto') : ''].filter(Boolean).join(' ');
+      s += `<g class="pl-room ${rc}" data-r="${esc(r.id)}">
         <rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" stroke-width="${px(2)}"/>
         <text x="${r.x + r.w / 2}" y="${editing ? r.y + r.h / 2 - fs * 0.15 : r.y + Math.min(r.h / 2, fs * 1.6 + px(4))}" font-size="${fs}" text-anchor="middle" class="pl-rname">${esc(r.name || 'Room')}</text>
         ${editing ? `<text x="${r.x + r.w / 2}" y="${r.y + r.h / 2 + fs * 1.15}" font-size="${Math.min(px(11.5), fs * 0.85)}" text-anchor="middle" class="pl-rdim">${r.w} × ${r.h} ft</text>` : ''}
@@ -1271,8 +1278,9 @@ function renderPlan(homeId, q) {
     if (editing && planUI.sel) {
       const r = pl.rooms.find((x) => x.id === planUI.sel);
       if (r) {
-        s += `<g class="pl-h h-move" data-h="move" transform="translate(${r.x + r.w / 2} ${r.y + r.h / 2 + px(30)}) scale(${px(1)})"><circle r="24" class="h-hit"/><circle r="17" class="h-dot"/><path d="M0 -10V10M-10 0H10M0 -10l-3.5 3.5M0 -10l3.5 3.5M0 10l-3.5-3.5M0 10l3.5-3.5M-10 0l3.5-3.5M-10 0l3.5 3.5M10 0l-3.5-3.5M10 0l-3.5 3.5" class="h-ic"/></g>
-          <g class="pl-h h-size" data-h="size" transform="translate(${r.x + r.w} ${r.y + r.h}) scale(${px(1)})"><circle r="24" class="h-hit"/><rect x="-13" y="-13" width="20" height="20" rx="4" class="h-dot"/><path d="M-7 1 1 -7M-2 2 2 -2" class="h-ic"/></g>`;
+        // big corner handles: drag one to resize (the opposite corner stays put)
+        const hs = [['nw', r.x, r.y], ['ne', r.x + r.w, r.y], ['sw', r.x, r.y + r.h], ['se', r.x + r.w, r.y + r.h]];
+        if (!planUI.swap && lift !== r.id) for (const [c, hx, hy] of hs) s += `<g class="pl-h h-size" data-h="${c}" transform="translate(${hx} ${hy}) scale(${px(1)})"><circle r="26" class="h-hit"/><circle r="13" class="h-dot"/><path d="${{ nw: 'M-4 3V-4H3', ne: 'M-3 -4H4V3', sw: 'M-4 -3V4H3', se: 'M-3 4H4V-3' }[c]}" class="h-ic"/></g>`;
       }
     }
     for (const d of pins) {
@@ -1294,6 +1302,11 @@ function renderPlan(homeId, q) {
   const kinds = PIN_KINDS.map((k) => `<button type="button" class="pk ${planUI.kind === k.v ? 'on' : ''}" data-kind="${k.v}" aria-pressed="${planUI.kind === k.v}">${pinIconSvg(k.v)}<span>${k.t}</span></button>`).join('');
   const placingDev = planUI.placing && byId('devices', planUI.placing);
   let tools = '';
+  const last = (planUI.undo || []).filter((u) => u.floor === plan.floor).length;
+  const zoomBtns = '<button type="button" class="icon-btn small" id="plOut" aria-label="Zoom out">−</button><button type="button" class="icon-btn small" id="plIn" aria-label="Zoom in">+</button>';
+  const undoBtn = last ? '<button type="button" class="btn small" id="plUndo" aria-label="Undo the last room change">↶ Undo</button>' : '';
+  const over = [...overlapping(plan.rooms)].map((id) => plan.rooms.find((r) => r.id === id).name || 'Room');
+  const overTxt = over.length ? `<p class="pl-hint warn">⚠️ ${esc(over.join(', '))} overlap${over.length === 2 ? '' : ' each other'}. That's OK if it's on purpose.</p>` : '';
   if (m === 'rooms') {
     tools = `<div class="pl-tools">
       <button type="button" class="btn small" id="plAddRoom">+ Room</button>
@@ -1301,20 +1314,23 @@ function renderPlan(homeId, q) {
       <label class="btn small pl-photo-btn">📷 Photo<input type="file" accept="image/*" id="plPhoto" hidden></label>
       <button type="button" class="btn small primary" id="plDone">Done</button>
     </div>
+    <div class="pl-tools pl-tools2">${undoBtn}<span class="pl-zoom">${zoomBtns}</span></div>
+    <p class="pl-hint move">${planUI.swap ? `Now tap the room to swap with <b>${esc((plan.rooms.find((r) => r.id === planUI.swap) || {}).name || 'this room')}</b>.` : '<b>Press any room and drag it.</b> Tap a room for Swap, Turn, and corner handles to resize.'}</p>${overTxt}
     <div class="pl-size"><span>House size</span><label>W <input id="plW" type="number" inputmode="numeric" min="6" max="200" value="${plan.w}"></label><span>×</span><label>L <input id="plH" type="number" inputmode="numeric" min="6" max="200" value="${plan.h}"></label><span>ft</span>
       <label class="pl-check" title="L-shape, a garage sticking out: the rooms are the outline"><input type="checkbox" id="plOpen" ${plan.outline === 'rooms' ? 'checked' : ''}> L-shape</label></div>
     ${plan.photoId ? `<div class="pl-size pl-photo-row"><span>Photo</span><label class="pl-fade">Fade <input id="plFade" type="range" min="10" max="90" step="5" value="${Math.round(plan.photoOpacity * 100)}"></label><button type="button" class="btn small" id="plRot" aria-label="Turn photo">↻ Turn</button><button type="button" class="btn small" id="plPhotoDel">Remove</button></div>` : ''}
-    <p class="muted tiny pl-hint">Tap a room, then drag ✥ to move or the corner to resize (1-ft grid).${plan.photoId ? ' The photo stays on this phone' + (store.mode === 'cloud' ? ' and in your account' : '') + '.' : ''}</p>`;
+    <p class="muted tiny pl-hint">Snaps to a 1-ft grid. Plugs move with their room.${plan.photoId ? ' The photo stays on this phone' + (store.mode === 'cloud' ? ' and in your account' : '') + '.' : ''}</p>`;
   } else if (m === 'add') {
     tools = `<div class="pl-tools">${placingDev ? `<b class="pl-placing">${pinIconSvg(pinKind(placingDev))} ${esc(devName(placingDev))}</b>` : `<div class="pk-row">${kinds}</div>`}<button type="button" class="btn small" id="plCancel">Cancel</button></div>
     <p class="pl-hint add">${placingDev ? `Tap where <b>${esc(devName(placingDev))}</b> is${placingDev.room ? ` (${esc(placingDev.room)})` : ''}.` : 'Tap the wall where it is.'} It snaps to the nearest wall.</p>`;
   } else {
     tools = `<div class="pl-tools">
       <button type="button" class="btn small primary" id="plAdd">+ Plug</button>
-      <button type="button" class="btn small" id="plEdit">${plan.rooms.length ? 'Edit rooms' : 'Draw rooms'}</button>
-      <span class="pl-zoom"><button type="button" class="icon-btn small" id="plOut" aria-label="Zoom out">−</button><button type="button" class="icon-btn small" id="plIn" aria-label="Zoom in">+</button></span>
+      <button type="button" class="btn small pl-move-btn" id="plEdit">${plan.rooms.length ? `${MOVE_IC} Move rooms` : 'Draw rooms'}</button>
+      ${undoBtn}
+      <span class="pl-zoom">${zoomBtns}</span>
     </div>
-    <p class="muted tiny pl-hint">Tap a breaker or a plug to light up everything on it. Drag a plug to move it.</p>`;
+    <p class="muted tiny pl-hint">Tap a breaker or a plug to light up everything on it. Drag a plug to move it.${plan.rooms.length ? ' Press and hold a room to move it.' : ''}</p>`;
   }
   // template picker: shown on an empty plan, or from "Templates"
   const thumb = (tp) => {
@@ -1382,6 +1398,12 @@ function renderPlan(homeId, q) {
       if (d) html += `<button type="button" class="linkish tiny" id="plUnplace">Take it off the plan</button>`;
       return html;
     }
+    if (m === 'rooms' && planUI.swap) {
+      const r = plan.rooms.find((x) => x.id === planUI.swap);
+      if (r) return `<div class="mb-top"><b class="mb-label">⇄ Swap <span class="pl-swapname">${esc(r.name || 'Room')}</span> with…</b><button type="button" class="icon-btn small" id="plSwapX" aria-label="Cancel swap">✕</button></div>
+        <div class="mb-sub">Tap the other room on the plan. They trade places, and their plugs go with them.</div>
+        <div class="mb-actions"><button type="button" class="btn small" id="plSwapCancel">Cancel</button></div>`;
+    }
     if (m === 'rooms' && planUI.sel) {
       const r = plan.rooms.find((x) => x.id === planUI.sel);
       if (!r) return '';
@@ -1389,6 +1411,7 @@ function renderPlan(homeId, q) {
         <datalist id="plRoomNames">${knownRooms.map((n) => `<option value="${esc(n)}">`).join('')}</datalist>
         <div class="pl-steps"><span>W</span><button type="button" class="icon-btn small" data-step="w-">−</button><b>${r.w} ft</b><button type="button" class="icon-btn small" data-step="w+">+</button>
           <span>L</span><button type="button" class="icon-btn small" data-step="h-">−</button><b>${r.h} ft</b><button type="button" class="icon-btn small" data-step="h+">+</button></div>
+        <div class="pl-ract">${plan.rooms.length > 1 ? '<button type="button" class="btn pl-big" id="plSwap">⇄ Swap</button>' : ''}<button type="button" class="btn pl-big" id="plTurn" ${r.w === r.h ? 'disabled' : ''}>⟳ Turn</button></div>
         <div class="mb-actions"><button type="button" class="btn small danger-ghost" id="plDelRoom">Delete room</button><button type="button" class="btn small primary" id="plRoomOk">Done</button></div>`;
     }
     if (m === 'add' && planUI.drop) {
@@ -1411,7 +1434,7 @@ function renderPlan(homeId, q) {
     bar.innerHTML = html;
     bar.hidden = !html;
     const c = document.getElementById('mbClose');
-    if (c) c.onclick = () => { planUI.bid = ''; planUI.oid = ''; planUI.sel = ''; planUI.drop = null; if (m === 'add') { planUI.mode = 'view'; planUI.placing = ''; } quietHash(`#/h/${homeId}/map?view=plan`); rerender(); };
+    if (c) c.onclick = () => { planUI.bid = ''; planUI.oid = ''; planUI.sel = ''; planUI.swap = ''; planUI.drop = null; if (m === 'add') { planUI.mode = 'view'; planUI.placing = ''; } quietHash(`#/h/${homeId}/map?view=plan`); rerender(); };
     bindBar();
   };
   const select = (bid, oid = '') => {
@@ -1419,8 +1442,33 @@ function renderPlan(homeId, q) {
     quietHash(`#/h/${homeId}/map?view=plan${oid ? '&o=' + encodeURIComponent(oid) : bid ? '&b=' + encodeURIComponent(bid) : ''}`);
     rerender();
   };
-  const setMode = (mode) => { quietHash(`#/h/${homeId}/map?view=plan`); planUI.mode = mode; planUI.picker = false; planUI.sel = ''; planUI.drop = null; if (mode !== 'add') planUI.placing = ''; if (mode !== 'view') { planUI.oid = ''; } rerender(); };
+  const setMode = (mode) => { quietHash(`#/h/${homeId}/map?view=plan`); planUI.mode = mode; planUI.picker = false; planUI.sel = ''; planUI.swap = ''; planUI.drop = null; if (mode !== 'add') planUI.placing = ''; if (mode !== 'view') { planUI.oid = ''; } rerender(); };
   const placeAt = async (d, pos) => { await store.put('devices', { ...d, pos }); };
+  // One room change (move / resize / swap / turn / delete), saved with an undo step.
+  // moves = [{ from, to, turn? }]: those rooms get their new rectangle and their plugs go along.
+  const changeRooms = async (moves, { rooms = null } = {}) => {
+    const pinPos = movePins(plan, data.devices, moves);
+    const next = rooms || plan.rooms.map((r) => { const mv = moves.find((x) => x.from.id === r.id); return mv ? mv.to : r; });
+    const same = JSON.stringify(next) === JSON.stringify(plan.rooms) && !Object.keys(pinPos).length;
+    if (same) return rerender();
+    planUI.undo = [...(planUI.undo || []).slice(-29), { floor: plan.floor, rooms: plan.rooms, pins: Object.keys(pinPos).map((id) => ({ id, pos: (byId('devices', id) || {}).pos })) }];
+    plan.rooms = next;
+    await savePlan(plan);
+    for (const [id, pos] of Object.entries(pinPos)) { const d = byId('devices', id); if (d) await store.put('devices', { ...d, pos }); }
+  };
+  const undo = async () => {
+    const list = planUI.undo || [];
+    let i = list.length - 1;
+    while (i >= 0 && list[i].floor !== plan.floor) i--;
+    if (i < 0) return;
+    const u = list[i];
+    planUI.undo = list.filter((_, k) => k !== i);
+    if (planUI.sel && !u.rooms.some((r) => r.id === planUI.sel)) planUI.sel = '';
+    plan.rooms = u.rooms;
+    await savePlan(plan);
+    for (const { id, pos } of u.pins) { const d = byId('devices', id); if (d && pos) await store.put('devices', { ...d, pos }); }
+    toast('Undone');
+  };
 
   function bindBar() {
     const un = document.getElementById('plUnplace');
@@ -1430,11 +1478,18 @@ function renderPlan(homeId, q) {
     if (nm) nm.onchange = () => { plan.rooms = plan.rooms.map((r) => (r.id === planUI.sel ? { ...r, name: nm.value.trim() } : r)); savePlan(plan); };
     bar.querySelectorAll('[data-step]').forEach((b) => (b.onclick = () => {
       const [k, sgn] = [b.dataset.step[0], b.dataset.step[1] === '+' ? 1 : -1];
-      plan.rooms = plan.rooms.map((r) => (r.id === planUI.sel ? resizeRoom(r, k === 'w' ? sgn : 0, k === 'h' ? sgn : 0, plan) : r));
-      savePlan(plan);
+      const r0 = plan.rooms.find((r) => r.id === planUI.sel);
+      if (!r0) return;
+      changeRooms([{ from: r0, to: resizeRoom(r0, k === 'w' ? sgn : 0, k === 'h' ? sgn : 0, plan) }]);
     }));
     const del = document.getElementById('plDelRoom');
-    if (del) del.onclick = () => { plan.rooms = plan.rooms.filter((r) => r.id !== planUI.sel); planUI.sel = ''; savePlan(plan); };
+    if (del) del.onclick = () => { const id = planUI.sel; planUI.sel = ''; changeRooms([], { rooms: plan.rooms.filter((r) => r.id !== id) }); };
+    const sw = document.getElementById('plSwap');
+    if (sw) sw.onclick = () => { planUI.swap = planUI.sel; rerender(); };
+    const swx = () => { planUI.swap = ''; rerender(); };
+    ['plSwapX', 'plSwapCancel'].forEach((id) => { const el = document.getElementById(id); if (el) el.onclick = swx; });
+    const tn = document.getElementById('plTurn');
+    if (tn) tn.onclick = () => { const r0 = plan.rooms.find((r) => r.id === planUI.sel); if (r0) changeRooms([{ from: r0, to: rotateRoom(r0, plan), turn: true }]); };
     const ok = document.getElementById('plRoomOk');
     if (ok) ok.onclick = () => { if (nm && nm.value.trim() !== (plan.rooms.find((r) => r.id === planUI.sel) || {}).name) nm.onchange(); planUI.sel = ''; rerender(); };
     // add: pick an existing outlet, or make a new one
@@ -1462,6 +1517,7 @@ function renderPlan(homeId, q) {
   const on = (id, fn) => { const el = document.getElementById(id); if (el) el.onclick = fn; };
   on('plAdd', () => { planUI.bid = ''; setMode('add'); });
   on('plEdit', () => setMode('rooms'));
+  on('plUndo', undo);
     on('plDone', () => setMode('view'));
   on('plCancel', () => setMode('view'));
   on('plIn', () => { planUI.z = Math.min(48, planUI.z * 1.4); rerender(); });
@@ -1535,44 +1591,123 @@ function renderPlan(homeId, q) {
   };
 
   // ---- pointer: tap / drag pins, rooms, handles
+  // Rooms: press anywhere inside one and drag to move it (plugs go along). In Move rooms the
+  // picked room moves at once and any other after a short press; in the normal view a room
+  // is picked up by pressing and holding (ROOM_HOLD_VIEW), so a quick swipe still scrolls.
   const ptOf = (e) => { const r = svg.getBoundingClientRect(); return { x: (e.clientX - r.left) / planUI.z - P, y: (e.clientY - r.top) / planUI.z - P }; };
-  // stop the page from scrolling when a drag starts on a pin or a handle (iOS)
-  svg.addEventListener('touchstart', (e) => { if (e.target.closest && e.target.closest(planUI.mode === 'view' ? '.pin' : planUI.mode === 'rooms' ? '.pl-h' : '.none')) e.preventDefault(); }, { passive: false });
+  const roomUnder = (pt) => roomAt(plan, pt.x, pt.y);
+  // stop the page from scrolling when a drag starts on a pin, a handle or the picked room (iOS)
+  svg.addEventListener('touchstart', (e) => {
+    const t = e.target.closest ? e.target : null;
+    if (!t) return;
+    // iOS keeps sending this touch's moves to the element it started on, even after a redraw
+    // takes it out of the page, so the "don't scroll" listener rides on that element too
+    t.addEventListener('touchmove', noScroll, { passive: false });
+    t.addEventListener('touchend', () => t.removeEventListener('touchmove', noScroll), { once: true });
+    if (planUI.mode === 'view' && t.closest('.pin')) e.preventDefault();
+    else if (planUI.mode === 'rooms' && !planUI.swap && (t.closest('.pl-h') || (planUI.sel && t.closest(`.pl-room[data-r="${CSS.escape(planUI.sel)}"]`)))) e.preventDefault();
+  }, { passive: false });
+  // once a room is picked up, the finger drags it instead of scrolling the page
+  const noScroll = (e) => { if (drag && drag.lifted && e.cancelable) e.preventDefault(); };
+  svg.addEventListener('touchmove', noScroll, { passive: false });
+  svg.addEventListener('contextmenu', (e) => { if (drag && (drag.lifted || drag.timer)) e.preventDefault(); });
   let drag = null;
+  const lift = (dr, draw = true) => {
+    if (!dr || dr !== drag) return;
+    dr.timer = 0;
+    dr.lifted = true;
+    dr.moved = true;
+    try { svg.setPointerCapture(dr.id); } catch { /* pointer already gone */ }
+    if (navigator.vibrate) navigator.vibrate(12);
+    if (m === 'rooms' && planUI.sel !== dr.room) planUI.sel = dr.room;
+    dr.r0 = plan.rooms.find((r) => r.id === dr.room);
+    dr.room1 = dr.r0;
+    // no redraw inside pointerdown: the touch has to reach its element first (to stop the scroll)
+    if (draw) preview(dr);
+    autoScroll(dr);
+  };
+  const preview = (dr) => {
+    const r = dr.room1 || dr.r0;
+    const moves = [{ from: dr.r0, to: r }];
+    const pos = movePins(plan, data.devices, moves);
+    const rooms = plan.rooms.map((x) => (x.id === r.id ? r : x));
+    svg.innerHTML = svgInner({ ...plan, rooms }, { pins: placed.map((d) => (pos[d.id] ? { ...d, pos: pos[d.id] } : d)), lift: dr.lifted && !dr.h ? r.id : '' });
+  };
+  // dragging a room near the top / bottom of the screen scrolls the page (a single-wide is long)
+  const autoScroll = (dr) => {
+    const step = () => {
+      if (drag !== dr || !dr.lifted) return;
+      const y = dr.cy, H = window.innerHeight;
+      const v = y < 90 ? -Math.ceil((90 - y) / 6) : y > H - 140 ? Math.ceil((y - (H - 140)) / 6) : 0;
+      if (v) { window.scrollBy(0, v); dragTo(dr); }
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  };
+  const dragTo = (dr) => {
+    const p = ptOf({ clientX: dr.cx, clientY: dr.cy });
+    const dx = p.x - dr.start.x, dy = p.y - dr.start.y;
+    if (!dr.r0) return;
+    dr.room1 = dr.h ? resizeCorner(dr.r0, dr.h, dx, dy, plan) : moveRoom(dr.r0, dx, dy, plan);
+    preview(dr);
+  };
   svg.addEventListener('pointerdown', (e) => {
+    if (e.button > 0) return;
     const t = e.target;
     const pin = t.closest('.pin[data-o]');
     const h = t.closest('.pl-h');
-    const room = t.closest('.pl-room');
-    drag = { start: ptOf(e), sx: e.clientX, sy: e.clientY, moved: false, pin: m === 'view' && pin ? pin.dataset.o : '', h: m === 'rooms' && h ? h.dataset.h : '', room: room ? room.dataset.r : '', id: e.pointerId };
-    if (drag.pin || drag.h) { svg.setPointerCapture(e.pointerId); e.preventDefault(); }
+    const start = ptOf(e);
+    const under = roomUnder(start);
+    if (drag && drag.timer) clearTimeout(drag.timer);
+    drag = { start, sx: e.clientX, sy: e.clientY, cx: e.clientX, cy: e.clientY, moved: false, pin: m === 'view' && pin ? pin.dataset.o : '', h: m === 'rooms' && !planUI.swap && h ? h.dataset.h : '', room: under ? under.id : '', id: e.pointerId, timer: 0, lifted: false };
+    const dr = drag;
+    if (dr.pin) { svg.setPointerCapture(e.pointerId); e.preventDefault(); return; }
+    if (dr.h) { dr.room = planUI.sel; dr.r0 = plan.rooms.find((r) => r.id === planUI.sel); dr.lifted = true; svg.setPointerCapture(e.pointerId); e.preventDefault(); return; }
+    if (!dr.room || m === 'add' || planUI.swap) return;
+    if (m === 'rooms' && dr.room === planUI.sel) { e.preventDefault(); return lift(dr, false); }
+    dr.timer = setTimeout(() => lift(dr), m === 'rooms' ? ROOM_HOLD_EDIT : ROOM_HOLD_VIEW);
   });
   svg.addEventListener('pointermove', (e) => {
     if (!drag || e.pointerId !== drag.id) return;
-    if (!drag.moved && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 6) return;
-    drag.moved = true;
-    const p = ptOf(e);
-    if (drag.pin) {
-      const at = snapPin(plan, p.x, p.y);
-      drag.at = at;
-      redraw({ pins: placed.map((d) => (d.id === drag.pin ? { ...d, pos: at } : d)) });
-    } else if (drag.h) {
-      const r0 = plan.rooms.find((r) => r.id === planUI.sel);
-      if (!r0) return;
-      const dx = p.x - drag.start.x, dy = p.y - drag.start.y;
-      const r = drag.h === 'move' ? moveRoom(r0, dx, dy, plan) : resizeRoom(r0, dx, dy, plan);
-      drag.room1 = r;
-      svg.innerHTML = svgInner({ ...plan, rooms: plan.rooms.map((x) => (x.id === r.id ? r : x)) });
+    const dr = drag;
+    dr.cx = e.clientX; dr.cy = e.clientY;
+    const far = Math.hypot(e.clientX - dr.sx, e.clientY - dr.sy);
+    if (dr.timer) {
+      // moved before the hold finished: that's a scroll, not a pick-up
+      if (far > 9) { clearTimeout(dr.timer); dr.timer = 0; dr.scrolling = true; }
+      return;
     }
+    if (dr.scrolling) return;
+    if (!dr.moved && far < 6) return;
+    dr.moved = true;
+    const p = ptOf(e);
+    if (dr.pin) {
+      const at = snapPin(plan, p.x, p.y);
+      dr.at = at;
+      redraw({ pins: placed.map((d) => (d.id === dr.pin ? { ...d, pos: at } : d)) });
+    } else if (dr.lifted) dragTo(dr);
   });
   const end = async (e) => {
     if (!drag || (e && e.pointerId !== drag.id)) return;
     const dr = drag;
     drag = null;
-    if (e && e.type === 'pointercancel') return redraw();
+    if (dr.timer) clearTimeout(dr.timer);
+    if (e && e.type === 'pointercancel') { if (dr.lifted || dr.pin) rerender(); return; }
+    if (dr.scrolling) return;
+    if (dr.lifted) {
+      const r1 = dr.room1, r0 = dr.r0;
+      if (!r0 || !r1) return rerender();
+      if (r1.x === r0.x && r1.y === r0.y && r1.w === r0.w && r1.h === r0.h) {
+        // picked up and put back: in Move rooms that's a tap that picks the room
+        if (m === 'rooms') planUI.sel = r0.id;
+        return rerender();
+      }
+      await changeRooms([{ from: r0, to: r1 }]);
+      if (m === 'view') toast(`Moved ${r0.name || 'room'} · Undo is up top`);
+      return;
+    }
     if (dr.moved) {
       if (dr.pin && dr.at) { const d = byId('devices', dr.pin); if (d) await placeAt(d, dr.at); return; }
-      if (dr.h && dr.room1) { plan.rooms = plan.rooms.map((x) => (x.id === dr.room1.id ? dr.room1 : x)); savePlan(plan); }
       return;
     }
     // a tap
@@ -1583,11 +1718,19 @@ function renderPlan(homeId, q) {
     }
     if (m === 'rooms') {
       if (dr.h) return;
+      if (planUI.swap) {
+        const a0 = plan.rooms.find((r) => r.id === planUI.swap), b0 = dr.room && plan.rooms.find((r) => r.id === dr.room);
+        if (!b0 || !a0 || b0.id === a0.id) { if (!b0) { planUI.swap = ''; rerender(); } return; }
+        const { a: a1, b: b1 } = swapRooms(a0, b0, plan);
+        planUI.swap = ''; planUI.sel = a0.id;
+        await changeRooms([{ from: a0, to: a1 }, { from: b0, to: b1 }]);
+        return toast(`Swapped ${a0.name || 'room'} and ${b0.name || 'room'}`);
+      }
       planUI.sel = dr.room || '';
       rerender();
       // keep the picked room (and its handles) above the bottom sheet
       const el = planUI.sel && document.querySelector(`.pl-room[data-r="${CSS.escape(planUI.sel)}"] rect`);
-      if (el) { const b = el.getBoundingClientRect(); const room = window.innerHeight - 300; if (b.bottom + 30 > room || b.top < 70) window.scrollBy(0, Math.min(b.top - 90, b.bottom + 40 - room)); }
+      if (el) { const b = el.getBoundingClientRect(); const room = window.innerHeight - 330; if (b.bottom + 30 > room && b.top > 120) window.scrollBy(0, Math.min(b.top - 120, b.bottom + 40 - room)); }
       return;
     }
     if (m === 'add') {
