@@ -1,7 +1,7 @@
 import { ampsText } from './util.js';
 import { slotLabel, layoutOf, breakerType } from './panel.js';
 import { labelOf, DEVICE_TYPES, GFCI_OPTIONS, AFCI_OPTIONS, STATUS_OPTIONS, BOX_OPTIONS, styleOf, qtyOf } from './options.js';
-import { loadSummary, fmtAmps, deviceWatts } from './load.js';
+import { readings, fmtAmps, deviceWatts } from './load.js';
 
 const BTYPE_NAMES = { single: 'Single', double: '2-pole', tandem: 'Tandem half', quad: 'Quad' };
 
@@ -16,10 +16,10 @@ function rows(arr) {
 export function breakersCsv(data) {
   const P = (id) => data.panels.find((p) => p.id === id);
   const panel = (id) => (P(id) || {}).name || '';
-  const out = [['Panel', 'Slot', 'Poles', 'Amps', 'Label', 'Rooms', 'Type', 'Load watts', 'Load amps', 'Load %', 'Notes', 'Breaker type']];
+  const out = [['Panel', 'Slot', 'Poles', 'Amps', 'Label', 'Rooms', 'Type', 'Typical watts', 'Typical amps', 'Typical %', 'Idle %', 'Peak %', 'Notes', 'Breaker type']];
   for (const b of data.breakers) {
-    const s = loadSummary(b, data.devices || []);
-    out.push([panel(b.panelId), slotLabel(b, P(b.panelId) || layoutOf(null)), b.poles, ampsText(b), b.label, (b.rooms || []).join('; '), b.kind, s.watts, fmtAmps(s.amps), Math.round(s.pct), b.notes, BTYPE_NAMES[breakerType(b)] + (b.size === 'half' && b.btype === 'quad' ? (String(b.poles) === '2' ? ' (2-pole part)' : ' (single part)') : '')]);
+    const s = readings(b, data.devices || []);
+    out.push([panel(b.panelId), slotLabel(b, P(b.panelId) || layoutOf(null)), b.poles, ampsText(b), b.label, (b.rooms || []).join('; '), b.kind, Math.round(s.watts), fmtAmps(s.amps), Math.round(s.pct), Math.round(s.idlePct), Math.round(s.allPct), b.notes, BTYPE_NAMES[breakerType(b)] + (b.size === 'half' && b.btype === 'quad' ? (String(b.poles) === '2' ? ' (2-pole part)' : ' (single part)') : '')]);
   }
   return rows(out);
 }

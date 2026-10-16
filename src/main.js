@@ -12,8 +12,9 @@ import { shoppingList, shoppingCsv, lineText } from './lib/shopping.js';
 import { layoutOf, panelSpaces, slotsFor, slotLabel, numberingOf, overlaps, occupancy, halfRows, positionLabel, positionSlot, groupPlan, directoryRows, breakerType, sizeOf, keysFor, planFor, snapSlot, coversText, findClash, clashText, stickerText, isTwoPole } from './lib/panel.js';
 import { seedPro } from './lib/seed.js';
 import { LOAD_PRESETS, PRESET_NOTE } from './lib/presets.js';
-import { loadSummary, levelText, fmtAmps, shoreSummary, deviceWatts, voltsFor, isOn } from './lib/load.js';
-import { loadRef, parseRef, loadAt, toggleLoad, setAllOn, moveLoad, setPortable, portablesOf, loadWatts, PORTABLE_SUGGESTIONS } from './lib/onoff.js';
+import { loadSummary, levelText, fmtAmps, shoreSummary, deviceWatts, voltsFor, isOn, readings, loadReading, deviceReading, projectLoad, NOW_HOURS } from './lib/load.js';
+import { USE_OPTIONS, habitOf, useLabel, HABIT_NOTE, guessHabit } from './lib/habits.js';
+import { loadRef, parseRef, loadAt, toggleLoad, setAllOn, moveLoad, setPortable, portablesOf, loadWatts, PORTABLE_SUGGESTIONS, setNow, clearNow, nowState, updateLoad } from './lib/onoff.js';
 import { THEME_OPTIONS, getThemePref, setThemePref, applyTheme } from './lib/theme.js';
 import { parseBreakerQuery } from './lib/search.js';
 import { CATALOG, CATEGORIES, CATALOG_NOTE, catById, categoryOf, wattsRange, ampsRange, surgeText, circuitTag } from './lib/catalog.js';
@@ -85,7 +86,8 @@ const slotsOf = (b) => slotsFor(b, panelOf(b) || 'two');
 const slotText = (b) => slotLabel(b, panelOf(b) || 'two');
 const breakerSlots = slotsOf;
 // circuit load = items listed on the breaker + items listed on each of its outlets
-const sumOf = (b) => loadSummary(b, D().devices);
+// Idle / Typical / Peak (see load.js readings): watts/pct/level = Typical (main number)
+const sumOf = (b) => readings(b, D().devices);
 const wattsText = (w) => `${Math.round(w).toLocaleString('en-US')}W`;
 const homeLabel = (h) => {
   const c = h.customerId && byId('customers', h.customerId);
@@ -261,6 +263,7 @@ async function render() {
     if (view === 'search') return renderSearch(homeId, q.get('q') || '', q.get('cat') || '');
     if (view === 'load') return renderLoad(homeId);
     if (view === 'move') return renderMove(homeId, q);
+    if (view === 'item') return renderItem(homeId, q);
     if (view === 'portable') return renderPortables(homeId);
     if (view === 'more') return renderMore(homeId);
     if (view === 'shop') return renderShop(homeId, q.get('scope'));
@@ -398,7 +401,7 @@ function renderPanel(homeId, panelId) {
     const sum = sumOf(b);
     const nDev = devices.filter((d) => d.breakerId === b.id).length;
     const dead = devices.some((d) => d.breakerId === b.id && (d.status === 'dead' || d.status === 'repair'));
-    const meta = [nDev ? `${nDev} item${nDev > 1 ? 's' : ''}` : '', sum.level !== 'none' ? `${Math.round(sum.pct)}%` : '', b.leg ? `L${esc(b.leg)}` : '', dead ? '<b class="bad">needs fix</b>' : '', b.kind && b.kind !== 'standard' && b.kind !== 'spare' ? esc(b.kind.toUpperCase()) : ''].filter(Boolean).join(' · ');
+    const meta = [nDev ? `${nDev} item${nDev > 1 ? 's' : ''}` : '', sum.level !== 'none' ? `${Math.round(sum.pct)}%${sum.allLevel === 'over' ? ' ⚠️' : ''}` : '', b.leg ? `L${esc(b.leg)}` : '', dead ? '<b class="bad">needs fix</b>' : '', b.kind && b.kind !== 'standard' && b.kind !== 'spare' ? esc(b.kind.toUpperCase()) : ''].filter(Boolean).join(' · ');
     const tag = isHalf ? (bt === 'quad' ? 'QUAD' : 'TANDEM') : isTwoPole(b) ? '240V' : '';
     cells.push(`<a class="brk ${isHalf ? 'half ' + (keys.length > 1 ? 'half-mid' : b.half === 'B' ? 'half-b' : 'half-a') : ''} ${isTwoPole(b) ? 'dbl' : ''} ${b.kind === 'spare' ? 'spare' : ''} lvl-${sum.level}" href="#/h/${homeId}/breaker/${b.id}" style="grid-column:${col};grid-row:${start + 1} / span ${keys.length}">
       <span class="brk-slot">${esc(slotText(b))}</span>
@@ -428,6 +431,7 @@ function renderPanel(homeId, panelId) {
   }
   const over = breakers.filter((b) => sumOf(b).level === 'over').length;
   const warn = breakers.filter((b) => sumOf(b).level === 'warn').length;
+  const peakOver = breakers.filter((b) => { const s = sumOf(b); return s.level !== 'over' && s.allLevel === 'over'; }).length;
   const clashes = panelClashes(panel, breakers);
   const body = `
   ${searchBarHtml(homeId)}
@@ -441,7 +445,8 @@ function renderPanel(homeId, panelId) {
     </div>
   </section>
   ${(() => { const h = byId('homes', homeId); const c = h && h.customerId && byId('customers', h.customerId); return c ? `<a class="breaker-link" href="#/customers/${c.id}"><span class="big-icon sm" aria-hidden="true">👤</span><span><b>${esc(c.name)}</b><span class="muted">${c.lastServiced ? 'Last serviced ' + esc(c.lastServiced) : 'No visits logged'} · ${(c.visits || []).length} service note${(c.visits || []).length === 1 ? '' : 's'}</span></span><span aria-hidden="true">›</span></a>` : ''; })()}
-  ${over || warn ? `<a class="alert ${over ? 'over' : 'warn'}" href="#/h/${homeId}/load">${over ? `${over} circuit${over > 1 ? 's' : ''} over 100%` : ''}${over && warn ? ' · ' : ''}${warn ? `${warn} at 80%+` : ''} - see Load check</a>` : ''}
+  ${over || warn ? `<a class="alert ${over ? 'over' : 'warn'}" href="#/h/${homeId}/load">${over ? `${over} circuit${over > 1 ? 's' : ''} over 100%` : ''}${over && warn ? ' · ' : ''}${warn ? `${warn} at 80%+` : ''} typical - see Load check</a>` : ''}
+  ${peakOver ? `<a class="peak-note" href="#/h/${homeId}/load">⚠️ ${peakOver} circuit${peakOver > 1 ? 's' : ''} could trip if everything runs at once</a>` : ''}
   ${clashes.length ? `<div class="card clash-card"><h3>⚠️ ${clashes.length === 1 ? 'Two breakers share a spot' : `${clashes.length} spots are shared`}</h3><ul class="list">${clashes.map(([a, b2]) => `<li class="clash-row"><span><b>${esc(stickerText(a, panel))}</b> and <b>${esc(stickerText(b2, panel))}</b> overlap.${canJoinTandem(a, b2, panel) ? ' One breaker with 2 switches?' : ''}</span>${canJoinTandem(a, b2, panel) ? `<button type="button" class="btn small primary" data-join="${esc(a.id)}|${esc(b2.id)}">Make it a tandem</button>` : `<a class="btn small" href="#/edit/breakers/${b2.id}?home=${homeId}">Fix ${esc(slotLabel(b2, panel))}</a>`}</li>`).join('')}</ul></div>` : ''}
   <div class="panel-box">
     <div class="panel-main">${panel.type === 'rv' ? '120V AC · ' : ''}MAIN ${esc(mainAmpsText(panel))}${panel.mainAmps ? 'A' : ''}</div>
@@ -453,7 +458,7 @@ function renderPanel(homeId, panelId) {
     <a class="btn" href="#/edit/panels/new?home=${homeId}">+ Panel</a>
     <a class="btn" href="#/h/${homeId}/print/directory/${panel.id}">Print label</a>
   </div>
-  <div class="legend"><span class="dot lvl-ok"></span>under 80% <span class="dot lvl-warn"></span>80%+ <span class="dot lvl-over"></span>over 100% <span class="dot lvl-none"></span>no loads listed</div>
+  <div class="legend"><span class="dot lvl-ok"></span>under 80% <span class="dot lvl-warn"></span>80%+ <span class="dot lvl-over"></span>over 100% <span class="dot lvl-none"></span>no loads listed <span class="muted">· colors = Typical, ⚠️ = Peak over 100%</span></div>
   ${breakers.some((b) => sizeOf(b) === 'half') ? '<p class="tiny muted legend-note">Half-height blocks are tandems: 1 breaker, 2 switches, each its own circuit. Tall blue-edged blocks are double-pole 240V: 1 circuit.</p>' : ''}
   ${shoreCard(panel, breakers, homeId)}
   ${panel.type === 'rv' || (panel.fuses || []).length ? fuseCard(panel) : ''}
@@ -506,7 +511,7 @@ const sourceText = (p) => (p.type !== 'rv' && p.powerSource ? labelOf(POWER_SOUR
 
 function shoreCard(panel, breakers, homeId, link = false) {
   if (panel.type !== 'rv') return '';
-  const sum = shoreSummary(panel, breakers, D().devices);
+  const sum = shoreSummary(panel, breakers, D().devices, { mode: 'main' });
   if (!sum) return `<div class="card"><h3>Shore power check</h3><p class="muted">Pick the shore power service in <a href="#/edit/panels/${panel.id}?home=${homeId}">Edit panel</a> to compare your loads to it.</p></div>`;
   return `<div class="card shore">
     <h3>${link ? `<a href="#/h/${homeId}/panel/${panel.id}">${esc(panel.name)}</a>: ` : ''}Shore power check (${esc(shoreText(panel))})</h3>
@@ -598,15 +603,22 @@ async function renderPanelExtra(homeId, panel) {
 
 // ---------------------------------------------------------------- breaker view
 // ---------------------------------------------------------------- "what's plugged in" helpers
-// One load: [on/off switch] name · watts · Move · Remove. ref = loadRef(kind, id, index).
+// One load: name (tap = edit) · how much it's on · small "Right now" chip · typical watts · Move · Remove.
+// ref = loadRef(kind, id, index).
+const NOW_TEXT = { auto: 'typical', on: 'on', off: 'off' };
+const useShort = (id) => ({ always: 'Always', cycles: 'Cycles', hours: 'Few hrs/day', sometimes: 'Now & then' }[id] || useLabel(id));
+const wNum = (w) => (w > 0 && w < 10 ? String(Math.round(w * 10) / 10) : Math.round(w).toLocaleString('en-US'));
 function loadRow(l, ref, homeId, { sub = false } = {}) {
-  const w = (Number(l.watts) || 0) * (Number(l.qty) || 1);
-  const on = isOn(l);
+  const q = Number(l.qty) || 1;
+  const h = habitOf(l);
+  const now = nowState(l);
+  const main = loadReading(l, 'main');
   const nm = esc(l.name);
-  return `<li class="item-row ${on ? '' : 'is-off'}">
-    <button type="button" class="onoff ${on ? 'on' : ''}" role="switch" aria-checked="${on}" data-toggle="${esc(ref)}" aria-label="${nm} is ${on ? 'on' : 'off'}. Tap to turn ${on ? 'off' : 'on'}"><span class="knob"></span></button>
-    <span class="item-main">${sub ? `<span>${nm}` : `<b>${nm}`}${Number(l.qty) > 1 ? ` <span class="muted">×${esc(l.qty)}</span>` : ''}${l.portable ? ' <span class="tag-portable">portable</span>' : ''}${sub ? '</span>' : '</b>'}${!on || l.note ? `<span class="muted tiny">${on ? '' : 'Off'}${!on && l.note ? ' · ' : ''}${l.note ? esc(l.note) : ''}</span>` : ''}</span>
-    <span class="item-w">${wattsText(w)}</span>
+  return `<li class="item-row now-${now}">
+    <span class="item-main"><a class="item-name" href="#/h/${homeId}/item?ref=${encodeURIComponent(ref)}" aria-label="Edit ${nm}">${sub ? `<span>${nm}` : `<b>${nm}`}${q > 1 ? ` <span class="muted">×${esc(l.qty)}</span>` : ''}${l.portable ? ' <span class="tag-portable">portable</span>' : ''}${sub ? '</span>' : '</b>'}</a>
+      <span class="item-sub"><a class="use-pill ${h.use}" href="#/h/${homeId}/item?ref=${encodeURIComponent(ref)}">${esc(useShort(h.use))}</a>${now !== 'auto' ? `<span class="now-tag ${now}">${now === 'on' ? 'On now' : 'Off now'}</span>` : ''}${l.note ? `<span class="muted tiny">${esc(l.note)}</span>` : ''}</span></span>
+    <span class="item-w"><b>${wNum(main)}W</b><small>of ${wattsText(h.run * q)}</small></span>
+    <button type="button" class="now-btn ${now}" data-now="${esc(ref)}" aria-label="Right now: ${now === 'auto' ? 'typical' : now}. Tap for ${now === 'auto' ? 'on now' : now === 'on' ? 'off now' : 'typical'}" title="Right now: ${NOW_TEXT[now]}">⏻</button>
     <a class="icon-btn small move-btn" href="#/h/${homeId}/move?from=${encodeURIComponent(ref)}" aria-label="Move ${nm} to another outlet or breaker">⇄</a>
     <button type="button" class="icon-btn small" data-del-ref="${esc(ref)}" aria-label="Remove ${nm}">✕</button>
   </li>`;
@@ -619,10 +631,21 @@ async function saveUpdates(list) {
 // Delegated once: on/off switches, remove, all on / all off. Works on every screen.
 function bindLoadActions() {
   app.addEventListener('click', async (e) => {
-    const t = e.target.closest('[data-toggle],[data-del-ref],[data-all-on]');
+    const t = e.target.closest('[data-toggle],[data-del-ref],[data-all-on],[data-now],[data-clear-now]');
     if (!t || !store) return;
     e.preventDefault();
-    if (t.dataset.toggle) {
+    if (t.dataset.now) {
+      const u = setNow(D(), t.dataset.now);
+      if (u) {
+        await saveUpdates([u]);
+        const r = parseRef(t.dataset.now);
+        const st = nowState(u.obj[r.field][r.index]);
+        toast(st === 'auto' ? 'Back to typical' : `Right now: ${st} (resets in ${NOW_HOURS} hrs)`);
+      }
+    } else if (t.dataset.clearNow) {
+      await saveUpdates(clearNow(D(), t.dataset.clearNow));
+      toast('Back to typical');
+    } else if (t.dataset.toggle) {
       const u = toggleLoad(D(), t.dataset.toggle);
       if (u) await saveUpdates([u]);
     } else if (t.dataset.delRef) {
@@ -640,6 +663,7 @@ function bindLoadActions() {
   });
 }
 
+const DEFAULT_USE_ADD = 'hours';
 function addItemForm(id, { targets = null, button = 'Add' } = {}) {
   return `<form id="${id}" class="form add-item">
     ${targets ? `<label>Plugged into<select name="target">${targets}</select></label>` : ''}
@@ -648,7 +672,7 @@ function addItemForm(id, { targets = null, button = 'Add' } = {}) {
     </label>
     <div class="two">
       <label>Name<input name="name" placeholder="e.g. Space heater" autocomplete="off" list="${id}-catalog"></label>
-      <label>Watts<input name="watts" type="number" inputmode="numeric" min="0" step="1" placeholder="1500"></label>
+      <label>Watts running<input name="watts" type="number" inputmode="numeric" min="0" step="1" placeholder="1500"></label>
     </div>
     <datalist id="${id}-catalog">${CATALOG.map((c) => `<option value="${esc(c.name)}"></option>`).join('')}</datalist>
     <div class="prefill-note" hidden></div>
@@ -669,10 +693,12 @@ function addItemForm(id, { targets = null, button = 'Add' } = {}) {
         <p class="tiny muted">Typing the amps fills in the watts for you (amps × 120, or × 240 for a 240V item).</p>
       </div>
     </details>
+    ${usePickHtml(DEFAULT_USE_ADD, false)}
     <div class="two">
+      <label>Watts idle <span class="muted">(optional)</span><input name="idleW" type="number" inputmode="decimal" min="0" step="any" placeholder="estimate"></label>
       <label>How many<select name="qty">${opt(['1', '2', '3', '4', '5', '6', '8', '10'], '1')}</select></label>
-      <label>Note <span class="muted">(optional)</span><input name="note" placeholder="e.g. on a power strip" autocomplete="off"></label>
     </div>
+    <label>Note <span class="muted">(optional)</span><input name="note" placeholder="e.g. on a power strip" autocomplete="off"></label>
     <label class="check-line"><input type="checkbox" name="portable"> Moves around (portable)</label>
     <button class="btn primary full" type="submit">${esc(button)}</button>
     <p class="tiny muted">${esc(PRESET_NOTE)}</p>
@@ -681,6 +707,22 @@ function addItemForm(id, { targets = null, button = 'Add' } = {}) {
 
 function bindAddItemForm(f, onAdd) {
   if (!f) return;
+  // "How much is it on?" + idle: picked from the name (estimate) until the user taps one.
+  const syncCards = () => f.querySelectorAll('.use-pick .pick-card').forEach((c) => c.classList.toggle('on', c.querySelector('input').checked));
+  const guessFromName = () => {
+    const g = guessHabit(f.elements.name.value);
+    if (!f.dataset.useTouched) {
+      const r = f.querySelector(`input[name="use"][value="${g.use}"]`);
+      if (r) r.checked = true;
+      syncCards();
+    }
+    if (f.elements.idleW) f.elements.idleW.placeholder = `~${g.idle}W (estimate)`;
+  };
+  f.querySelectorAll('input[name="use"]').forEach((x) => x.addEventListener('change', () => { f.dataset.useTouched = '1'; syncCards(); }));
+  f.elements.name.addEventListener('input', guessFromName);
+  f.elements.name.addEventListener('change', guessFromName);
+  f.elements.preset.addEventListener('change', guessFromName);
+  if (f.elements.name.value) guessFromName();
   f.elements.preset.onchange = () => {
     const v = f.elements.preset.value;
     if (v !== '' && v !== 'custom') {
@@ -725,26 +767,34 @@ function bindAddItemForm(f, onAdd) {
     const note = f.elements.note.value.trim();
     if (note) item.note = note;
     if (f.elements.portable && f.elements.portable.checked) item.portable = true;
+    const useV = (f.querySelector('input[name="use"]:checked') || {}).value;
+    if (useV && f.dataset.useTouched) item.use = useV;
+    if (f.elements.idleW && f.elements.idleW.value !== '') item.idleW = Math.max(0, Number(f.elements.idleW.value) || 0);
     await onAdd(item, f.elements.target ? f.elements.target.value : '');
     toast('Added');
   };
 }
 
-// "Max if all on: 92% (13.8A)" - only when something is switched off.
+// "Peak 92% ⚠️" - everything running at once.
+const warnIcon = (lvl) => (lvl === 'over' || lvl === 'warn' ? ' ⚠️' : '');
 function maxLine(s, cls = 'max-line') {
-  if (!s.offCount || !s.allWatts) return '';
-  return `<span class="${cls}">Max if all on: ${s.rating ? `<b class="pct-inline ${s.allLevel}">${Math.round(s.allPct)}%</b> · ` : ''}${fmtAmps(s.allAmps)}A</span>`;
+  if (!s.allWatts || !s.rating) return '';
+  return `<span class="${cls}">Peak if all running <b class="pct-inline ${s.allLevel}">${Math.round(s.allPct)}%</b>${warnIcon(s.allLevel)}</span>`;
 }
 
-function loadHeadline(s) {
+function loadHeadline(s, breakerId = '') {
   if (!s.rating) return `<p class="muted">Set the breaker's amps to see the load check.</p>`;
-  const some = s.loadCount > 0;
-  return `${some ? `<div class="using-now">Using now${s.offCount ? ` <span class="muted">· ${s.loadCount - s.offCount} of ${s.loadCount} on</span>` : ''}</div>` : ''}
-    <div class="load-num"><b>${fmtAmps(s.amps)}A</b> <span>of ${s.rating}A</span><span class="pct ${s.level}">${s.level === 'none' ? '' : Math.round(s.pct) + '%'}</span></div>
+  if (!s.loadCount) return `<p class="muted">Nothing listed yet. Add what's plugged in to see Typical, Idle and Peak.</p>`;
+  return `<div class="using-now">${s.overrides ? `Right now <span class="muted">· ${s.overrides} set by hand</span>` : 'Typical'}</div>
+    <div class="load-num"><b>${fmtAmps(s.amps)}A</b> <span>of ${s.rating}A</span><span class="pct ${s.level}">${Math.round(s.pct)}%</span></div>
     ${loadBar(s)}
-    <p class="lvl-text ${s.level}">${some && !s.watts ? 'Everything here is off right now' : esc(levelText(s.level))}</p>
-    ${some ? `<p class="max-all">Max if all on: <b class="pct-inline ${s.allLevel}">${Math.round(s.allPct)}%</b> · ${fmtAmps(s.allAmps)}A</p>` : ''}
-    <p class="tiny muted">${wattsText(s.watts)} on ÷ ${s.volts}V. 80% of ${s.rating}A = ${fmtAmps(s.limit80)}A.</p>`;
+    <p class="lvl-text ${s.level}">${esc(levelText(s.level))}</p>
+    <ul class="readings">
+      ${s.overrides ? `<li><span>Typical</span><b>${Math.round(s.typPct)}% · ${fmtAmps(s.typAmps)}A</b></li>` : ''}
+      <li><span>Idle</span><b>${Math.round(s.idlePct)}% · ${s.idleAmps < 0.1 ? `${wNum(s.idleWatts)}W` : `${fmtAmps(s.idleAmps)}A`}</b></li>
+      <li class="peak ${s.allLevel}"><span>Peak if all running</span><b><span class="pct-inline ${s.allLevel}">${Math.round(s.allPct)}%</span>${warnIcon(s.allLevel)} · ${fmtAmps(s.allAmps)}A</b></li>
+    </ul>
+    ${s.overrides && breakerId ? `<button type="button" class="btn small full" data-clear-now="${esc(breakerId)}">Back to typical</button>` : ''}`;
 }
 
 // Where a breaker from the form goes (same rules for the live preview and for saving).
@@ -821,11 +871,10 @@ function renderBreaker(homeId, id) {
 
   <div class="card" id="loads">
     <h3>Load check</h3>
-    ${loadHeadline(s)}
-    ${s.loadCount > 1 ? `<div class="all-onoff"><button type="button" class="btn small" data-all-on="${esc(b.id)}|on">All on</button><button type="button" class="btn small" data-all-on="${esc(b.id)}|off">All off</button></div>` : ''}
+    ${loadHeadline(s, b.id)}
     ${s.allWatts ? `<div class="breakdown">
-      ${own.length ? `<div class="bd-group"><div class="bd-head"><span>On this circuit</span><span>${wattsText(s.ownWatts)}${s.ownWatts !== s.ownAllWatts ? ` <span class="muted">of ${wattsText(s.ownAllWatts)}</span>` : ''}</span></div><ul class="list items">${own.map((l, i) => loadRow(l, loadRef('b', b.id, i), homeId)).join('')}</ul></div>` : ''}
-      ${s.parts.map(({ device: d, watts, allWatts }) => `<div class="bd-group"><a class="bd-head link" href="#/h/${homeId}/device/${d.id}"><span>${deviceIcon(d.type)} ${esc(d.name || labelOf(DEVICE_TYPES, d.type))}${d.room ? ` <span class="muted">· ${esc(d.room)}</span>` : ''}</span><span>${wattsText(watts)}${watts !== allWatts ? ` <span class="muted">of ${wattsText(allWatts)}</span>` : ''} ›</span></a><ul class="list items sub">${(d.loads || []).map((l, i) => loadRow(l, loadRef('d', d.id, i), homeId, { sub: true })).join('')}</ul></div>`).join('')}
+      ${own.length ? `<div class="bd-group"><div class="bd-head"><span>On this circuit</span><span>~${wattsText(s.ownWatts)} <span class="muted">· peak ${wattsText(s.ownAllWatts)}</span></span></div><ul class="list items">${own.map((l, i) => loadRow(l, loadRef('b', b.id, i), homeId)).join('')}</ul></div>` : ''}
+      ${s.parts.map(({ device: d, watts, allWatts }) => `<div class="bd-group"><a class="bd-head link" href="#/h/${homeId}/device/${d.id}"><span>${deviceIcon(d.type)} ${esc(d.name || labelOf(DEVICE_TYPES, d.type))}${d.room ? ` <span class="muted">· ${esc(d.room)}</span>` : ''}</span><span>~${wattsText(watts)} <span class="muted">· peak ${wattsText(allWatts)}</span> ›</span></a><ul class="list items sub">${(d.loads || []).map((l, i) => loadRow(l, loadRef('d', d.id, i), homeId, { sub: true })).join('')}</ul></div>`).join('')}
     </div>` : ''}
     <details class="add-wrap" ${s.allWatts ? '' : 'open'}><summary class="btn full">+ Add something plugged in</summary>
       ${addItemForm('loadForm', { targets: devices.length ? outletOpts : null, button: 'Add to this circuit' })}
@@ -876,17 +925,17 @@ function renderDevice(homeId, id) {
   ${b ? `<a class="breaker-link" href="#/h/${homeId}/breaker/${b.id}"><span class="big-slot sm">${esc(slotText(b))}</span><span><b>Breaker ${esc(slotText(b))} · ${esc(ampsText(b))}</b><span class="muted">${esc(b.label || '')}${panel ? ` · ${esc(panel.name)}` : ''}</span></span><span aria-hidden="true">›</span></a>` : `<div class="alert warn">Breaker not mapped yet. <a href="#/edit/devices/${d.id}?home=${homeId}">Pick one</a></div>`}
   ${(() => {
     const items = d.loads || [];
-    const w = deviceWatts(d, { onlyOn: true });
-    const wAll = deviceWatts(d);
+    const w = deviceReading(d, 'main');
+    const wAll = deviceReading(d, 'peak');
     const cs = b ? sumOf(b) : null;
     const plugTitle = d.type === 'outlet' || !d.type ? 'Plugged in here' : 'What it powers / draws';
     return `<div class="card" id="plugged">
-      <div class="card-head"><h3>${plugTitle}</h3>${wAll ? `<span class="pill ${w ? 'amber' : 'gray'}">${w ? `${wattsText(w)} · ${fmtAmps(w / voltsFor(b && b.poles))}A on` : 'All off'}</span>` : ''}</div>
+      <div class="card-head"><h3>${plugTitle}</h3>${wAll ? `<span class="pill amber">~${wattsText(w)} · ${fmtAmps(w / voltsFor(b && b.poles))}A typical</span>` : ''}</div>
       ${items.length ? `<ul class="list items">${items.map((l, i) => loadRow(l, loadRef('d', d.id, i), homeId)).join('')}</ul>` : `<p class="muted">Nothing listed yet. Add what's plugged in and it counts toward ${b ? `breaker ${esc(slotText(b))}'s` : 'the breaker'} load check.</p>`}
       <details class="add-wrap" ${items.length ? '' : 'open'}><summary class="btn full">+ Add something plugged in</summary>
         ${addItemForm('itemForm', { button: 'Add to this ' + (d.type === 'outlet' ? 'outlet' : 'item') })}
       </details>
-      ${cs && cs.rating ? `<a class="circuit-mini" href="#/h/${homeId}/breaker/${b.id}#loads"><span class="row-main"><b>Whole circuit: ${fmtAmps(cs.amps)}A of ${cs.rating}A</b><span class="muted">${w ? `This ${d.type === 'outlet' ? 'outlet' : 'item'} is ${wattsText(w)} of ${wattsText(cs.watts)} in use` : `${wattsText(cs.watts)} in use on breaker ${esc(slotText(b))}`}</span>${maxLine(cs, 'muted tiny block')}</span><span class="pct ${cs.level}">${cs.level === 'none' ? '' : Math.round(cs.pct) + '%'}</span>${cs.level !== 'none' ? loadBar(cs, true) : ''}</a>` : ''}
+      ${cs && cs.rating ? `<a class="circuit-mini" href="#/h/${homeId}/breaker/${b.id}#loads"><span class="row-main"><b>Whole circuit: ${fmtAmps(cs.amps)}A of ${cs.rating}A typical</b><span class="muted">${w ? `This ${d.type === 'outlet' ? 'outlet' : 'item'}: ~${wattsText(w)} of ~${wattsText(cs.watts)}` : `~${wattsText(cs.watts)} on breaker ${esc(slotText(b))}`}</span>${maxLine(cs, 'muted tiny block')}</span><span class="pct ${cs.level}">${cs.level === 'none' ? '' : Math.round(cs.pct) + '%'}</span>${cs.level !== 'none' ? loadBar(cs, true) : ''}</a>` : ''}
     </div>`;
   })()}
   <div class="card">
@@ -1027,7 +1076,7 @@ function homeRowHtml(homeId, r) {
     const where = r.device ? [r.device.room, devName(r.device)].filter(Boolean).join(' · ') : 'Listed on the breaker';
     const brk = r.breaker ? `Breaker ${slotText(r.breaker)}${r.breaker.label ? ` (${r.breaker.label})` : ''}` : 'No breaker picked yet';
     const href = r.device ? `#/h/${homeId}/device/${r.device.id}#plugged` : `#/h/${homeId}/breaker/${r.breaker.id}#loads`;
-    return `<li><a class="row" href="${href}"><span class="row-icon" aria-hidden="true">🔌</span><span class="row-main"><b>${esc(l.name)}${Number(l.qty) > 1 ? ` <span class="muted">×${esc(l.qty)}</span>` : ''}</b><span class="muted wrap">${esc(where)} · ${esc(brk)}</span></span><span class="row-side">${isOn(l) ? '' : '<span class="pill gray">off</span>'}${w ? `<span class="pill ${isOn(l) ? 'amber' : 'gray'}">${wattsText(w)}</span>` : ''}${r.breaker ? `<span class="pill">#${esc(slotText(r.breaker))}</span>` : '<span class="pill gray">?</span>'}</span><span class="chev" aria-hidden="true">›</span></a></li>`;
+    return `<li><a class="row" href="${href}"><span class="row-icon" aria-hidden="true">🔌</span><span class="row-main"><b>${esc(l.name)}${Number(l.qty) > 1 ? ` <span class="muted">×${esc(l.qty)}</span>` : ''}</b><span class="muted wrap">${esc(where)} · ${esc(brk)}</span></span><span class="row-side">${w ? `<span class="pill amber" title="Typical · runs ${wattsText(w)}">~${wNum(loadReading(l, 'main'))}W</span>` : ''}${r.breaker ? `<span class="pill">#${esc(slotText(r.breaker))}</span>` : '<span class="pill gray">?</span>'}</span><span class="chev" aria-hidden="true">›</span></a></li>`;
   }
   if (r.kind === 'fuse')
     return `<li><a class="row" href="#/h/${homeId}/panel/${r.panel.id}#fuses"><span class="fuse-num">${esc(r.item.num)}</span><span class="row-main"><b>${esc(r.item.powers || 'Fuse')}</b><span class="muted">12V fuse · ${esc(r.item.amps === 'other' ? r.item.ampsOther : r.item.amps)}A · ${esc(r.panel.name)}</span></span></a></li>`;
@@ -1187,11 +1236,11 @@ function renderAddPicker(homeId, id, q) {
     if (!b) return '';
     const s = sumOf(b);
     if (!s.rating) return '';
-    if (!watts) return `<span class="pill gray">${s.level === 'none' ? '0' : Math.round(s.pct)}% now</span>`;
-    // "now" = loads that are on; the new item is assumed on.
-    const after = projectedPct(s, watts);
-    const lvl = after > 100 ? 'red' : after >= 80 ? 'amber' : 'green';
-    return `<span class="pill ${lvl}" title="Breaker load now and after adding it">${Math.round(s.pct)}% → ${Math.round(after)}%</span>`;
+    if (!watts) return `<span class="pill gray">${s.level === 'none' ? '0' : Math.round(s.pct)}% typical</span>`;
+    // Typical now -> after (the new item at its typical use); ⚠️ if Peak would go over 100%.
+    const p = projectLoad(s, { name, watts, qty: 1 });
+    const lvl = p.pct > 100 ? 'red' : p.pct >= 80 ? 'amber' : 'green';
+    return `<span class="pill ${lvl}" title="Typical load now and after adding it. Peak if all running: ${Math.round(p.peakPct)}%">${Math.round(s.pct)}% → ${Math.round(p.pct)}%${p.peakPct > 100 ? ' ⚠️' : ''}</span>`;
   };
   const rooms = new Map();
   for (const d of devices) {
@@ -1207,6 +1256,7 @@ function renderAddPicker(homeId, id, q) {
     <div class="big-icon" aria-hidden="true">${c ? categoryOf(c.cat).icon : '🔌'}</div>
     <div><h2>Add ${esc(name)}</h2><p class="muted">${c ? `Typical ~${Number(watts).toLocaleString('en-US')}W · you can change it next` : 'You will type the watts (or amps) next'}</p></div>
   </section>
+  ${watts ? `<p class="tiny muted">% = breaker's Typical now → with it. ⚠️ = could trip if everything runs at once.</p>` : ''}
   ${breakers.length + devices.length > 8 ? `<form class="search-box sbar pick-filter" onsubmit="return false"><label class="sr-only" for="pickFilter">Filter outlets and breakers</label><span class="sb-icon" aria-hidden="true">⌕</span><input id="pickFilter" type="search" placeholder="Filter: room, outlet or breaker #" autocomplete="off" enterkeyhint="done"></form>` : ''}
   ${is240 ? '<div class="alert warn">This is a 240V item, so it goes on a 2-pole (240V) breaker. Those are listed first.</div>' : ''}
   ${!breakers.length && !devices.length ? `<div class="card empty"><p>Map a breaker first, then you can add what's plugged into it.</p><a class="btn primary" href="#/edit/breakers/new?home=${homeId}">+ Add a breaker</a></div>` : ''}
@@ -1305,7 +1355,7 @@ function renderMove(homeId, q) {
   const plugIn = fr.kind === 'p';
   const back = q.get('back') || (fr.kind === 'b' ? `#/h/${homeId}/breaker/${fr.id}#loads` : fr.kind === 'd' ? `#/h/${homeId}/device/${fr.id}#plugged` : `#/h/${homeId}/portable`);
   const w = loadWatts(l);
-  const counts = plugIn || isOn(l); // plugging in = on; moving keeps its on/off state
+  const counts = true; // Typical counts every listed device (no switching needed)
   const curB = breakerOfRef(from);
   const breakers = sortBreakers(inHome('breakers', homeId).filter((b) => b.kind !== 'spare'));
   const devices = inHome('devices', homeId).filter((d) => !d.type || ['outlet', 'appliance', 'other'].includes(d.type) || (d.loads || []).length);
@@ -1314,15 +1364,16 @@ function renderMove(homeId, q) {
     const s = sumOf(b);
     if (!s.rating) return '';
     const same = curB && curB.id === b.id;
-    const after = counts && !same ? projectedPct(s, w) : s.pct;
-    const lvl = after > 100 ? 'red' : after >= 80 ? 'amber' : 'green';
-    return `<span class="pill ${lvl}">${Math.round(s.pct)}% → ${Math.round(after)}%${after > 100 ? ' ⚠️' : ''}</span>`;
+    const p = same ? { pct: s.pct, peakPct: s.allPct } : projectLoad(s, l);
+    const lvl = p.pct > 100 ? 'red' : p.pct >= 80 ? 'amber' : 'green';
+    return `<span class="pill ${lvl}">${Math.round(s.pct)}% → ${Math.round(p.pct)}%${p.peakPct > 100 ? ' ⚠️' : ''}</span>`;
   };
   const overNote = (b) => {
     if (!b || !counts || (curB && curB.id === b.id)) return '';
     const s = sumOf(b);
-    const after = s.rating ? projectedPct(s, w) : 0;
-    return after > 100 ? `<span class="over-note">Too much here, try another outlet</span>` : '';
+    if (!s.rating) return '';
+    const p = projectLoad(s, l);
+    return p.pct > 100 ? `<span class="over-note">Too much here, try another outlet</span>` : p.peakPct > 100 ? `<span class="over-note">Peak ${Math.round(p.peakPct)}% if everything runs at once</span>` : '';
   };
   const target = (kind, id, icon, title, sub, b) => `<li><button type="button" class="row pick-row" data-move-to="${kind}:${esc(id)}">${kind === 'b' ? icon : `<span class="row-icon" aria-hidden="true">${icon}</span>`}<span class="row-main"><b>${esc(title)}</b><span class="muted">${esc(sub)}</span>${overNote(b)}</span><span class="row-side">${proj(b)}</span></button></li>`;
   const rooms = new Map();
@@ -1337,13 +1388,13 @@ function renderMove(homeId, q) {
   const body = `
   <section class="detail-head">
     <div class="big-icon" aria-hidden="true">${plugIn ? '🔌' : '⇄'}</div>
-    <div><h2>${plugIn ? 'Plug in' : 'Move'} ${esc(l.name)}</h2><p class="muted">${wattsText(w)}${counts ? '' : ' · off'} · now: ${esc(whereText(from))}</p></div>
+    <div><h2>${plugIn ? 'Plug in' : 'Move'} ${esc(l.name)}</h2><p class="muted">Runs ${wattsText(w)} · ${esc(useLabel(habitOf(l).use))} · now: ${esc(whereText(from))}</p></div>
   </section>
   ${!plugIn ? `<div class="card move-opts">
     <label class="check-line"><input type="checkbox" id="portableChk" ${l.portable ? 'checked' : ''}> Moves around (portable)</label>
     ${l.portable ? `<button type="button" class="btn small" id="unplugBtn">Unplug (put away)</button>` : ''}
   </div>` : ''}
-  <p class="tiny muted">${counts ? `Pick where it's plugged in now. The % shows that breaker now → with ${esc(l.name)} on.` : `It's switched off, so it won't add to the new breaker until you turn it on.`}</p>
+  <p class="tiny muted">Pick where it's plugged in now. The % is that breaker's Typical now → with ${esc(l.name)}. ⚠️ = Peak over 100%.</p>
   ${breakers.length + devices.length > 8 ? `<form class="search-box sbar pick-filter" onsubmit="return false"><label class="sr-only" for="pickFilter">Filter outlets and breakers</label><span class="sb-icon" aria-hidden="true">⌕</span><input id="pickFilter" type="search" placeholder="Filter: room, outlet or breaker #" autocomplete="off" enterkeyhint="done"></form>` : ''}
   ${roomNames.length ? `<h3 class="sr-head">Outlets</h3>${roomNames.map((rn) => `<div class="card room-card pick-card pick-group"><div class="room-head"><h3>${esc(rn)}</h3></div><ul class="list">${rooms.get(rn).map((d) => { const b = byId('breakers', d.breakerId); return target('d', d.id, deviceIcon(d.type), devName(d), b ? `Breaker ${slotText(b)}${b.label ? ' · ' + b.label : ''}` : 'Breaker not mapped yet', b); }).join('')}</ul></div>`).join('')}` : ''}
   ${bList.length ? `<h3 class="sr-head">Or a breaker (no specific outlet)</h3><ul class="list card sr-list pick-breakers pick-group">${bList.map((b) => target('b', b.id, `<span class="big-slot sm">${esc(slotText(b))}</span>`, b.label || 'Breaker', `${ampsText(b)}${String(b.poles) === '2' ? ' · 240V' : ''}${(b.rooms || []).length ? ' · ' + b.rooms.join(', ') : ''}`, b)).join('')}</ul>` : ''}`;
@@ -1379,7 +1430,7 @@ function renderMove(homeId, q) {
       const [kind, id] = btn.dataset.moveTo.split(/:(.+)/);
       const tb = kind === 'b' ? byId('breakers', id) : byId('breakers', (byId('devices', id) || {}).breakerId);
       const s = tb ? sumOf(tb) : null;
-      const after = s && s.rating && counts ? projectedPct(s, w) : null;
+      const after = s && s.rating ? projectLoad(s, l).pct : null;
       const ups = moveLoad(D(), from, { kind, id });
       if (!ups.length) return;
       await saveUpdates(ups);
@@ -1391,6 +1442,108 @@ function renderMove(homeId, q) {
 }
 
 // ---------------------------------------------------------------- portable devices
+// ---------------------------------------------------------------- one device: running / idle / how much it's on
+const pctOf = (o) => `${Math.round(o.share * 100)}%`;
+function usePickHtml(cur, guessed) {
+  return `<fieldset class="pick-cards use-pick"><legend>How much is it on?</legend>
+    ${USE_OPTIONS.map((o) => `<label class="pick-card ${cur === o.id ? 'on' : ''}"><input type="radio" name="use" value="${o.id}" ${cur === o.id ? 'checked' : ''}><span class="pc-text"><b>${esc(o.label)}</b><small>${esc(o.sub)} · ~${pctOf(o)}</small></span></label>`).join('')}
+    ${guessed ? '<p class="tiny muted use-guess">Picked for you (estimate). Tap to change.</p>' : ''}
+  </fieldset>`;
+}
+function itemPreview(l, volts) {
+  const q = Number(l.qty) || 1;
+  const typ = loadReading(l, 'typical');
+  const h = habitOf(l);
+  return `<div class="item-preview">
+    <div><span>Typical</span><b>${wNum(typ)}W</b><small>${fmtAmps(typ / volts)}A</small></div>
+    <div><span>Idle</span><b>${wNum(h.idle * q)}W</b><small>${fmtAmps((h.idle * q) / volts)}A</small></div>
+    <div><span>Peak</span><b>${wNum(h.run * q)}W</b><small>${fmtAmps((h.run * q) / volts)}A</small></div>
+  </div>`;
+}
+function renderItem(homeId, q) {
+  const ref = q.get('ref') || '';
+  const l = loadAt(D(), ref);
+  const r = parseRef(ref);
+  if (!l || !r || r.kind === 'p') return renderNotFound();
+  const back = r.kind === 'b' ? `#/h/${homeId}/breaker/${r.id}#loads` : `#/h/${homeId}/device/${r.id}#plugged`;
+  const b = breakerOfRef(ref);
+  const volts = voltsFor(b && b.poles);
+  const h = habitOf(l);
+  const g = guessHabit(l.name);
+  const now = nowState(l);
+  const hasIdle = l.idleW !== undefined && l.idleW !== null && l.idleW !== '';
+  const body = `
+  <section class="detail-head">
+    <div class="big-icon" aria-hidden="true">🔌</div>
+    <div><h2>${esc(l.name)}</h2><p class="muted">${esc(whereText(ref))}</p></div>
+  </section>
+  <form id="itemEdit" class="form card">
+    <label>Name<input name="name" value="${esc(l.name)}" autocomplete="off"></label>
+    <div class="two">
+      <label>When running <span class="muted">(W)</span><input name="watts" type="number" inputmode="decimal" min="0" step="any" value="${esc(l.watts)}"></label>
+      <label>When idle <span class="muted">(W)</span><input name="idleW" type="number" inputmode="decimal" min="0" step="any" value="${hasIdle ? esc(l.idleW) : ''}" placeholder="${esc(wNum(Math.min(g.idle, Number(l.watts) || 0)))}"></label>
+    </div>
+    <p class="tiny muted">${hasIdle ? 'Idle = off or on standby.' : `Idle is an estimate (~${esc(wNum(h.idle))}W). Off or standby: TV ~0.5W, fridge between cycles ~5W.`}</p>
+    <div class="amps-line"><span class="muted tiny">Only know the amps?</span><input name="amps" type="number" inputmode="decimal" step="0.1" min="0" placeholder="amps" aria-label="Amps"><span class="muted tiny">× ${volts}V</span></div>
+    ${usePickHtml(h.use, h.useIsGuess)}
+    <div id="itemPrev">${itemPreview(l, volts)}</div>
+    <fieldset class="seg now-pick"><legend>Right now <span class="muted">(optional, resets after ${NOW_HOURS} hrs)</span></legend>
+      ${[['auto', 'Typical'], ['on', 'On now'], ['off', 'Off now']].map(([v, t]) => `<label class="seg-opt"><input type="radio" name="now" value="${v}" ${now === v ? 'checked' : ''}><span>${t}</span></label>`).join('')}
+    </fieldset>
+    <div class="two">
+      <label>How many<input name="qty" type="number" inputmode="numeric" min="1" step="1" value="${esc(Number(l.qty) || 1)}"></label>
+      <label>Note <span class="muted">(optional)</span><input name="note" value="${esc(l.note || '')}" autocomplete="off"></label>
+    </div>
+    <label class="check-line"><input type="checkbox" name="portable" ${l.portable ? 'checked' : ''}> Moves around (portable)</label>
+    <button class="btn primary full" type="submit">Save</button>
+    <p class="tiny muted">${esc(HABIT_NOTE)}</p>
+  </form>`;
+  app.innerHTML = shell(homeId, 'panel', body, { title: 'Edit device', back });
+  bindShell();
+  const f = document.getElementById('itemEdit');
+  const draft = () => {
+    const use = (f.querySelector('input[name="use"]:checked') || {}).value;
+    const idle = f.elements.idleW.value;
+    return { name: f.elements.name.value.trim() || l.name, watts: Number(f.elements.watts.value) || 0, qty: Number(f.elements.qty.value) || 1, use, ...(idle !== '' ? { idleW: Number(idle) } : {}) };
+  };
+  const refresh = () => {
+    f.querySelectorAll('.use-pick .pick-card').forEach((c) => c.classList.toggle('on', c.querySelector('input').checked));
+    document.getElementById('itemPrev').innerHTML = itemPreview(draft(), volts);
+  };
+  f.addEventListener('input', (e) => {
+    if (e.target.name === 'amps') {
+      const a = Number(e.target.value);
+      if (a > 0) f.elements.watts.value = Math.round(a * volts);
+    }
+    if (e.target.name === 'use') { const gl = f.querySelector('.use-guess'); if (gl) gl.remove(); }
+    refresh();
+  });
+  f.addEventListener('change', refresh);
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const d = draft();
+    if (!(d.watts > 0)) return toast('Add the running watts');
+    const nowV = (f.querySelector('input[name="now"]:checked') || {}).value || 'auto';
+    const cur = loadAt(D(), ref);
+    const patch = {
+      name: d.name,
+      watts: d.watts,
+      qty: d.qty,
+      idleW: f.elements.idleW.value === '' ? null : Math.max(0, Number(f.elements.idleW.value) || 0),
+      use: h.useIsGuess && d.use === h.use && !f.dataset.useTouched ? null : d.use,
+      note: f.elements.note.value.trim() || null,
+      portable: f.elements.portable.checked ? true : null,
+    };
+    if (nowV === 'auto') { patch.on = null; patch.nowAt = null; }
+    else if (nowV !== nowState(cur)) { patch.on = nowV === 'on'; patch.nowAt = Date.now(); }
+    const u = updateLoad(D(), ref, patch);
+    if (u) await saveUpdates([u]);
+    toast('Saved');
+    go(back);
+  };
+  f.querySelectorAll('input[name="use"]').forEach((x) => x.addEventListener('change', () => { f.dataset.useTouched = '1'; }));
+}
+
 function renderPortables(homeId) {
   const home = byId('homes', homeId);
   const ps = portablesOf(D(), homeId);
@@ -1401,11 +1554,10 @@ function renderPortables(homeId) {
     const w = loadWatts(l);
     const b = where ? where.breaker : null;
     const s = b ? sumOf(b) : null;
-    const on = isOn(l);
-    const status = !where ? 'Put away · not counted' : `${whereText(ref)}${s && s.rating ? ` · ${Math.round(s.pct)}% now` : ''}`;
-    return `<li class="item-row portable-row ${where && on ? '' : 'is-off'}">
-      ${where ? `<button type="button" class="onoff ${on ? 'on' : ''}" role="switch" aria-checked="${on}" data-toggle="${esc(ref)}" aria-label="${esc(l.name)} is ${on ? 'on' : 'off'}. Tap to turn ${on ? 'off' : 'on'}"><span class="knob"></span></button>` : '<span class="onoff-gap" aria-hidden="true">🧳</span>'}
-      <span class="item-main"><b>${esc(l.name)} <span class="tag-portable">portable</span></b><span class="muted tiny">${esc(status)}${s && s.level === 'over' && on ? ' ⚠️' : ''}</span></span>
+    const status = !where ? 'Put away · not counted' : `${whereText(ref)}${s && s.rating ? ` · ${Math.round(s.pct)}% typical · peak ${Math.round(s.allPct)}%` : ''}`;
+    return `<li class="item-row portable-row ${where ? '' : 'is-off'}">
+      <span class="onoff-gap" aria-hidden="true">${where ? '🔌' : '🧳'}</span>
+      <span class="item-main"><b>${esc(l.name)} <span class="tag-portable">portable</span></b><span class="muted tiny">${esc(status)}${s && (s.level === 'over' || s.allLevel === 'over') ? ' ⚠️' : ''}</span></span>
       <span class="item-w">${wattsText(w)}</span>
       <span class="portable-acts">
         <a class="btn small" href="#/h/${homeId}/move?from=${encodeURIComponent(ref)}&back=${back}">${where ? 'Move' : 'Plug in at...'}</a>
@@ -1477,9 +1629,9 @@ function renderLoad(homeId) {
     const placed = ps.filter((x) => x.where).length;
     return `<a class="card portable-link" href="#/h/${homeId}/portable"><span class="row-icon" aria-hidden="true">🧳</span><span class="row-main"><b>Portable devices${ps.length ? ` <span class="count">${ps.length}</span>` : ''}</b><span class="muted">${ps.length ? `${placed} plugged in · ${ps.length - placed} put away` : 'Vacuum, hair dryer, heater... check an outlet before you plug in'}</span></span><span class="chev" aria-hidden="true">›</span></a>`;
   })()}
-  <p class="tiny muted">Only devices switched on count toward "now". Amps = watts ÷ 120V (÷ 240V for double-pole). Loads that run 3+ hours should stay under 80% of the breaker. Tap a circuit to add what's plugged in.</p>
+  <p class="tiny muted">Typical = each device's running watts × how much it's on, plus idle the rest of the time. Peak = everything running at once. Keep Typical under 80%.</p>
   <ul class="list load-list">${rows.map(({ b, s }) => `<li><a class="load-item" href="#/h/${homeId}/breaker/${b.id}#loads">
-    <div class="load-top"><span class="big-slot sm">${esc(slotText(b))}</span><span class="row-main"><b>${esc(b.label || 'Breaker')}</b><span class="muted">${s.level === 'none' ? 'No loads listed yet' : `${fmtAmps(s.amps)}A of ${s.rating}A · ${Math.round(s.watts)}W${s.offCount ? ' now' : ''}`}</span>${maxLine(s, 'muted tiny block')}</span><span class="pct ${s.level}">${s.level === 'none' ? '-' : Math.round(s.pct) + '%'}</span></div>
+    <div class="load-top"><span class="big-slot sm">${esc(slotText(b))}</span><span class="row-main"><b>${esc(b.label || 'Breaker')}</b><span class="muted">${s.level === 'none' ? 'No loads listed yet' : `Typical ${fmtAmps(s.amps)}A of ${s.rating}A`}</span>${maxLine(s, 'muted tiny block')}</span><span class="pct ${s.level}">${s.level === 'none' ? '-' : Math.round(s.pct) + '%'}</span></div>
     ${s.level !== 'none' ? loadBar(s, true) : ''}
   </a></li>`).join('')}</ul>`;
   app.innerHTML = shell(homeId, 'load', body);

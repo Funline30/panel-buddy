@@ -5,7 +5,7 @@
 //   portable: true -> moves around (vacuum, hair dryer...). Shows a "portable" badge.
 // Portables that are not plugged in anywhere live on the home: homes.portables[]
 // ({ name, watts, qty, note, portable: true }). They count on no breaker.
-import { isOn, totalWatts } from './load.js';
+import { isOn, totalWatts, nowOverride } from './load.js';
 
 // A load's address: "b:<breakerId>:<index>", "d:<deviceId>:<index>" or
 // "p:<homeId>:<index>" (a home's unplugged portables).
@@ -42,7 +42,7 @@ export function toggleLoad(data, ref, on) {
   const l = list[r.index];
   if (!l) return null;
   const next = on === undefined ? !isOn(l) : !!on;
-  list[r.index] = { ...l, on: next };
+  list[r.index] = { ...l, on: next, nowAt: Date.now() };
   return { col: r.col, obj: { ...c, [r.field]: list } };
 }
 
@@ -51,7 +51,8 @@ export function setAllOn(data, breakerId, on) {
   const out = [];
   const b = (data.breakers || []).find((x) => x.id === breakerId);
   if (!b) return out;
-  const flip = (loads) => (loads || []).map((l) => ({ ...l, on: !!on }));
+  const at = Date.now();
+  const flip = (loads) => (loads || []).map((l) => ({ ...l, on: !!on, nowAt: at }));
   if ((b.loads || []).length) out.push({ col: 'breakers', obj: { ...b, loads: flip(b.loads) } });
   for (const d of data.devices || []) {
     if (d.breakerId === breakerId && (d.loads || []).length) out.push({ col: 'devices', obj: { ...d, loads: flip(d.loads) } });
@@ -78,6 +79,7 @@ export function moveLoad(data, ref, to, opts = {}) {
   if (tr.kind === 'p') {
     moved.portable = true;
     delete moved.on; // unplugged: counts nowhere
+    delete moved.nowAt;
   } else if (opts.on !== undefined) moved.on = !!opts.on;
   else if (r.kind === 'p') moved.on = true; // plugging a portable in = it's on
   if (opts.portable) moved.portable = true;
@@ -137,3 +139,61 @@ export const PORTABLE_SUGGESTIONS = [
   'clothes-iron',
   'steam-mop-steam-cleaner',
 ];
+
+// ---------------------------------------------------------------- "Right now" chip
+// Optional override on top of Typical. Tap: Typical (auto) -> On now -> Off now -> auto.
+// Expires by itself after NOW_HOURS (see load.js).
+function editLoad(data, ref, fn) {
+  const r = parseRef(ref);
+  const c = containerOf(data, r);
+  if (!c) return null;
+  const list = [...(c[r.field] || [])];
+  const l = list[r.index];
+  if (!l) return null;
+  list[r.index] = fn({ ...l });
+  return { col: r.col, obj: { ...c, [r.field]: list } };
+}
+
+export function nowState(l, t = Date.now()) {
+  return nowOverride(l, t) || 'auto';
+}
+
+// state: 'auto' | 'on' | 'off'; undefined = next in the cycle.
+export function setNow(data, ref, state, t = Date.now()) {
+  return editLoad(data, ref, (l) => {
+    const cur = nowState(l, t);
+    const next = state || (cur === 'auto' ? 'on' : cur === 'on' ? 'off' : 'auto');
+    if (next === 'auto') {
+      delete l.on;
+      delete l.nowAt;
+    } else {
+      l.on = next === 'on';
+      l.nowAt = t;
+    }
+    return l;
+  });
+}
+
+// Back to Typical for a breaker and its outlets (clears every "Right now" tap).
+export function clearNow(data, breakerId) {
+  const out = [];
+  const b = (data.breakers || []).find((x) => x.id === breakerId);
+  if (!b) return out;
+  const has = (loads) => (loads || []).some((l) => l && l.nowAt);
+  const strip = (loads) => (loads || []).map((l) => { const n = { ...l }; delete n.nowAt; delete n.on; return n; });
+  if (has(b.loads)) out.push({ col: 'breakers', obj: { ...b, loads: strip(b.loads) } });
+  for (const d of data.devices || []) if (d.breakerId === breakerId && has(d.loads)) out.push({ col: 'devices', obj: { ...d, loads: strip(d.loads) } });
+  return out;
+}
+
+// Save the edit form: name, running watts, idle watts, how much it's on, qty, note.
+// idleW '' / null = use the estimate again (field removed).
+export function updateLoad(data, ref, patch) {
+  return editLoad(data, ref, (l) => {
+    for (const [k, v] of Object.entries(patch || {})) {
+      if (v === undefined || v === null || v === '') delete l[k];
+      else l[k] = v;
+    }
+    return l;
+  });
+}
