@@ -780,3 +780,33 @@ select.full { margin-top: 0; }
 .pl-h.h-size .h-dot { stroke-width: 3; }
 .editing .pl-room.sel, .pl-room.lift { touch-action: none; }
 .pl-tools2 { margin-top: 8px; }
+
+/* Shape house: drag walls / corners of the outline by eye */
+.pl-outline.shaping { stroke: var(--accent); }
+.shaping .pl-room { opacity: 0.6; }
+.shaping .pl-room.outside { opacity: 1; }
+.pl-room.outside rect { stroke: #e08a00; stroke-dasharray: 0.6 0.4; fill: color-mix(in srgb, #f5a524 16%, transparent); }
+.sh-e { cursor: grab; touch-action: none; }
+.sh-e .sh-hit { stroke: transparent; fill: none; stroke-linecap: round; }
+.sh-grip rect { fill: var(--accent); stroke: #fff; stroke-width: 2; }
+.sh-grip path { stroke: #fff; stroke-width: 1.8; stroke-linecap: round; fill: none; }
+.sh-c { cursor: grab; touch-action: none; }
+.sh-c .h-hit, .sh-add .h-hit { fill: transparent; }
+.sh-c .sh-dot { fill: #fff; stroke: var(--accent); stroke-width: 4; }
+.sh-c.sel .sh-dot { fill: var(--accent); stroke: #fff; stroke-width: 3; }
+.sh-add { cursor: pointer; touch-action: none; }
+.sh-add .sh-add-dot { fill: var(--card); stroke: var(--accent); stroke-width: 2; stroke-dasharray: 3 2; }
+.sh-add path { stroke: var(--accent); stroke-width: 2.6; stroke-linecap: round; }
+.sh-len { fill: var(--accent); font-weight: 700; font-family: system-ui, -apple-system, sans-serif; pointer-events: none; paint-order: stroke; stroke: var(--card); stroke-width: 0.25; }
+.pl-shape-top { flex-wrap: nowrap; }
+.pl-presets .pk { min-width: 62px; color: var(--accent); }
+.pl-presets .pk span { color: var(--ink-2); }
+.pl-plus { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border: 1.5px dashed var(--accent); border-radius: 50%; color: var(--accent); font-size: 0.9rem; line-height: 1; vertical-align: 1px; }
+.pl-fit { display: flex; align-items: center; gap: 6px; margin: 8px 0 2px; font-size: 0.86rem; font-weight: 650; color: var(--ink-2); }
+.pl-fit button { flex: 1; min-height: 40px; padding: 0 8px; border-radius: 999px; border: 1.5px solid var(--line-2); background: var(--card); color: var(--ink-2); font: inherit; font-size: 0.84rem; font-weight: 650; cursor: pointer; }
+.pl-fit button.on { border-color: var(--accent); background: var(--accent-soft); color: var(--ink); }
+.pl-about { font-size: 0.9rem; color: var(--accent); white-space: nowrap; }
+.pl-exact summary { cursor: pointer; color: var(--muted); font-weight: 600; min-height: 32px; display: flex; align-items: center; }
+.pl-exact[open] { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.pl-exact[open] summary { width: 100%; }
+.pl-feet { margin-left: 0 !important; }

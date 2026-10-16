@@ -1,6 +1,7 @@
 // Floor plan: a top-down 2D plan of the home, in feet. Everything here is optional data:
 //   home.floorplan = { w, h, rooms: [{ id, name, x, y, w, h }], outline?, photoId?, photoOpacity?, photoRot? }
 //                    or, for 2+ floors, floors: [{ id, name, rooms }] instead of rooms
+//                    outlinePts?: [{ x, y }] = the house outline drawn by eye (per floor; see shapeOf)
 //   device.pos     = { x, y, floor? }   (feet from the plan's top-left corner; no floor = first floor)
 // outline 'box' (default) draws the w x h outline; 'rooms' = the house is just its rooms
 // (L-shapes, a garage sticking out), the w x h box is only the drawing area.
@@ -28,11 +29,23 @@ export function planOf(home, floorId = '') {
   const h = clamp(snap(fp && fp.h ? fp.h : d.h), 6, 200);
   const plan = { w, h, rooms: [], outline: fp && fp.outline === 'rooms' ? 'rooms' : 'box', photoId: (fp && fp.photoId) || '', photoOpacity: fp && fp.photoOpacity != null ? Number(fp.photoOpacity) : 0.45, photoRot: (fp && Number(fp.photoRot)) || 0, hasPlan: !!fp };
   const raw = fp && Array.isArray(fp.floors) && fp.floors.length ? fp.floors : [{ id: 'f1', name: 'Floor 1', rooms: (fp && fp.rooms) || [] }];
-  plan.floors = raw.map((f, i) => ({ id: f.id || 'f' + (i + 1), name: f.name || `Floor ${i + 1}`, rooms: (f.rooms || []).filter((r) => r && r.id).map((r) => clampRoom(r, plan)) }));
+  const single = !(fp && Array.isArray(fp.floors) && fp.floors.length);
+  plan.floors = raw.map((f, i) => {
+    const pts = okPts(single ? fp && fp.outlinePts : f.outlinePts);
+    return { id: f.id || 'f' + (i + 1), name: f.name || `Floor ${i + 1}`, rooms: (f.rooms || []).filter((r) => r && r.id).map((r) => clampRoom(r, plan)), ...(pts ? { outlinePts: pts } : {}) };
+  });
   const cur = plan.floors.find((f) => f.id === floorId) || plan.floors[0];
   plan.floor = cur.id;
   plan.rooms = cur.rooms;
+  plan.outlinePts = cur.outlinePts || null;
   return plan;
+}
+
+// A saved outline, checked: 3+ finite points (snapped to 0.1 ft), else null.
+function okPts(pts) {
+  if (!Array.isArray(pts) || pts.length < 3) return null;
+  const out = pts.filter((p) => p && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y))).map((p) => ({ x: r1(Number(p.x)), y: r1(Number(p.y)) }));
+  return out.length >= 3 ? out : null;
 }
 
 // Put the current floor's rooms back into the floor list.
@@ -43,10 +56,12 @@ export function withRooms(plan, rooms) {
 // What gets saved on the home (no derived fields). One floor = { rooms }, more = { floors }.
 export function planToSave(plan) {
   const room = ({ id, name, x, y, w, h }) => ({ id, name: name || '', x, y, w, h });
-  const floors = (plan.floors || [{ id: 'f1', name: 'Floor 1', rooms: plan.rooms }]).map((f) => (f.id === plan.floor ? { ...f, rooms: plan.rooms } : f));
+  const floors = (plan.floors || [{ id: 'f1', name: 'Floor 1', rooms: plan.rooms }]).map((f) => (f.id === plan.floor ? { ...f, rooms: plan.rooms, outlinePts: plan.outlinePts } : f));
   const out = { w: plan.w, h: plan.h };
-  if (floors.length > 1) out.floors = floors.map((f) => ({ id: f.id, name: f.name, rooms: f.rooms.map(room) }));
-  else out.rooms = (floors[0] ? floors[0].rooms : plan.rooms).map(room);
+  // the outline is only saved when it isn't just the w x h box
+  const pts = (f) => (f.outlinePts && f.outlinePts.length >= 3 && !isBox(f.outlinePts, plan.w, plan.h) ? { outlinePts: f.outlinePts.map(({ x, y }) => ({ x, y })) } : {});
+  if (floors.length > 1) out.floors = floors.map((f) => ({ id: f.id, name: f.name, rooms: f.rooms.map(room), ...pts(f) }));
+  else { out.rooms = (floors[0] ? floors[0].rooms : plan.rooms).map(room); Object.assign(out, pts(floors[0] || plan)); }
   if (plan.outline === 'rooms') out.outline = 'rooms';
   if (plan.photoId) { out.photoId = plan.photoId; out.photoOpacity = plan.photoOpacity; out.photoRot = plan.photoRot || 0; }
   return out;
@@ -94,17 +109,17 @@ export function roomAt(plan, x, y) {
 // Every wall segment: the outline plus each room's four sides.
 export function walls(plan) {
   const rect = (x, y, w, h) => [[x, y, x + w, y], [x + w, y, x + w, y + h], [x, y + h, x + w, y + h], [x, y, x, y + h]];
-  return [...(plan.outline === 'rooms' ? [] : rect(0, 0, plan.w, plan.h)), ...plan.rooms.flatMap((r) => rect(r.x, r.y, r.w, r.h))];
+  const pts = plan.outlinePts && plan.outlinePts.length >= 3 ? plan.outlinePts : null;
+  const outer = pts ? pts.map((p, i) => { const q = pts[(i + 1) % pts.length]; return [p.x, p.y, q.x, q.y]; }) : plan.outline === 'rooms' ? [] : rect(0, 0, plan.w, plan.h);
+  return [...outer, ...plan.rooms.flatMap((r) => rect(r.x, r.y, r.w, r.h))];
 }
 
 // Closest point on any wall -> { x, y, dist }.
 export function nearestWall(plan, x, y) {
   let best = null;
   for (const [x1, y1, x2, y2] of walls(plan)) {
-    const px = x1 === x2 ? x1 : clamp(x, Math.min(x1, x2), Math.max(x1, x2));
-    const py = y1 === y2 ? y1 : clamp(y, Math.min(y1, y2), Math.max(y1, y2));
-    const dist = Math.hypot(px - x, py - y);
-    if (!best || dist < best.dist) best = { x: px, y: py, dist };
+    const hit = segDist({ x, y }, { x: x1, y: y1 }, { x: x2, y: y2 });
+    if (!best || hit.dist < best.dist) best = hit;
   }
   return best;
 }
@@ -340,4 +355,277 @@ export function swapRooms(a, b, plan) {
   if (a.w === b.w && a.h === b.h) return { a: a1, b: b1 };
   if (fits(a1) && fits(b1) && !overlapping([a1, b1]).size) return { a: a1, b: b1 };
   return { a: { ...a, x: b.x, y: b.y, w: b.w, h: b.h }, b: { ...b, x: a.x, y: a.y, w: a.w, h: a.h } };
+}
+
+
+// ---- house shape: the outline as a polygon he drags by eye (no measuring)
+// home.floorplan.outlinePts = [{ x, y }] (one floor) or floors[i].outlinePts (2+ floors), feet,
+// clockwise on screen. Optional: with none the outline is the w x h box (or the rooms, for
+// outline 'rooms'), exactly as before. A shape that is just the w x h box isn't saved.
+
+export const rectPts = (w, h, x = 0, y = 0) => [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }];
+
+// The points of a plan's outline (its polygon, else the box, else the rooms' outline).
+export function shapeOf(plan) {
+  if (Array.isArray(plan.outlinePts) && plan.outlinePts.length >= 3) return plan.outlinePts.map((p) => ({ x: p.x, y: p.y }));
+  if (plan.outline === 'rooms' && plan.rooms && plan.rooms.length) { const o = roomsOutline(plan.rooms); if (o.length >= 3) return o; }
+  return rectPts(plan.w, plan.h);
+}
+
+export function bboxOf(pts) {
+  const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+  const x = Math.min(...xs), y = Math.min(...ys);
+  return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
+}
+
+export const isBox = (pts, w, h) => {
+  if (!pts || pts.length !== 4) return false;
+  const k = (p) => `${p.x},${p.y}`, want = new Set(rectPts(w, h).map(k));
+  return pts.every((p) => want.has(k(p)));
+};
+
+export function polyArea(pts) {
+  let a = 0;
+  for (let i = 0; i < pts.length; i++) { const p = pts[i], q = pts[(i + 1) % pts.length]; a += p.x * q.y - q.x * p.y; }
+  return a / 2;
+}
+
+// Snap to the grid and drop repeated points (and a closing point equal to the first).
+export function cleanPts(pts, step = 1) {
+  const out = [];
+  for (const p of pts) {
+    const q = { x: snap(p.x, step), y: snap(p.y, step) };
+    const last = out[out.length - 1];
+    if (!last || last.x !== q.x || last.y !== q.y) out.push(q);
+  }
+  while (out.length > 1 && out[0].x === out[out.length - 1].x && out[0].y === out[out.length - 1].y) out.pop();
+  return out;
+}
+
+const segHit = (a, b, c, d) => {
+  const o = (p, q, r) => Math.sign((q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x));
+  const on = (p, q, r) => Math.min(p.x, q.x) <= r.x && r.x <= Math.max(p.x, q.x) && Math.min(p.y, q.y) <= r.y && r.y <= Math.max(p.y, q.y);
+  const o1 = o(a, b, c), o2 = o(a, b, d), o3 = o(c, d, a), o4 = o(c, d, b);
+  if (o1 !== o2 && o3 !== o4 && o1 && o2 && o3 && o4) return true;
+  return (!o1 && on(a, b, c)) || (!o2 && on(a, b, d)) || (!o3 && on(c, d, a)) || (!o4 && on(c, d, b));
+};
+
+// A usable outline: 3+ corners, some area, walls that don't cross each other.
+export function validShape(pts) {
+  const n = pts.length;
+  if (n < 3 || Math.abs(polyArea(pts)) < 9) return false;
+  for (let i = 0; i < n; i++)
+    for (let j = i + 1; j < n; j++) {
+      if (j === i + 1 || (i === 0 && j === n - 1)) continue; // neighbours share a corner
+      if (segHit(pts[i], pts[(i + 1) % n], pts[j], pts[(j + 1) % n])) return false;
+    }
+  return true;
+}
+
+// Drag a corner to (x, y): snaps to 1 ft, and lines up with a neighbour's wall when it is
+// within `align` ft of it (so walls come out straight by eye).
+export function moveCorner(pts, i, x, y, { align = 1.5 } = {}) {
+  const n = pts.length, a = pts[(i - 1 + n) % n], b = pts[(i + 1) % n];
+  let nx = snap(x), ny = snap(y);
+  for (const q of [a, b]) {
+    if (Math.abs(x - q.x) <= align) nx = q.x;
+    if (Math.abs(y - q.y) <= align) ny = q.y;
+  }
+  return pts.map((p, k) => (k === i ? { x: nx, y: ny } : p));
+}
+
+// "+ Corner": a new corner in the middle of wall i (from corner i to i+1). Returns the same
+// points when the wall is too short to split.
+export function addCorner(pts, i, t = 0.5) {
+  const n = pts.length, a = pts[i], b = pts[(i + 1) % n];
+  const p = { x: snap(a.x + (b.x - a.x) * t), y: snap(a.y + (b.y - a.y) * t) };
+  if ((p.x === a.x && p.y === a.y) || (p.x === b.x && p.y === b.y)) return pts;
+  return [...pts.slice(0, i + 1), p, ...pts.slice(i + 1)];
+}
+
+export function removeCorner(pts, i) {
+  if (pts.length <= 3) return pts;
+  const out = pts.filter((_, k) => k !== i);
+  return validShape(out) ? out : pts;
+}
+
+// Drag wall i (corner i to i+1) by (dx, dy): it slides straight out or in, staying parallel.
+// When the wall next to an end runs the same way (a wall split by + Corner), a new short wall
+// is made there, so pulling half a wall out makes an L, a T or a bump-out with square corners.
+// Returns { pts, i } (i = the dragged wall's index in the new points).
+export function moveEdge(pts, i, dx, dy) {
+  const n = pts.length, j = (i + 1) % n;
+  const a = pts[i], b = pts[j];
+  const ex = b.x - a.x, ey = b.y - a.y, len = Math.hypot(ex, ey) || 1;
+  let mx, my;
+  if (ey === 0) { mx = 0; my = snap(dy); } else if (ex === 0) { mx = snap(dx); my = 0; } else {
+    const nx = -ey / len, ny = ex / len, d = dx * nx + dy * ny;
+    mx = snap(nx * d); my = snap(ny * d);
+  }
+  const perp = (p, q) => (q.x - p.x) * ex + (q.y - p.y) * ey === 0;
+  const prev = pts[(i - 1 + n) % n], next = pts[(j + 1) % n];
+  const keepA = !perp(prev, a), keepB = !perp(b, next);
+  const out = [];
+  let at = -1;
+  for (let k = 0; k < n; k++) {
+    const p = pts[k];
+    if (k === i) {
+      if (keepA) out.push({ ...p });
+      at = out.length;
+      out.push({ x: p.x + mx, y: p.y + my });
+    } else if (k === j) {
+      out.push({ x: p.x + mx, y: p.y + my });
+      if (keepB) out.push({ ...p });
+    } else out.push({ ...p });
+  }
+  return { pts: out, i: at };
+}
+
+// Quick shapes on a w x h footprint (one tap, then drag): rect, L, T, U.
+export function presetShape(kind, w, h, x = 0, y = 0) {
+  const X = (f) => x + snap(w * f), Y = (f) => y + snap(h * f);
+  const P = (arr) => arr.map(([px, py]) => ({ x: px, y: py }));
+  if (kind === 'L') return P([[x, y], [X(1), y], [X(1), Y(0.55)], [X(0.55), Y(0.55)], [X(0.55), Y(1)], [x, Y(1)]]);
+  if (kind === 'T') return P([[x, y], [X(1), y], [X(1), Y(0.4)], [X(0.68), Y(0.4)], [X(0.68), Y(1)], [X(0.32), Y(1)], [X(0.32), Y(0.4)], [x, Y(0.4)]]);
+  if (kind === 'U') return P([[x, y], [X(0.32), y], [X(0.32), Y(0.5)], [X(0.68), Y(0.5)], [X(0.68), y], [X(1), y], [X(1), Y(1)], [x, Y(1)]]);
+  return rectPts(snap(w), snap(h), x, y);
+}
+
+// Distance from a point to wall a-b.
+function segDist(p, a, b) {
+  const ex = b.x - a.x, ey = b.y - a.y, l2 = ex * ex + ey * ey;
+  const t = l2 ? clamp(((p.x - a.x) * ex + (p.y - a.y) * ey) / l2, 0, 1) : 0;
+  const x = a.x + t * ex, y = a.y + t * ey;
+  return { x, y, dist: Math.hypot(p.x - x, p.y - y) };
+}
+
+// Inside the outline (a point on a wall counts as inside: plugs live on walls).
+export function pointInPoly(p, pts, tol = 0.15) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const a = pts[i], b = pts[j];
+    if (segDist(p, a, b).dist <= tol) return true;
+    if ((a.y > p.y) !== (b.y > p.y) && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+  }
+  return inside;
+}
+
+// How much of a room is outside the outline (0..1), sampled on a grid.
+export function roomOutside(r, pts) {
+  const nx = Math.min(40, Math.max(1, Math.round(r.w))), ny = Math.min(40, Math.max(1, Math.round(r.h)));
+  let out = 0;
+  for (let i = 0; i < nx; i++) for (let k = 0; k < ny; k++) if (!pointInPoly({ x: r.x + ((i + 0.5) * r.w) / nx, y: r.y + ((k + 0.5) * r.h) / ny }, pts, 0)) out++;
+  return out / (nx * ny);
+}
+
+// Rooms that stick out of the house outline -> Set of ids (a sliver under 3% doesn't count).
+export function roomsOutside(rooms, pts) {
+  const s = new Set();
+  if (!pts || pts.length < 3) return s;
+  for (const r of rooms) if (roomOutside(r, pts) > 0.03) s.add(r.id);
+  return s;
+}
+
+// The outside line of a set of rooms (the biggest connected block), as corners.
+export function roomsOutline(rooms) {
+  if (!rooms.length) return [];
+  const W = Math.min(400, Math.max(...rooms.map((r) => Math.ceil(r.x + r.w)))), H = Math.min(400, Math.max(...rooms.map((r) => Math.ceil(r.y + r.h))));
+  const fill = new Uint8Array(W * H);
+  for (const r of rooms) for (let y = Math.max(0, Math.floor(r.y)); y < Math.min(H, Math.ceil(r.y + r.h)); y++) for (let x = Math.max(0, Math.floor(r.x)); x < Math.min(W, Math.ceil(r.x + r.w)); x++) fill[y * W + x] = 1;
+  const on = (x, y) => x >= 0 && y >= 0 && x < W && y < H && fill[y * W + x];
+  const edges = new Map(); // "x,y" -> [[x2,y2]]
+  const add = (x1, y1, x2, y2) => { const k = x1 + ',' + y1; if (!edges.has(k)) edges.set(k, []); edges.get(k).push([x2, y2]); };
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (!on(x, y)) continue;
+    if (!on(x, y - 1)) add(x, y, x + 1, y);
+    if (!on(x + 1, y)) add(x + 1, y, x + 1, y + 1);
+    if (!on(x, y + 1)) add(x + 1, y + 1, x, y + 1);
+    if (!on(x - 1, y)) add(x, y + 1, x, y);
+  }
+  let best = [];
+  while (edges.size) {
+    const [k0] = edges.keys();
+    let [x, y] = k0.split(',').map(Number);
+    const loop = [];
+    for (let guard = 0; guard < 200000; guard++) {
+      const k = x + ',' + y, list = edges.get(k);
+      if (!list) break;
+      const [nx, ny] = list.pop();
+      if (!list.length) edges.delete(k);
+      loop.push({ x, y });
+      x = nx; y = ny;
+    }
+    if (polyArea(loop) > polyArea(best.length ? best : [{ x: 0, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 0 }])) best = loop;
+  }
+  return dropStraight(best);
+}
+
+// Remove corners that sit in the middle of a straight wall.
+export function dropStraight(pts) {
+  let out = cleanPts(pts);
+  let changed = true;
+  while (changed && out.length > 3) {
+    changed = false;
+    for (let i = 0; i < out.length; i++) {
+      const a = out[(i - 1 + out.length) % out.length], p = out[i], b = out[(i + 1) % out.length];
+      if ((p.x - a.x) * (b.y - p.y) - (p.y - a.y) * (b.x - p.x) === 0) { out = out.filter((_, k) => k !== i); changed = true; break; }
+    }
+  }
+  return out;
+}
+
+// ---- rooms follow the house: when the outline is stretched, rooms and plugs scale with it
+const mapV = (v, a0, al, b0, bl) => (al ? b0 + ((v - a0) * bl) / al : b0 + (v - a0));
+
+// A room in box `from` -> the same spot in box `to` (each wall snapped to 1 ft, so rooms that
+// touched still touch).
+export function scaleRoom(r, from, to) {
+  const x0 = snap(mapV(r.x, from.x, from.w, to.x, to.w)), x1 = snap(mapV(r.x + r.w, from.x, from.w, to.x, to.w));
+  const y0 = snap(mapV(r.y, from.y, from.h, to.y, to.h)), y1 = snap(mapV(r.y + r.h, from.y, from.h, to.y, to.h));
+  return { ...r, x: x0, y: y0, w: Math.max(MIN_ROOM, x1 - x0), h: Math.max(MIN_ROOM, y1 - y0) };
+}
+
+export function scalePoint(p, from, to) {
+  const out = { x: r1(mapV(p.x, from.x, from.w, to.x, to.w)), y: r1(mapV(p.y, from.y, from.h, to.y, to.h)) };
+  return p.floor ? { ...out, floor: p.floor } : out;
+}
+
+// Rooms (this floor) and their plugs, stretched from the old house box to the new one.
+// -> { rooms, pins: { [deviceId]: pos } }
+export function fitRoomsToShape(plan, devices, from, to) {
+  const rooms = plan.rooms.map((r) => scaleRoom(r, from, to));
+  const pins = {};
+  for (const d of splitPlaced(devices, plan).placed) pins[d.id] = scalePoint(d.pos, from, to);
+  return { rooms, pins };
+}
+
+// After a shape change: slide everything so nothing is left of / above 0, and make w x h the
+// box around the outline(s), rooms and plugs. -> { plan, pins: { [deviceId]: pos } }
+// devices: every device of the home (plugs on any floor shift together).
+export function normalizeShape(plan, devices = []) {
+  const floors = plan.floors.map((f) => (f.id === plan.floor ? { ...f, rooms: plan.rooms, outlinePts: plan.outlinePts } : f));
+  const xs = [], ys = [];
+  for (const f of floors) {
+    const pts = f.outlinePts && f.outlinePts.length >= 3 ? f.outlinePts : f.id === plan.floor ? null : rectPts(plan.w, plan.h);
+    for (const p of pts || []) { xs.push(p.x); ys.push(p.y); }
+    for (const r of f.rooms) { xs.push(r.x, r.x + r.w); ys.push(r.y, r.y + r.h); }
+  }
+  // plugs on the plan (in its box, or inside the new outline's box); ones already off the plan stay off
+  const ob = plan.outlinePts && plan.outlinePts.length >= 3 ? bboxOf(plan.outlinePts) : { x: 0, y: 0, w: plan.w, h: plan.h };
+  const onPlan = (p) => inBounds(p, plan) || (p.x >= ob.x && p.y >= ob.y && p.x <= ob.x + ob.w && p.y <= ob.y + ob.h);
+  const placed = devices.filter((d) => d.pos && Number.isFinite(d.pos.x) && Number.isFinite(d.pos.y) && onPlan(d.pos));
+  for (const d of placed) { xs.push(d.pos.x); ys.push(d.pos.y); }
+  if (!xs.length) return { plan, pins: {} };
+  const dx = -Math.min(0, Math.floor(Math.min(...xs))), dy = -Math.min(0, Math.floor(Math.min(...ys)));
+  // shrink from the left / top too, when the house moved away from 0 (keeps the plan snug)
+  const sx = Math.max(0, Math.floor(Math.min(...xs))), sy = Math.max(0, Math.floor(Math.min(...ys)));
+  const ox = dx - sx, oy = dy - sy;
+  const mv = (p) => ({ ...p, x: snap(p.x + ox), y: snap(p.y + oy) });
+  const nf = floors.map((f) => ({ ...f, rooms: f.rooms.map((r) => ({ ...r, x: r.x + ox, y: r.y + oy })), ...(f.outlinePts ? { outlinePts: f.outlinePts.map(mv) } : {}) }));
+  const w = clamp(Math.ceil(Math.max(...xs) + ox), 6, 200), h = clamp(Math.ceil(Math.max(...ys) + oy), 6, 200);
+  const cur = nf.find((f) => f.id === plan.floor);
+  const next = { ...plan, w, h, floors: nf, rooms: cur.rooms, outlinePts: cur.outlinePts || null };
+  const pins = {};
+  if (ox || oy) for (const d of placed) pins[d.id] = { ...d.pos, x: r1(d.pos.x + ox), y: r1(d.pos.y + oy) };
+  return { plan: next, pins };
 }
