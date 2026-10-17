@@ -166,7 +166,7 @@ const short = (v) => {
 // Fields that changed, as friendly names (deduped, in a stable order).
 // Values an edit form fills in by itself (same meaning as blank).
 const DEFAULTS = { breakers: { size: 'full', btype: 'single', kind: 'standard' }, devices: { status: 'ok', qty: '1' } };
-const dflt = (col, k, v) => (DEFAULTS[col] && DEFAULTS[col][k] === v ? null : v);
+const dflt = (col, k, v) => (DEFAULTS[col] && v != null && DEFAULTS[col][k] === String(v) ? null : v);
 export function changedFields(col, before, after) {
   const names = FIELD_NAMES[col] || {};
   const keys = [...new Set([...Object.keys(before || {}), ...Object.keys(after || {})])].filter((k) => !SKIP.has(k));

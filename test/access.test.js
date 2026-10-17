@@ -79,6 +79,7 @@ test('history lines say what changed', () => {
   assert.deepEqual(changedFields('breakers', before, after), ['label', 'wire']);
   // untouched fields re-saved by a form are not changes
   assert.deepEqual(changedFields('breakers', { amps: 20, half: undefined, wire: { size: '14', note: '' } }, { amps: '20', half: '', wire: { size: '14' } }), []);
+  assert.deepEqual(changedFields('devices', { name: 'A' }, { name: 'A', qty: 1, status: 'ok' }), []);
   const line = describeChange({ col: 'breakers', before, after }, { name: (c, o) => '#9 ' + o.label, wireText: (w) => (w ? w.size + ' AWG' : '') });
   assert.equal(line, 'Breaker #9 Kitchen counter: label "Kitchen" → "Kitchen counter", wire 12 AWG → 10 AWG');
   assert.equal(describeChange({ col: 'devices', before: null, after: { name: 'GFCI' } }), 'Added outlet GFCI');
