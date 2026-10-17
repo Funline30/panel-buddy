@@ -113,3 +113,16 @@
   .amp-tape .at-text span { font-size: 8pt; }
   .amp-tape .at-text small { font-size: 6.5pt; }
 }
+
+/* "Which label printer should I get?" - collapsed, but an obvious tappable row in every print mode */
+.printer-picks { margin: 10px 0 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); overflow: hidden; }
+.printer-picks > summary.pp-sum { list-style: none; display: flex; align-items: center; gap: 12px; padding: 12px 14px; cursor: pointer; min-height: 52px; }
+.printer-picks > summary.pp-sum::-webkit-details-marker { display: none; }
+.printer-picks .pp-ic { font-size: 1.5rem; line-height: 1; }
+.printer-picks .pp-txt { flex: 1; display: flex; flex-direction: column; }
+.printer-picks .pp-txt small { color: var(--muted, #6b7280); font-size: .8rem; font-weight: 400; }
+.printer-picks .pp-chev { font-size: 1.4rem; color: var(--muted, #6b7280); transition: transform .15s; }
+.printer-picks[open] .pp-chev { transform: rotate(90deg); }
+.printer-picks .maker-list { margin: 0; border-top: 1px solid var(--line); }
+.printer-picks > p { margin: 8px 14px 12px; }
+@media print { .printer-picks { display: none !important; } }

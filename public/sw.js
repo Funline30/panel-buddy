@@ -1,6 +1,6 @@
 // AmpMap service worker: network-first for everything (so updates always win),
 // falling back to the cached copy when offline. Data itself is cached by Firestore.
-const CACHE = 'panelbuddy-v1';
+const CACHE = 'panelbuddy-v2';
 self.addEventListener('install', (e) => {
   self.skipWaiting();
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(['./', './index.html', './manifest.webmanifest']).catch(() => {})));
