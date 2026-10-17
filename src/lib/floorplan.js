@@ -4,6 +4,8 @@
 //                    outlinePts?: [{ x, y }] = the house outline drawn by eye (per floor; see shapeOf)
 //                    autoOutline?: true = rooms first, the outline is drawn around the rooms
 //                    doors?: [door] (per floor, like outlinePts; see lib/doors.js)
+//                    openWalls?: [{ id, roomId, wall, fromFt, toFt }] = stretches with no wall
+//                      (per floor, like doors; see lib/walls.js)
 //   room.measured?    true = he typed its size (w / h can be any inch, e.g. 12.5 = 12'6")
 //   device.pos     = { x, y, floor? }   (feet from the plan's top-left corner; no floor = first floor)
 // outline 'box' (default) draws the w x h outline; 'rooms' = the house is just its rooms
@@ -74,14 +76,27 @@ export function planOf(home, floorId = '') {
     const pts = okPts(single ? fp && fp.outlinePts : f.outlinePts);
     const rooms = (f.rooms || []).filter((r) => r && r.id).map((r) => clampRoom(r, plan));
     const doors = okDoors(single ? fp && fp.doors : f.doors, rooms);
-    return { id: f.id || 'f' + (i + 1), name: f.name || `Floor ${i + 1}`, rooms, ...(pts ? { outlinePts: pts } : {}), ...(doors.length ? { doors } : {}) };
+    const ow = okOpen(single ? fp && fp.openWalls : f.openWalls, rooms);
+    return { id: f.id || 'f' + (i + 1), name: f.name || `Floor ${i + 1}`, rooms, ...(pts ? { outlinePts: pts } : {}), ...(doors.length ? { doors } : {}), ...(ow.length ? { openWalls: ow } : {}) };
   });
   const cur = plan.floors.find((f) => f.id === floorId) || plan.floors[0];
   plan.floor = cur.id;
   plan.rooms = cur.rooms;
   plan.outlinePts = cur.outlinePts || null;
   plan.doors = cur.doors || [];
+  plan.openWalls = cur.openWalls || [];
   return plan;
+}
+
+// Saved open walls, checked (same rules as lib/walls.js okOpenWalls; kept here so this file
+// doesn't import the drawing helpers): the room has to exist, bad numbers are dropped.
+function okOpen(list, rooms) {
+  if (!Array.isArray(list)) return [];
+  const r2 = (v) => Math.round(v * 100) / 100;
+  return list
+    .filter((o) => o && typeof o === 'object' && o.id && ['n', 'e', 's', 'w'].includes(o.wall) && Number.isFinite(Number(o.fromFt)) && Number.isFinite(Number(o.toFt)) && rooms.some((r) => r.id === o.roomId))
+    .map((o) => ({ id: String(o.id), roomId: o.roomId, wall: o.wall, fromFt: r2(Math.min(Number(o.fromFt), Number(o.toFt))), toFt: r2(Math.max(Number(o.fromFt), Number(o.toFt))) }))
+    .filter((o) => o.toFt - o.fromFt >= 0.05);
 }
 
 // Saved doors, checked: a room door needs its room (gone = dropped), an outside door a spot.
@@ -109,8 +124,8 @@ export function withRooms(plan, rooms) {
 // What gets saved on the home (no derived fields). One floor = { rooms }, more = { floors }.
 export function planToSave(plan) {
   const room = ({ id, name, x, y, w, h, measured }) => ({ id, name: name || '', x, y, w, h, ...(measured ? { measured: true } : {}) });
-  const dl = (f) => (f.doors && f.doors.length ? { doors: f.doors.map((d) => ({ ...d })) } : {});
-  const floors = (plan.floors || [{ id: 'f1', name: 'Floor 1', rooms: plan.rooms }]).map((f) => (f.id === plan.floor ? { ...f, rooms: plan.rooms, outlinePts: plan.outlinePts, doors: plan.doors } : f));
+  const dl = (f) => ({ ...(f.doors && f.doors.length ? { doors: f.doors.map((d) => ({ ...d })) } : {}), ...(f.openWalls && f.openWalls.length ? { openWalls: f.openWalls.map(({ id, roomId, wall, fromFt, toFt }) => ({ id, roomId, wall, fromFt, toFt })) } : {}) });
+  const floors = (plan.floors || [{ id: 'f1', name: 'Floor 1', rooms: plan.rooms }]).map((f) => (f.id === plan.floor ? { ...f, rooms: plan.rooms, outlinePts: plan.outlinePts, doors: plan.doors, openWalls: plan.openWalls } : f));
   const out = { w: plan.w, h: plan.h };
   // the outline is only saved when it isn't just the w x h box
   const pts = (f) => (f.outlinePts && f.outlinePts.length >= 3 && !isBox(f.outlinePts, plan.w, plan.h) ? { outlinePts: f.outlinePts.map(({ x, y }) => ({ x, y })) } : {});
@@ -687,7 +702,7 @@ export function fitRoomsToShape(plan, devices, from, to) {
 // box around the outline(s), rooms and plugs. -> { plan, pins: { [deviceId]: pos } }
 // devices: every device of the home (plugs on any floor shift together).
 export function normalizeShape(plan, devices = []) {
-  const floors = plan.floors.map((f) => (f.id === plan.floor ? { ...f, rooms: plan.rooms, outlinePts: plan.outlinePts, doors: plan.doors } : f));
+  const floors = plan.floors.map((f) => (f.id === plan.floor ? { ...f, rooms: plan.rooms, outlinePts: plan.outlinePts, doors: plan.doors, openWalls: plan.openWalls } : f));
   const xs = [], ys = [];
   for (const f of floors) {
     const pts = f.outlinePts && f.outlinePts.length >= 3 ? f.outlinePts : f.id === plan.floor ? null : rectPts(plan.w, plan.h);
@@ -709,7 +724,7 @@ export function normalizeShape(plan, devices = []) {
   const nf = floors.map((f) => ({ ...f, rooms: f.rooms.map((r) => ({ ...r, x: r.x + ox, y: r.y + oy })), ...(f.outlinePts ? { outlinePts: f.outlinePts.map(mv) } : {}), ...(f.doors ? { doors: f.doors.map(mvDoor) } : {}) }));
   const w = clamp(Math.ceil(Math.max(...xs) + ox), 6, 200), h = clamp(Math.ceil(Math.max(...ys) + oy), 6, 200);
   const cur = nf.find((f) => f.id === plan.floor);
-  const next = { ...plan, w, h, floors: nf, rooms: cur.rooms, outlinePts: cur.outlinePts || null, doors: cur.doors || plan.doors || [] };
+  const next = { ...plan, w, h, floors: nf, rooms: cur.rooms, outlinePts: cur.outlinePts || null, doors: cur.doors || plan.doors || [], openWalls: cur.openWalls || plan.openWalls || [] };
   const pins = {};
   if (ox || oy) for (const d of placed) pins[d.id] = { ...d.pos, x: r1(d.pos.x + ox), y: r1(d.pos.y + oy) };
   return { plan: next, pins };
@@ -847,9 +862,9 @@ export function growArea(plan, room = 8) {
 // size and the photo stay; breakers, outlets and other devices aren't part of the plan).
 // autoOutline: what the cleared plan starts with (true = rooms first).
 export function clearPlan(plan, { autoOutline = false } = {}) {
-  const floors = (plan.floors || [{ id: 'f1', name: 'Floor 1', rooms: [] }]).map(({ outlinePts, doors, ...f }) => { void outlinePts; void doors; return { ...f, rooms: [] }; });
+  const floors = (plan.floors || [{ id: 'f1', name: 'Floor 1', rooms: [] }]).map(({ outlinePts, doors, openWalls, ...f }) => { void outlinePts; void doors; void openWalls; return { ...f, rooms: [] }; });
   const cur = floors.find((f) => f.id === plan.floor) || floors[0];
-  return { ...plan, floors, floor: cur.id, rooms: [], outline: 'box', outlinePts: null, autoOutline: !!autoOutline, doors: [] };
+  return { ...plan, floors, floor: cur.id, rooms: [], outline: 'box', outlinePts: null, autoOutline: !!autoOutline, doors: [], openWalls: [] };
 }
 
 // Is there anything on the plan to clear (rooms or a drawn outline on any floor)?

@@ -870,3 +870,25 @@ select.full { margin-top: 0; }
 .sz-box { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--ink-2); }
 .sz-box input { width: 76px; min-height: 50px; padding: 6px 10px; font-size: 20px; font-weight: 700; text-align: center; border: 1.5px solid var(--input-line, var(--line-2)); border-radius: 12px; background: var(--card-2); color: var(--ink); }
 .sz-prev { font-size: 1.05rem; font-weight: 750; text-align: center; margin: 4px 0 2px !important; color: var(--accent); }
+
+/* open walls (No wall): the wall is taken out, a faint dashed line keeps rooms apart */
+.ow-gap { stroke: var(--card); stroke-linecap: butt; fill: none; pointer-events: none; }
+.ow-line { stroke: var(--muted); opacity: 0.75; fill: none; stroke-linecap: butt; pointer-events: none; }
+.ow-line.tool { stroke: var(--accent); opacity: 0.85; }
+.ow-line.sel { stroke: var(--accent); opacity: 1; }
+.ow-len { fill: var(--accent); font-weight: 700; pointer-events: none; font-family: system-ui, -apple-system, sans-serif; paint-order: stroke; stroke: var(--card); stroke-width: 0.25px; }
+.ow-grip { cursor: grab; touch-action: none; }
+.ow-grip-hit { fill: transparent; }
+.ow-grip-dot { fill: var(--accent); stroke: #fff; stroke-width: 2.5; }
+.ow-grip-ic { stroke: #fff; stroke-width: 2.2; fill: none; stroke-linecap: round; }
+.ow-sides { display: flex; align-items: center; gap: 6px; margin: 8px 0 4px; flex-wrap: wrap; }
+.ow-sides .dr-lbl { width: 100%; }
+.ow-side { flex: 1 1 0; min-width: 70px; min-height: 52px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; border: 1.5px solid var(--line-2); border-radius: 12px; background: var(--card); color: var(--ink-2); font: inherit; font-size: 0.8rem; font-weight: 650; cursor: pointer; padding: 4px 2px; }
+.ow-side span { display: flex; flex-direction: column; align-items: center; line-height: 1.1; }
+.ow-side small { font-size: 0.68rem; font-weight: 600; color: var(--muted); }
+.ow-side .ows-box { fill: none; stroke: var(--line-2); stroke-width: 1.4; }
+.ow-side .ows-wall { stroke: var(--ink); stroke-width: 3.4; stroke-linecap: round; fill: none; }
+.ow-side.open .ows-wall, .ow-side.part .ows-wall { stroke: var(--accent); stroke-dasharray: 2.6 2.4; stroke-width: 2.6; }
+.ow-side.open, .ow-side.part { border-color: var(--accent); color: var(--accent); border-style: dashed; }
+.ow-side.open small, .ow-side.part small { color: var(--accent); }
+.ow-exact .dr-lbl { min-width: 78px; }
