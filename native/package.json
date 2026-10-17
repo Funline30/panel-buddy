@@ -1,0 +1,19 @@
+{
+  "name": "ampmap-native",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Capacitor shell for the AmpMap iPhone app. The web app (repo root, Vite) is built into native/www and bundled inside the app; the website on Vercel is unchanged.",
+  "type": "module",
+  "scripts": {
+    "build-web": "node scripts/build-web.mjs",
+    "sync:ios": "node scripts/build-web.mjs && cap sync ios",
+    "open:ios": "cap open ios"
+  },
+  "dependencies": {
+    "@capacitor/core": "^8.5.3",
+    "@capacitor/ios": "^8.5.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.5.3"
+  }
+}

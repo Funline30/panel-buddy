@@ -1,0 +1,11 @@
+{
+  "appId": "com.funline30.ampmap",
+  "appName": "AmpMap",
+  "webDir": "www",
+  "ios": {
+    "contentInset": "never",
+    "scheme": "AmpMap",
+    "backgroundColor": "#1f2a3e",
+    "limitsNavigationsToAppBoundDomains": false
+  }
+}

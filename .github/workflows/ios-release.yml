@@ -1,0 +1,218 @@
+# AmpMap iPhone app: signed Release build -> App Store Connect -> TestFlight (internal testers).
+# Manual trigger only. Signing is Xcode cloud-managed (App Store Connect API key, Admin role):
+# no certificates or profiles live in the repo. Secrets (set by Caleb, never printed):
+#   APPLE_TEAM_ID, ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8
+# The TestFlight setup (wait for processing, internal group, tester) runs on Linux to save macOS minutes.
+name: iOS release (TestFlight)
+
+on:
+  # A workflow that lives only on a non-default branch cannot be dispatched until GitHub has seen it run once,
+  # so editing native/release.txt on ios-capacitor also starts a release. Otherwise: run it by hand.
+  push:
+    branches: [ios-capacitor]
+    paths: ['native/release.txt']
+  workflow_dispatch:
+    inputs:
+      skip_build:
+        description: 'Skip the build; only run the TestFlight setup for the newest build'
+        type: boolean
+        default: false
+      tester_email:
+        description: 'Internal tester to add (must be an App Store Connect user on the team)'
+        type: string
+        default: 'funlinevlogs@icloud.com'
+      group_name:
+        description: 'Internal Testing group name'
+        type: string
+        default: 'Caleb'
+
+concurrency:
+  group: ios-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: ${{ !inputs.skip_build }}
+    runs-on: macos-latest
+    timeout-minutes: 50
+    outputs:
+      build_number: ${{ steps.archive.outputs.build_number }}
+    env:
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+    defaults:
+      run:
+        working-directory: native
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            native/package-lock.json
+
+      - name: Pick newest Xcode
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_*.app 2>/dev/null | grep -v -i beta | sort -V | tail -1)
+          if [ -n "$XCODE" ]; then sudo xcode-select -s "$XCODE"; fi
+          xcodebuild -version
+          echo "::notice title=xcode::$(xcodebuild -version | tr '\n' ' ') on macOS $(sw_vers -productVersion)"
+
+      - name: Write App Store Connect API key (not printed)
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          for v in APPLE_TEAM_ID ASC_KEY_ID ASC_ISSUER_ID; do
+            if [ -z "${!v}" ]; then echo "::error::Repository secret $v is missing or empty"; exit 1; fi
+          done
+          if [ -z "$ASC_KEY_P8" ]; then echo "::error::Repository secret ASC_KEY_P8 is missing or empty"; exit 1; fi
+          mkdir -p "$RUNNER_TEMP/asc"
+          KEY="$RUNNER_TEMP/asc/AuthKey_${ASC_KEY_ID}.p8"
+          python3 scripts/write_p8.py "$KEY"
+          chmod 600 "$KEY"
+          echo "ASC_KEY_PATH=$KEY" >> "$GITHUB_ENV"
+
+      - name: Install web app + Capacitor
+        run: |
+          (cd .. && npm ci --no-audit --no-fund)
+          npm ci --no-audit --no-fund
+
+      - name: Bundle website + sync iOS project
+        run: npm run sync:ios
+
+      - name: Archive (Release, unsigned)
+        id: archive
+        # Automatic signing at archive time wants an iOS Development profile, and Apple only makes one
+        # when the team has a registered device. So archive unsigned and let the export step sign it for
+        # the App Store with a cloud-managed distribution certificate (no devices needed).
+        run: |
+          set -o pipefail
+          echo "build_number=$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
+          xcodebuild archive \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/App.xcarchive \
+            -derivedDataPath build/dd \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
+            > archive.log 2>&1 || { tail -60 archive.log; exit 1; }
+          grep -E 'ARCHIVE (SUCCEEDED|FAILED)' archive.log || true
+          /usr/libexec/PlistBuddy -c 'Print :ApplicationProperties' build/App.xcarchive/Info.plist
+          echo "::notice title=archive::Archived build $GITHUB_RUN_NUMBER"
+
+      - name: Ad-hoc sign the archived app (replaced by the App Store signature at export)
+        run: |
+          APP=build/App.xcarchive/Products/Applications/App.app
+          ls "$APP/Frameworks" 2>/dev/null || true
+          find "$APP" -depth \( -name '*.framework' -o -name '*.dylib' -o -name '*.appex' \) -print0 | while IFS= read -r -d '' f; do
+            codesign --force --sign - --timestamp=none "$f"
+          done
+          codesign --force --sign - --timestamp=none --entitlements ios/App/App/App.entitlements "$APP"
+          codesign -d --entitlements :- "$APP" 2>/dev/null | tr -d '\n\t' | head -c 600; echo
+
+      - name: Export (App Store, cloud-managed signing)
+        run: |
+          set -o pipefail
+          cat > build/ExportOptions.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>export</string>
+            <key>teamID</key><string>${APPLE_TEAM_ID}</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>uploadSymbols</key><true/>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict>
+          </plist>
+          EOF
+          xcodebuild -exportArchive \
+            -archivePath build/App.xcarchive \
+            -exportPath build/export \
+            -exportOptionsPlist build/ExportOptions.plist \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            > export.log 2>&1 || { tail -60 export.log; exit 1; }
+          tail -8 export.log
+          ls -la build/export
+          IPA=$(ls build/export/*.ipa | head -1)
+          echo "IPA_PATH=$PWD/$IPA" >> "$GITHUB_ENV"
+          rm -rf build/ipa && mkdir -p build/ipa && unzip -q "$IPA" -d build/ipa
+          ENT=$(codesign -d --entitlements :- build/ipa/Payload/*.app 2>/dev/null | tr -d '\n\t' | sed 's/%/%25/g')
+          AUTH=$(codesign -dvv build/ipa/Payload/*.app 2>&1 | grep -E '^Authority=' | head -1)
+          echo "::notice title=signed::$AUTH | $ENT"
+
+      - name: Upload to App Store Connect
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          cp "$ASC_KEY_PATH" ~/.appstoreconnect/private_keys/
+          xcrun altool --upload-app -f "$IPA_PATH" -t ios --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID" --output-format normal > upload.log 2>&1 || { tail -40 upload.log; exit 1; }
+          tail -10 upload.log
+          echo "::notice title=upload::Build $GITHUB_RUN_NUMBER uploaded to App Store Connect"
+
+      - name: Show errors as annotations
+        if: failure()
+        run: |
+          for f in archive.log export.log upload.log; do
+            test -f "$f" || continue
+            grep -E 'error:|error\b|Error Domain|Provisioning|certificate|signing|No profiles|requires a provisioning|entitlement|Invalid|failed' "$f" \
+              | grep -v -E '^\s*$' | sort -u | head -30 | cut -c1-400 \
+              | while IFS= read -r line; do echo "::error title=$f::$(echo "$line" | sed 's/%/%25/g')"; done
+          done
+          for d in "$TMPDIR"/*.xcdistributionlogs; do
+            test -d "$d" || continue
+            grep -h -E 'error|Error|failed' "$d"/*.log 2>/dev/null | sort -u | head -15 | cut -c1-400 \
+              | while IFS= read -r line; do echo "::warning title=distribution log::$(echo "$line" | sed 's/%/%25/g')"; done
+          done
+          true
+
+      - name: Remove API key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/asc" ~/.appstoreconnect/private_keys
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-release-logs
+          retention-days: 7
+          path: |
+            native/archive.log
+            native/export.log
+            native/upload.log
+
+  testflight:
+    needs: build
+    if: ${{ always() && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install JWT library
+        run: python -m pip install --quiet pyjwt cryptography
+
+      - name: Wait for processing, add to internal group, invite tester
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          BUNDLE_ID: com.funline30.ampmap
+          BUILD_NUMBER: ${{ needs.build.outputs.build_number }}
+          TESTER_EMAIL: ${{ inputs.tester_email || 'funlinevlogs@icloud.com' }}
+          GROUP_NAME: ${{ inputs.group_name || 'Caleb' }}
+        run: python native/scripts/testflight.py

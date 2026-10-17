@@ -1,0 +1,159 @@
+# AmpMap iPhone app: unsigned simulator build, to prove the Capacitor project compiles.
+# Runs for the ios-capacitor branch (or by hand). The repo is public, so macOS minutes are free;
+# superseded runs are cancelled anyway. No signing, no secrets used.
+name: iOS build (simulator, unsigned)
+
+on:
+  push:
+    branches: [ios-capacitor]
+    paths:
+      - 'native/**'
+      - 'src/**'
+      - 'public/**'
+      - 'index.html'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/ios-build.yml'
+  workflow_dispatch:
+    inputs:
+      screenshots:
+        description: 'Boot a simulator and take screenshots'
+        type: boolean
+        default: true
+
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: native
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            native/package-lock.json
+
+      - name: Pick newest Xcode
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_*.app 2>/dev/null | grep -v -i beta | sort -V | tail -1)
+          if [ -n "$XCODE" ]; then sudo xcode-select -s "$XCODE"; fi
+          xcodebuild -version
+          sw_vers
+
+      - name: Web app tests
+        working-directory: .
+        run: |
+          npm ci --no-audit --no-fund
+          npm test
+
+      - name: Install Capacitor
+        run: npm ci --no-audit --no-fund
+
+      - name: Bundle website + sync iOS project
+        run: npm run sync:ios
+
+      - name: Build for iPhone Simulator (no signing)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            build | tee xcodebuild.log | grep -E 'error:|warning: .*(AmpBridge|AmpNative)|BUILD (SUCCEEDED|FAILED)|\*\* ' || true
+          grep -q 'BUILD SUCCEEDED' xcodebuild.log
+
+      - name: Show compile errors as annotations
+        if: failure()
+        run: |
+          test -f xcodebuild.log && grep -E 'error:' xcodebuild.log | sort -u | head -40 | while IFS= read -r line; do echo "::error::$line"; done || true
+
+      - name: Check the built app
+        run: |
+          APP=build/Build/Products/Debug-iphonesimulator/App.app
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIcons' "$APP/Info.plist" || true
+          test -f "$APP/public/index.html"
+          test -f "$APP/public/native-build.txt"
+          test -f "$APP/capacitor.config.json"
+          test -f "$APP/PrivacyInfo.xcprivacy"
+
+      - name: Simulator screenshots
+        if: github.event_name == 'push' || inputs.screenshots
+        continue-on-error: true
+        run: |
+          APP=build/Build/Products/Debug-iphonesimulator/App.app
+          DEVICE=$(xcrun simctl list devices available -j | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; c=[x for r,v in d.items() if 'iOS' in r for x in v if x['name'].startswith('iPhone') and 'Pro' in x['name'] and 'Max' not in x['name']]; c=c or [x for r,v in d.items() if 'iOS' in r for x in v if x['name'].startswith('iPhone')]; print(c[-1]['udid'])")
+          echo "device $DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" "$APP"
+          xcrun simctl launch "$DEVICE" com.funline30.ampmap
+          mkdir -p shots
+          sleep 4
+          xcrun simctl io "$DEVICE" screenshot shots/01-launch.png
+          sleep 30
+          xcrun simctl io "$DEVICE" screenshot shots/02-app.png
+          xcrun simctl spawn "$DEVICE" log show --last 2m --predicate 'process == "App"' --style compact > shots/app-log.txt 2>&1 || true
+          # The web app's own console lines (Capacitor prints them), as one readable annotation.
+          grep -E 'startup|\[error\]|\[warn\]|Error|failed' shots/app-log.txt | grep -v -E 'nw_|CFNetwork|RunningBoard|LaunchServices' | cut -c1-240 | tail -14 > shots/app-log-short.txt || true
+          if [ -s shots/app-log-short.txt ]; then echo "::notice title=app log::$(sed 's/%/%25/g' shots/app-log-short.txt | awk '{printf "%s%%0A", $0}')"; else echo "::notice title=app log::no startup errors in the app log"; fi
+
+      # Small JPEG copies printed as annotations, so the screenshots can be read back through the
+      # GitHub API (artifacts need a browser download). Notice + warning lines, 3.5 KB each.
+      - name: Screenshot preview 01-launch (annotations)
+        if: github.event_name == 'push' || inputs.screenshots
+        continue-on-error: true
+        run: |
+          f=01-launch
+          test -f shots/$f.png || exit 0
+          sips -Z 560 -s format jpeg -s formatOptions 40 shots/$f.png --out shots/$f-small.jpg >/dev/null
+          { base64 -i shots/$f-small.jpg | tr -d '\n' | fold -w 3500; echo; } | grep -v '^$' > shots/$f.b64
+          n=$(wc -l < shots/$f.b64 | tr -d ' ')
+          echo "$f: $(wc -c < shots/$f-small.jpg) bytes, $n chunks"
+          i=0
+          while IFS= read -r chunk; do
+            i=$((i+1))
+            if [ $((i % 2)) -eq 1 ]; then kind=notice; else kind=warning; fi
+            echo "::$kind title=shot $f $i/$n::$chunk"
+          done < shots/$f.b64
+
+      - name: Screenshot preview 02-app (annotations)
+        if: github.event_name == 'push' || inputs.screenshots
+        continue-on-error: true
+        run: |
+          f=02-app
+          test -f shots/$f.png || exit 0
+          sips -Z 560 -s format jpeg -s formatOptions 40 shots/$f.png --out shots/$f-small.jpg >/dev/null
+          { base64 -i shots/$f-small.jpg | tr -d '\n' | fold -w 3500; echo; } | grep -v '^$' > shots/$f.b64
+          n=$(wc -l < shots/$f.b64 | tr -d ' ')
+          echo "$f: $(wc -c < shots/$f-small.jpg) bytes, $n chunks"
+          i=0
+          while IFS= read -r chunk; do
+            i=$((i+1))
+            if [ $((i % 2)) -eq 1 ]; then kind=notice; else kind=warning; fi
+            echo "::$kind title=shot $f $i/$n::$chunk"
+          done < shots/$f.b64
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-simulator-build
+          retention-days: 7
+          path: |
+            native/shots/
+            native/xcodebuild.log
