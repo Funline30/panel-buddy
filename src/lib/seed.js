@@ -8,7 +8,7 @@ export function seedData() {
   const P = 'p_main';
   const homes = [{ id: H, type: 'mobile', name: 'Sample mobile home', address: 'Riesel, TX (example)', notes: 'Example data - edit or delete anything.', createdAt: now, portables: [{ name: 'Vacuum (upright)', watts: 1000, qty: 1, note: 'Typical estimate', portable: true }, { name: 'Carpet cleaner', watts: 1200, qty: 1, note: 'Typical estimate', portable: true }] }];
   const panels = [
-    { id: P, homeId: H, name: 'Main panel', type: 'main', layout: 'auto', mainAmps: '200', spaces: '24', location: 'Hall closet by back door', notes: 'Main breaker at top. Spaces 23-24 empty.', createdAt: now },
+    { id: P, homeId: H, name: 'Main panel', type: 'main', layout: 'auto', mainAmps: '200', spaces: '24', location: 'Hall closet by back door', notes: 'Main breaker at top. Spaces 23-24 empty.', createdAt: now, genHookup: 'interlock', genSize: '7.5 kW', genInlet: 'Outside wall', spd: 'yes', groundRod: '1', waterBond: 'yes' },
   ];
   const b = (id, slot, poles, amps, label, rooms, extra = {}) => ({
     id, homeId: H, panelId: P, slot: String(slot), poles: String(poles), amps: String(amps), label, rooms, kind: 'standard', notes: '', loads: [], createdAt: now, ...extra,
@@ -104,6 +104,11 @@ export function seedData() {
   panels.push(...ex.panels);
   breakers.push(...ex.breakers);
   devices.push(...ex.devices);
+  const cx = commercialExample(now);
+  homes.push(...cx.homes);
+  panels.push(...cx.panels);
+  breakers.push(...cx.breakers);
+  devices.push(...cx.devices);
   return { homes, panels, breakers, devices, customers: [], photos: [] };
 }
 
@@ -218,4 +223,62 @@ export function seedPro() {
     ],
     devices: [],
   };
+}
+
+
+// Example commercial building (pro-electrical): MDP 1200A 277/480V feeding a 120/208V
+// lighting/receptacle panel LP-1 (through a step-down transformer) and a 277/480V panel HP-1.
+// Also added on request with ?example=commercial to a demo started before it existed.
+export function commercialExample(now = Date.now()) {
+  const H = 'h_comm';
+  const homes = [{ id: H, type: 'commercial', name: 'Sample commercial building', address: 'Example data', notes: 'Example: a 1200A 277/480V service with a 120/208V panel and a 480V panel.', createdAt: now }];
+  const panels = [
+    { id: 'p_mdp', homeId: H, name: 'MDP', type: 'main', layout: 'auto', service: '3ph480', mainAmps: '1200', spaces: '18', location: 'Electrical room 101', notes: 'Main distribution panel.', powerSource: 'pedestal', createdAt: now,
+      genHookup: 'ats', genSize: 'other', genSizeOther: '150 kW', spd: 'yes', groundRod: '2', waterBond: 'yes', groundNotes: 'Bonded to building steel',
+      runs: [{ id: 'r1', from: 'MDP', to: 'Transformer T-1 → LP-1', wire: '4/0', conduit: 'emt' }, { id: 'r2', from: 'MDP', to: 'HP-1', wire: '4/0', conduit: 'emt' }] },
+    { id: 'p_lp1', homeId: H, name: 'LP-1', type: 'sub', layout: 'auto', service: '3ph208', mainAmps: '225', spaces: '42', location: 'Electrical room 101', notes: 'Lights and receptacles. Fed through 112.5 kVA transformer T-1.', fedFrom: 'p_mdp', fedBreaker: 'm1', feeder: '4/0 AL', powerSource: 'subfeed', createdAt: now },
+    { id: 'p_hp1', homeId: H, name: 'HP-1', type: 'sub', layout: 'auto', service: '3ph480', mainAmps: '225', spaces: '30', location: 'Mechanical mezzanine', notes: '', fedFrom: 'p_mdp', fedBreaker: 'm2', feeder: '4/0 AL', powerSource: 'subfeed', createdAt: now },
+  ];
+  const b = (id, panelId, slot, poles, amps, label, extra = {}) => ({ id, homeId: H, panelId, slot: String(slot), poles: String(poles), amps: String(amps), label, rooms: [], kind: 'standard', notes: '', loads: [], createdAt: now, ...(poles === 3 ? { btype: 'triple' } : {}), ...extra });
+  const W = (name, watts, qty = 1) => ({ name, watts, qty });
+  const breakers = [
+    // MDP 277/480V
+    b('m1', 'p_mdp', 1, 3, 400, 'Transformer T-1 → LP-1', { rooms: ['Electrical room 101'] }),
+    b('m2', 'p_mdp', 2, 3, 225, 'HP-1', { rooms: ['Mechanical mezzanine'] }),
+    b('m3', 'p_mdp', 7, 3, 125, 'RTU-1 rooftop unit', { rooms: ['Roof'], loads: [W('Rooftop AC unit (RTU-1)', 60000)] }),
+    b('m4', 'p_mdp', 8, 3, 60, 'Elevator', { rooms: ['Lobby'], loads: [W('Elevator motor (running)', 18000)] }),
+    b('m5', 'p_mdp', 13, 3, 100, 'Spare', { kind: 'spare' }),
+    // LP-1 120/208V
+    b('l1', 'p_lp1', 1, 1, 20, 'Office 102 receptacles', { rooms: ['Office 102'], kind: 'afci', loads: [W('Computer + monitors', 300, 3)] }),
+    b('l2', 'p_lp1', 2, 1, 20, 'Office 103 receptacles', { rooms: ['Office 103'], loads: [W('Computer + monitors', 300, 2)] }),
+    b('l3', 'p_lp1', 3, 1, 20, 'Break room counter', { rooms: ['Break room'], kind: 'gfci', loads: [W('Coffee maker', 1200), W('Microwave', 1200)] }),
+    b('l4', 'p_lp1', 4, 1, 20, 'Break room fridge', { rooms: ['Break room'], loads: [W('Refrigerator', 600)] }),
+    b('l5', 'p_lp1', 5, 1, 20, 'Restroom receptacles', { rooms: ['Restrooms'], kind: 'gfci', loads: [W('Hand dryer', 1500)] }),
+    b('l6', 'p_lp1', 6, 1, 20, 'Copy room', { rooms: ['Copy room'], loads: [W('Copier', 1500)] }),
+    b('l7', 'p_lp1', 7, 1, 20, 'Exterior sign', { rooms: ['Exterior'], loads: [W('LED sign', 400)] }),
+    b('l8', 'p_lp1', 8, 1, 20, 'Exit / emergency lights', { rooms: ['Corridors'], loads: [W('Exit signs', 5, 8)] }),
+    b('l9', 'p_lp1', 9, 2, 50, 'EV charger (parking)', { rooms: ['Parking'], loads: [W('EV charger (Level 2)', 9600)] }),
+    b('l10', 'p_lp1', 10, 1, 20, 'Server closet', { rooms: ['IT closet'], loads: [W('Network rack', 800)] }),
+    b('l13', 'p_lp1', 13, 3, 30, 'Water heater WH-1', { rooms: ['Mechanical'], loads: [W('Water heater (3-phase)', 9000)] }),
+    b('l14', 'p_lp1', 14, 1, 20, 'Spare', { kind: 'spare' }),
+    // HP-1 277/480V
+    b('h1', 'p_hp1', 1, 1, 20, 'Lights: open office', { rooms: ['Open office'], loads: [W('LED troffers', 40, 24)] }),
+    b('h2', 'p_hp1', 2, 1, 20, 'Lights: corridors', { rooms: ['Corridors'], loads: [W('LED troffers', 40, 12)] }),
+    b('h3', 'p_hp1', 3, 1, 20, 'Lights: warehouse', { rooms: ['Warehouse'], loads: [W('LED high-bay', 150, 16)] }),
+    b('h4', 'p_hp1', 4, 1, 20, 'Lights: parking lot', { rooms: ['Parking'], loads: [W('LED pole light', 150, 8)] }),
+    b('h5', 'p_hp1', 5, 1, 20, 'Lights: exterior wall packs', { rooms: ['Exterior'], loads: [W('Wall pack', 60, 10)] }),
+    b('h7', 'p_hp1', 7, 3, 40, 'RTU-2 rooftop unit', { rooms: ['Roof'], loads: [W('Rooftop AC unit (RTU-2)', 20000)] }),
+  ];
+  const d = (id, breakerId, type, name, room, extra = {}) => ({ id, homeId: H, breakerId, type, name, room, location: '', gfci: 'unknown', afci: 'unknown', status: 'working', notes: '', readings: [], createdAt: now, ...extra });
+  const devices = [
+    d('cd1', 'h1', 'light', 'LED troffers (24)', 'Open office', { style: 'recessed', qty: 24 }),
+    d('cd2', 'l3', 'outlet', 'Counter GFCI', 'Break room', { style: 'gfci', gfci: 'gfci_breaker' }),
+    d('cd3', 'l9', 'ev', 'EV charger', 'Parking', { notes: '48A Level 2 charger on a 60A breaker per the label.' }),
+    d('cd4', 'm3', 'hvac', 'RTU-1 rooftop unit', 'Roof'),
+    d('cd5', 'l13', 'waterheater', 'Water heater WH-1', 'Mechanical'),
+    d('cd6', 'l8', 'smoke', 'Smoke + CO alarms', 'Corridors', { style: 'combo', qty: 6 }),
+    d('cd7', 'h5', 'light', 'Wall packs (10)', 'Exterior', { style: 'exterior', qty: 10 }),
+    d('cd8', 'l1', 'switch', 'Light switch by door', 'Office 102', { style: 'smart' }),
+  ];
+  return { homes, panels, breakers, devices };
 }

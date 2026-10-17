@@ -236,8 +236,9 @@ function part(watts, volts, rating) {
 // The breaker readings every screen uses. watts / amps / pct / level = the MAIN number
 // (Typical, with any active "Right now" taps), so older screen code keeps working.
 // typ* = pure Typical, idle* = Idle, all* = Peak (everything running).
-export function readings(breaker, devices = [], { t = Date.now() } = {}) {
-  const volts = voltsFor(breaker && breaker.poles);
+// volts: optional override (three-phase panels: 120/208, 277/480; a 3-pole load uses V x 1.732).
+export function readings(breaker, devices = [], { t = Date.now(), volts: vOver = 0 } = {}) {
+  const volts = vOver > 0 ? vOver : voltsFor(breaker && breaker.poles);
   const rating = breakerAmps(breaker);
   const own = (breaker && breaker.loads) || [];
   const outlets = devicesWithLoads(breaker, devices);

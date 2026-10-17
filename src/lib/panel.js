@@ -38,8 +38,9 @@ export const isTwoPole = (b) => String(b && b.poles) === '2';
 
 // What the user picked in the "Breaker type" dropdown. Older breakers: Single or 2-pole.
 export function breakerType(b) {
-  if (b && ['single', 'double', 'tandem', 'quad'].includes(b.btype)) return b.btype;
+  if (b && ['single', 'double', 'triple', 'tandem', 'quad'].includes(b.btype)) return b.btype;
   if (sizeOf(b) === 'half') return 'tandem';
+  if (String(b && b.poles) === '3') return 'triple';
   return isTwoPole(b) ? 'double' : 'single';
 }
 
@@ -59,7 +60,7 @@ export function cellsFor(b, arg = 'two') {
   if (!Number.isFinite(n) || n < 1) return null;
   const { layout, numbering } = ctx(arg);
   const half = sizeOf(b) === 'half';
-  const poles = isTwoPole(b) ? 2 : 1;
+  const poles = !half && String(b.poles) === '3' ? 3 : isTwoPole(b) ? 2 : 1;
   const len = (half ? 1 : 2) * poles;
   let start = numbering === 'half' ? idxOf(n, layout) : 2 * idxOf(n, layout) + (half && b.half === 'B' ? 1 : 0);
   // 2 numbers per row: a full-size breaker always fills whole rows, so one saved at the
@@ -107,7 +108,7 @@ export function slotLabel(b, arg = 'two') {
   if (numbering === 'half') {
     const nums = slotsFor(b, arg);
     if (nums.length === 1) return String(nums[0]);
-    return c.poles === 2 ? `${nums[0]}–${nums[nums.length - 1]}` : nums.join('/');
+    return c.poles >= 2 ? `${nums[0]}–${nums[nums.length - 1]}` : nums.join('/');
   }
   const per = c.half ? 1 : 2; // half-rows per pole
   const parts = [];
@@ -231,6 +232,7 @@ export function planFor(btype, slot, arg = 'two') {
   const n = snapSlot(btype, slot, arg);
   if (!Number.isFinite(n) || n < 1) return [];
   if (btype === 'tandem' || btype === 'quad') return groupPlan(btype, n, arg);
+  if (btype === 'triple') return [{ slot: n, half: '', size: 'full', poles: '3', role: 'Three-pole' }];
   return [{ slot: n, half: '', size: 'full', poles: btype === 'double' ? '2' : '1', role: btype === 'double' ? 'Double-pole' : 'Single' }];
 }
 
@@ -241,6 +243,7 @@ export function coversText(btype, slot, arg = 'two') {
   const labs = plan.map((p) => slotLabel(p, arg));
   const nums = [...new Set(plan.flatMap((p) => slotsFor(p, arg)))];
   if (btype === 'double') return `Covers ${labs[0]} · one 240V circuit`;
+  if (btype === 'triple') return `Covers ${labs[0]} · one 3-phase circuit`;
   if (btype === 'tandem') return `${labs[0]} and ${labs[1]} · 2 circuits, one breaker`;
   if (btype === 'quad') return `${labs[0]}, ${labs[1]} (240V) and ${labs[2]} · 3 circuits`;
   return nums.length > 1 ? `Covers ${labs[0]} · one circuit` : `Space ${labs[0]} · one circuit`;

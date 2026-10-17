@@ -16,6 +16,8 @@ import {
 import { shoppingList, shoppingCsv, lineText } from './lib/shopping.js';
 import { layoutOf, panelSpaces, slotsFor, slotLabel, numberingOf, overlaps, occupancy, halfRows, positionLabel, positionSlot, groupPlan, directoryRows, breakerType, sizeOf, keysFor, planFor, snapSlot, coversText, findClash, clashText, stickerText, isTwoPole } from './lib/panel.js';
 import { seedPro } from './lib/seed.js';
+import { SERVICE_TYPES, serviceOf, isThreePhase, isCommercial, mainAmpChoices, mainAmpsNum, polesOf, breakerPhases, isAutoPhase, phaseText, phaseChoices, breakerVolts, phaseTotals, FEEDER_SIZES, feedParent, wouldLoop, feedRows, feedText, feederText, GEN_HOOKUPS, GEN_INLETS, GEN_SIZES, YES_NO, GROUND_RODS, hasGenerator, generatorText, panelExtrasText, groundingText, CONDUIT_OPTIONS, cleanRun, runText, DEVICE_GROUPS, defaultsHint, deviceDefaults, TOUR_KEY, TOUR_STEPS, shouldShowTour } from './lib/pro.js';
+import './pro.css';
 import { LOAD_PRESETS, PRESET_NOTE } from './lib/presets.js';
 import { loadSummary, levelText, fmtAmps, shoreSummary, deviceWatts, voltsFor, breakerAmps, isOn, readings, loadReading, deviceReading, projectLoad, NOW_HOURS } from './lib/load.js';
 import { USE_OPTIONS, habitOf, useLabel, HABIT_NOTE, guessHabit } from './lib/habits.js';
@@ -130,7 +132,23 @@ const slotText = (b) => slotLabel(b, panelOf(b) || 'two');
 const breakerSlots = slotsOf;
 // circuit load = items listed on the breaker + items listed on each of its outlets
 // Idle / Typical / Peak (see load.js readings): watts/pct/level = Typical (main number)
-const sumOf = (b) => readings(b, D().devices);
+// three-phase panels: 120/208, 277/480; a 3-pole load = V x 1.732. Single-phase = as before.
+const voltsOf = (b) => { const p = panelOf(b); if (!p || (!isThreePhase(p) && polesOf(b) < 3)) return 0; return polesOf(b) === 3 ? breakerVolts(b, p) * Math.sqrt(3) : breakerVolts(b, p); };
+const sumOf = (b) => readings(b, D().devices, { volts: voltsOf(b) });
+// tap-to-pick chips (radio buttons that look like chips)
+const chipsHtml = (name, list, value, { label = '', cls = '' } = {}) => `<div class="pick-chips ${cls}" role="radiogroup"${label ? ` aria-label="${esc(label)}"` : ''}>${list.map((o) => { const v = typeof o === 'string' ? o : o.value; const l = typeof o === 'string' ? (o === 'other' ? 'Other' : o) : o.label; return `<label class="pchip"><input type="radio" name="${name}" value="${esc(v)}" ${String(value ?? '') === String(v) ? 'checked' : ''}><span>${esc(l)}</span></label>`; }).join('')}</div>`;
+const DEFAULT_SVC = '1ph240';
+function bindChipClear(root) {
+  // tapping a picked chip again clears it (these are all optional)
+  root.querySelectorAll('.pick-chips input[type=radio]').forEach((r) => {
+    r.dataset.was = r.checked ? '1' : '';
+    r.addEventListener('click', () => {
+      if (r.dataset.was === '1') { r.checked = false; r.dispatchEvent(new Event('change', { bubbles: true })); }
+      root.querySelectorAll(`input[name="${r.name}"]`).forEach((x) => (x.dataset.was = x.checked ? '1' : ''));
+    });
+  });
+}
+const setOpt = (obj, key, val) => { if (val != null && val !== '') obj[key] = val; else delete obj[key]; };
 const wattsText = (w) => `${Math.round(w).toLocaleString('en-US')}W`;
 const homeLabel = (h) => {
   const c = h.customerId && byId('customers', h.customerId);
@@ -418,6 +436,7 @@ async function render() {
   const id = parts[3];
   try {
     if (view === 'panel') return renderPanel(homeId, id);
+    if (view === 'tree') return renderTree(homeId);
     if (view === 'breaker') return renderBreaker(homeId, id);
     if (view === 'device') return renderDevice(homeId, id);
     if (view === 'sticker') return renderSticker(homeId, q);
@@ -1099,11 +1118,14 @@ function renderPanel(homeId, panelId) {
     return bindShell();
   }
   const panel = panels.find((p) => p.id === panelId) || panels.find((p) => p.type === 'main') || panels[0];
-  const breakers = inHome('breakers', homeId).filter((b) => b.panelId === panel.id);
+  const breakersAll = inHome('breakers', homeId);
+  const breakers = breakersAll.filter((b) => b.panelId === panel.id);
   const devices = inHome('devices', homeId);
   const layout = layoutOf(panel);
   const one = layout === 'one';
   const halfNum = numberingOf(panel) === 'half';
+  const three = isThreePhase(panel);
+  const home = byId('homes', homeId) || {};
   const rows = halfRows(panel, breakers); // half-space rows per column
   const occ = occupancy(panel, breakers);
   const cells = [];
@@ -1118,10 +1140,13 @@ function renderPanel(homeId, panelId) {
     const sum = sumOf(b);
     const nDev = devices.filter((d) => d.breakerId === b.id).length;
     const dead = devices.some((d) => d.breakerId === b.id && (d.status === 'dead' || d.status === 'repair'));
-    const meta = [nDev ? `${nDev} item${nDev > 1 ? 's' : ''}` : '', sum.level !== 'none' ? `${Math.round(sum.pct)}%${sum.allLevel === 'over' ? ' ⚠️' : ''}` : '', b.leg ? `L${esc(b.leg)}` : '', dead ? '<b class="bad">needs fix</b>' : '', b.kind && b.kind !== 'standard' && b.kind !== 'spare' ? esc(b.kind.toUpperCase()) : ''].filter(Boolean).join(' · ');
-    const tag = isHalf ? (bt === 'quad' ? 'QUAD' : 'TANDEM') : isTwoPole(b) ? '240V' : '';
-    cells.push(`<a class="brk ${isHalf ? 'half ' + (keys.length > 1 ? 'half-mid' : b.half === 'B' ? 'half-b' : 'half-a') : ''} ${isTwoPole(b) ? 'dbl' : ''} ${b.kind === 'spare' ? 'spare' : ''} lvl-${sum.level}" href="#/h/${homeId}/breaker/${b.id}" style="grid-column:${col};grid-row:${start + 1} / span ${keys.length}">
-      <span class="brk-slot">${esc(slotText(b))}</span>
+    const meta = [nDev ? `${nDev} item${nDev > 1 ? 's' : ''}` : '', sum.level !== 'none' ? `${Math.round(sum.pct)}%${sum.allLevel === 'over' ? ' ⚠️' : ''}` : '', three ? '' : b.leg ? `L${esc(b.leg)}` : '', dead ? '<b class="bad">needs fix</b>' : '', b.kind && b.kind !== 'standard' && b.kind !== 'spare' ? esc(b.kind.toUpperCase()) : ''].filter(Boolean).join(' · ');
+    const np = polesOf(b);
+    const tag = isHalf ? (bt === 'quad' ? 'QUAD' : 'TANDEM') : np === 3 ? '3-POLE' : isTwoPole(b) ? (three ? `${serviceOf(panel).ll}V` : '240V') : '';
+    const phs = three ? breakerPhases(b, panel) : [];
+    cells.push(`<a class="brk ${isHalf ? 'half ' + (keys.length > 1 ? 'half-mid' : b.half === 'B' ? 'half-b' : 'half-a') : ''} ${np >= 2 ? 'dbl' : ''} ${np === 3 ? 'tri' : ''} ${b.kind === 'spare' ? 'spare' : ''} lvl-${sum.level}" href="#/h/${homeId}/breaker/${b.id}" style="grid-column:${col};grid-row:${start + 1} / span ${keys.length}">
+      ${phs.length ? `<span class="ph-tags" aria-label="Phase ${phs.join(' ')}">${phs.map((x) => `<b class="ph ph-${x}">${x}</b>`).join('')}</span>` : ''}
+      <span class="brk-slot">${esc(np === 3 ? (() => { const ns = slotsFor(b, panel); return ns.length > 1 ? `${ns[0]}–${ns[ns.length - 1]}` : slotText(b); })() : slotText(b))}</span>
       <span class="brk-handle">${esc(ampsText(b))}</span>
       <span class="brk-label">${esc(b.label || 'Unlabeled')}</span>
       ${isHalf && keys.length === 1 ? '' : `<span class="brk-meta">${tag ? `<b class="tagc ${tag === '240V' ? 'v240' : ''}">${tag}</b>${meta ? ' · ' : ''}` : ''}${meta}</span>`}
@@ -1155,18 +1180,20 @@ function renderPanel(homeId, panelId) {
   <section class="panel-head">
     <div>
       ${panels.length > 1 ? `<label class="sr-only" for="panelPick">Panel</label><select id="panelPick" class="panel-pick">${panels.map((p) => `<option value="${p.id}" ${p.id === panel.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>` : `<h2>${esc(panel.name)}</h2>`}
-      <p class="muted">${esc(labelOf(PANEL_TYPES, panel.type))}${panel.mainAmps ? ` · ${esc(mainAmpsText(panel))}A main` : ''}${panel.type === 'rv' && panel.shorePower ? ` · ${esc(shoreText(panel))} shore power` : ''}${sourceText(panel) ? ` · Power from: ${esc(sourceText(panel))}` : ''} · ${breakers.length} breakers${panel.location ? ` · ${esc(panel.location)}` : ''}</p>
+      <p class="muted">${esc(panel.type === 'main' && isCommercial(home, panel) ? 'Main panel' : labelOf(PANEL_TYPES, panel.type))}${panel.mainAmps ? ` · ${esc(mainAmpsText(panel))}A main` : ''}${three ? ` · ${esc(serviceOf(panel).short)}` : ''}${panel.type === 'rv' && panel.shorePower ? ` · ${esc(shoreText(panel))} shore power` : ''}${sourceText(panel) && !feedParent(panel, panels) ? ` · Power from: ${esc(sourceText(panel))}` : ''} · ${breakers.length} breakers${panel.location ? ` · ${esc(panel.location)}` : ''}</p>
     </div>
     <div class="head-actions">
       <a class="btn small" href="#/edit/panels/${panel.id}?home=${homeId}">Edit</a>
     </div>
   </section>
+  ${feedText(panel, panels, breakersAll) ? `<a class="feed-line" href="#/h/${homeId}/tree"><span aria-hidden="true">↳</span> ${esc(feedText(panel, panels, breakersAll, (x) => slotLabel(x, panelOf(x) || 'two')))}</a>` : ''}
+  ${panelExtrasText(panel).length ? `<div class="chips extras-chips">${panelExtrasText(panel).map((t) => `<a class="chip" href="#/edit/panels/${panel.id}?home=${homeId}#more">${esc(t)}</a>`).join('')}</div>` : ''}
   ${(() => { const h = byId('homes', homeId); const c = h && h.customerId && byId('customers', h.customerId); return c ? `<a class="breaker-link" href="#/customers/${c.id}"><span class="big-icon sm" aria-hidden="true">👤</span><span><b>${esc(c.name)}</b><span class="muted">${c.lastServiced ? 'Last serviced ' + esc(c.lastServiced) : 'No visits logged'} · ${(c.visits || []).length} service note${(c.visits || []).length === 1 ? '' : 's'}</span></span><span aria-hidden="true">›</span></a>` : ''; })()}
   ${over || warn ? `<a class="alert ${over ? 'over' : 'warn'}" href="#/h/${homeId}/load">${over ? `${over} circuit${over > 1 ? 's' : ''} over 100%` : ''}${over && warn ? ' · ' : ''}${warn ? `${warn} at 80%+` : ''} typical - see Load check</a>` : ''}
   ${peakOver ? `<a class="peak-note" href="#/h/${homeId}/load">⚠️ ${peakOver} circuit${peakOver > 1 ? 's' : ''} could trip if everything runs at once</a>` : ''}
   ${clashes.length ? `<div class="card clash-card"><h3>⚠️ ${clashes.length === 1 ? 'Two breakers share a spot' : `${clashes.length} spots are shared`}</h3><ul class="list">${clashes.map(([a, b2]) => `<li class="clash-row"><span><b>${esc(stickerText(a, panel))}</b> and <b>${esc(stickerText(b2, panel))}</b> overlap.${canJoinTandem(a, b2, panel) ? ' One breaker with 2 switches?' : ''}</span>${canJoinTandem(a, b2, panel) ? `<button type="button" class="btn small primary" data-join="${esc(a.id)}|${esc(b2.id)}">Make it a tandem</button>` : `<a class="btn small" href="#/edit/breakers/${b2.id}?home=${homeId}">Fix ${esc(slotLabel(b2, panel))}</a>`}</li>`).join('')}</ul></div>` : ''}
   <div class="panel-box">
-    <div class="panel-main">${panel.type === 'rv' ? '120V AC · ' : ''}MAIN ${esc(mainAmpsText(panel))}${panel.mainAmps ? 'A' : ''}</div>
+    <div class="panel-main">${panel.type === 'rv' ? '120V AC · ' : ''}MAIN ${esc(mainAmpsText(panel))}${panel.mainAmps ? 'A' : ''}${three ? ` · ${esc(serviceOf(panel).short)}` : ''}</div>
     <div class="panel-grid halfrows ${one ? 'one' : ''}" style="grid-template-rows:repeat(${rows}, minmax(30px, auto))">${cells.join('')}</div>
   </div>
   ${panel.type === 'rv' || one ? '' : halfNum ? `<p class="tiny muted numbering-note">Numbered 2 per row, like a tandem-ready sticker (1/3, 5/7…). <a href="#/edit/panels/${panel.id}?home=${homeId}">Change</a></p>` : `<p class="tiny muted numbering-note">Does your panel sticker say 1/3, 5/7… (2 numbers per row)? <a href="#/edit/panels/${panel.id}?home=${homeId}">Switch to 2 numbers per row</a></p>`}
@@ -1175,12 +1202,14 @@ function renderPanel(homeId, panelId) {
     <a class="btn" href="#/edit/breakers/new?home=${homeId}&panel=${panel.id}">+ Breaker</a>
     ${panel.type === 'rv' ? '' : `<a class="btn" href="#/h/${homeId}/bulk?panel=${panel.id}">+ Several at once</a>`}
     <a class="btn" href="#/edit/panels/new?home=${homeId}">+ Panel</a>
+    ${panels.length > 1 || isCommercial(home, panel) ? `<a class="btn" href="#/h/${homeId}/tree">🔀 What feeds what</a>` : ''}
     <a class="btn" href="#/h/${homeId}/print/directory/${panel.id}">Print schedule</a>
     <a class="btn" href="#/h/${homeId}/sticker">Print panel sticker</a>
     ${isGuest() ? '' : `<a class="btn" href="#/h/${homeId}/access">🔑 Who can edit</a>`}
   </div>
   <div class="legend"><span class="dot lvl-ok"></span>under 80% <span class="dot lvl-warn"></span>80%+ <span class="dot lvl-over"></span>over 100% <span class="dot lvl-none"></span>no loads listed <span class="muted">· colors = Typical, ⚠️ = Peak over 100%</span></div>
   ${breakers.some((b) => sizeOf(b) === 'half') ? '<p class="tiny muted legend-note">Half-height blocks are tandems: 1 breaker, 2 switches, each its own circuit. Tall blue-edged blocks are double-pole 240V: 1 circuit.</p>' : ''}
+  ${three ? phaseCard(panel, breakers) : ''}
   ${shoreCard(panel, breakers, homeId)}
   ${panel.type === 'rv' || (panel.fuses || []).length ? fuseCard(panel) : ''}
   <div id="panelExtra"></div>`;
@@ -1203,6 +1232,7 @@ function renderPanel(homeId, panelId) {
     toast('Saved as one tandem breaker');
   }));
   renderPanelExtra(homeId, panel);
+  maybeTour(homeId, 'panel');
 }
 
 const stepOfPanel = (p) => (layoutOf(p) === 'one' ? 1 : 2);
@@ -1220,7 +1250,7 @@ function panelClashes(panel, breakers) {
 }
 // Two plain single (full-size, 1-pole) breakers in the same row -> offer "Make it a tandem".
 function canJoinTandem(a, b, panel) {
-  const plain = (x) => sizeOf(x) === 'full' && !isTwoPole(x);
+  const plain = (x) => sizeOf(x) === 'full' && polesOf(x) === 1;
   if (!plain(a) || !plain(b)) return false;
   const ka = keysFor(a, panel), kb = keysFor(b, panel);
   return ka.length === kb.length && ka.every((k) => kb.includes(k));
@@ -1320,7 +1350,121 @@ async function renderPanelExtra(homeId, panel) {
   el.innerHTML = `
     ${photo ? `<div class="card"><h3>Panel photo</h3><img class="photo" src="${photo}" alt="Photo of ${esc(panel.name)}"></div>` : ''}
     ${panel.notes ? `<div class="card"><h3>Notes</h3><p class="pre">${esc(panel.notes)}</p></div>` : ''}
+    ${panel.type === 'rv' ? '' : panelDetailsCard(homeId, panel)}
+    ${panel.type === 'rv' ? '' : runsCard(panel)}
     <div class="card qr-card"><div class="qr">${svg}</div><div><h3>Panel QR code</h3><p class="muted">Stick it on the panel door. Scanning it opens this panel.</p><a class="btn small" href="#/h/${homeId}/print/qr?only=panel:${panel.id}">Print sticker</a></div></div>`;
+  bindRuns(panel);
+}
+
+// ---------------------------------------------------------------- pro: phases, panel details, wire runs, feed tree, tour
+function phaseCard(panel, breakers) {
+  const t = phaseTotals(panel, breakers, (b) => sumOf(b).amps || 0);
+  const main = mainAmpsNum(panel);
+  const top = Math.max(...t.rows.map((r) => r.loadAmps), 1); // bars compare the phases to each other
+  const big = main ? Math.max(...t.rows.map((r) => r.loadAmps)) >= main * 0.1 : true;
+  return `<div class="card phase-card">
+    <h3>Load per phase <span class="muted tiny">for info</span></h3>
+    ${t.rows.map((r) => `<div class="ph-row"><b class="ph ph-${r.phase}">${r.phase}</b><span class="ph-bar"><i style="width:${Math.min(100, (r.loadAmps / top) * 100).toFixed(1)}%"></i></span><span class="ph-num"><b>${fmtAmps(r.loadAmps)}A</b> listed<small class="muted block">${r.count} breaker pole${r.count === 1 ? '' : 's'} · ${Math.round(r.breakerAmps).toLocaleString('en-US')}A of breakers</small></span></div>`).join('')}
+    <p class="tiny muted">Adds up what's listed on each breaker, by phase.${main ? ` Main is ${main.toLocaleString('en-US')}A per phase.` : ''}${t.imbalance >= 20 && big ? ` <b class="warnc">Phases differ by ${t.imbalance}%</b>: moving a few circuits can even it out.` : ''}</p>
+  </div>`;
+}
+
+function panelDetailsCard(homeId, panel) {
+  const gen = generatorText(panel);
+  const gr = groundingText(panel);
+  const spd = panel.spd === 'yes' ? 'Yes' : panel.spd === 'no' ? 'No' : '';
+  const edit = `#/edit/panels/${panel.id}?home=${homeId}#more`;
+  if (!gen && !gr && !spd && panel.genHookup !== 'none')
+    return `<a class="card details-empty" href="${edit}"><span><b>Generator, surge protector, grounding</b><span class="muted tiny block">Optional. Tap to add.</span></span><span class="chev" aria-hidden="true">›</span></a>`;
+  return `<div class="card panel-details"><div class="pd-head"><h3>Panel details</h3><a class="btn small" href="${edit}">Edit</a></div>
+    <dl class="facts">
+      <dt>Generator hookup</dt><dd>${esc(gen || (panel.genHookup === 'none' ? 'None' : 'Not set'))}</dd>
+      <dt>Surge protector</dt><dd>${esc(spd || 'Not set')}</dd>
+      ${gr ? `<dt>Grounding</dt><dd>${esc(gr)}</dd>` : ''}
+    </dl></div>`;
+}
+
+const RUN_WIRES = ['14/2', '12/2', '12/3', '10/2', '10/3', '8/3', '6/3', '#4', '#2', '1/0', '4/0', 'other'];
+function runsCard(panel) {
+  const runs = (panel.runs || []).map(cleanRun).filter(Boolean);
+  const places = [...new Set([...inHome('panels', panel.homeId).map((p) => p.name), ...inHome('devices', panel.homeId).map((d) => d.room)].filter(Boolean))];
+  return `<details class="card runs-card" id="runs" ${runs.length ? 'open' : ''}><summary><b>Wire runs${runs.length ? ` (${runs.length})` : ''}</b><span class="muted tiny">Optional · from → to, wire, conduit</span></summary>
+    ${runs.length ? `<ul class="list">${runs.map((r) => `<li class="run-row"><span class="row-main"><b>${esc(r.from || '?')} → ${esc(r.to || '?')}</b><span class="muted">${esc(runText(r) || 'wire not set')}</span></span><button class="icon-btn small" data-del-run="${esc(r.id)}" aria-label="Remove run">✕</button></li>`).join('')}</ul>` : ''}
+    <form id="runForm" class="form run-form">
+      <datalist id="runPlaces">${places.map((p) => `<option value="${esc(p)}">`).join('')}</datalist>
+      <div class="two"><label>From<input name="from" list="runPlaces" value="${esc(panel.name || '')}"></label><label>To<input name="to" list="runPlaces" placeholder="e.g. LP-1, Garage"></label></div>
+      <span class="field-name">Wire</span>${chipsHtml('wire', RUN_WIRES, '', { label: 'Wire' })}
+      <label class="other-field" hidden>Wire (type it)<input name="wireOther" placeholder="e.g. 3 sets 500 kcmil"></label>
+      <span class="field-name">Conduit</span>${chipsHtml('conduit', CONDUIT_OPTIONS, '', { label: 'Conduit' })}
+      <button class="btn primary" type="submit">Add wire run</button>
+    </form></details>`;
+}
+function bindRuns(panel) {
+  const f = document.getElementById('runForm');
+  if (!f) return;
+  bindChipClear(f);
+  f.querySelectorAll('input[name=wire]').forEach((r) => r.addEventListener('change', () => (f.elements.wireOther.closest('label').hidden = f.elements.wire.value !== 'other')));
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const v = Object.fromEntries(new FormData(f).entries());
+    const run = cleanRun({ from: v.from, to: v.to, wire: v.wire === 'other' ? v.wireOther : v.wire || '', conduit: v.conduit || '' });
+    if (!run) return toast('Add where it goes from or to');
+    await store.put('panels', { ...panel, runs: [...(panel.runs || []), run] });
+    toast('Wire run added');
+  };
+  document.querySelectorAll('[data-del-run]').forEach((btn) => (btn.onclick = async () => {
+    if (!confirm('Remove this wire run?')) return;
+    await store.put('panels', { ...panel, runs: (panel.runs || []).filter((r) => r.id !== btn.dataset.delRun) });
+  }));
+}
+
+function renderTree(homeId) {
+  const panels = inHome('panels', homeId);
+  const breakers = inHome('breakers', homeId);
+  const rows = feedRows(panels);
+  const lab = (b) => slotLabel(b, panelOf(b) || 'two');
+  const body = `<section class="panel-head"><div><h2>What feeds what</h2><p class="muted">${panels.length} panel${panels.length === 1 ? '' : 's'} · tap one to open it</p></div></section>
+  <div class="card tree-card"><ul class="tree">${rows.map(({ panel: p, depth, parent }) => {
+    const b = p.fedBreaker ? breakers.find((x) => x.id === p.fedBreaker) : null;
+    const sub = [mainAmpsText(p) ? `${mainAmpsText(p)}A` : '', isThreePhase(p) ? serviceOf(p).short : p.type !== 'rv' ? '120/240V' : '', `${breakers.filter((x) => x.panelId === p.id).length} breakers`].filter(Boolean).join(' · ');
+    const via = parent ? [b ? `breaker ${lab(b)}${b.amps ? ` (${b.amps === 'other' ? b.ampsOther : b.amps}A)` : ''}` : '', feederText(p)].filter(Boolean).join(' · ') : '';
+    return `<li class="tree-row" style="--d:${depth}">${depth ? '<span class="tree-elbow" aria-hidden="true"></span>' : ''}<a class="tree-node ${depth ? '' : 'root'}" href="#/h/${homeId}/panel/${p.id}"><b>${esc(p.name || 'Panel')}</b><span class="muted tiny block">${esc(sub)}</span>${via ? `<span class="tree-via">fed by ${esc(via)}</span>` : ''}</a></li>`;
+  }).join('')}</ul>
+  <p class="tiny muted">Set what feeds a panel in Edit panel › More details › Fed from.</p></div>
+  <div class="row-actions"><a class="btn" href="#/edit/panels/new?home=${homeId}">+ Panel</a></div>`;
+  app.innerHTML = shell(homeId, 'panel', body, { title: 'What feeds what', back: `#/h/${homeId}/panel` });
+  bindShell();
+}
+
+// one-time 3-step welcome (skippable; never again once closed). ?tour=1 shows it again.
+function maybeTour(homeId, view) {
+  let seen = false;
+  try { seen = localStorage.getItem(TOUR_KEY) === '1'; } catch {}
+  const force = /[?&]tour=1/.test(location.search) && !sessionStorage.getItem('ampmap:tourForced');
+  if (!shouldShowTour({ seen, guest: isGuest(), hasHome: !!homeId, view, force })) return;
+  if (document.getElementById('tour')) return;
+  if (force) sessionStorage.setItem('ampmap:tourForced', '1');
+  let i = 0;
+  const el = document.createElement('div');
+  el.id = 'tour';
+  el.className = 'tour';
+  el.setAttribute('role', 'dialog');
+  el.setAttribute('aria-modal', 'true');
+  const done = () => { try { localStorage.setItem(TOUR_KEY, '1'); } catch {} el.remove(); };
+  const draw = () => {
+    const s = TOUR_STEPS[i];
+    el.innerHTML = `<div class="tour-card"><button class="tour-skip" type="button" data-t="skip">Skip</button>
+      <div class="tour-ic" aria-hidden="true">${s.icon}</div><p class="tour-step">Step ${i + 1} of ${TOUR_STEPS.length}</p><h2>${esc(s.title)}</h2><p>${esc(s.text)}</p>
+      <div class="tour-dots" aria-hidden="true">${TOUR_STEPS.map((_, k) => `<i class="${k === i ? 'on' : ''}"></i>`).join('')}</div>
+      <div class="tour-btns">${i ? '<button class="btn ghost" type="button" data-t="back">Back</button>' : ''}<button class="btn primary" type="button" data-t="next">${i === TOUR_STEPS.length - 1 ? 'Got it' : 'Next'}</button></div></div>`;
+    el.querySelector('[data-t=skip]').onclick = done;
+    el.querySelector('[data-t=next]').onclick = () => { if (i === TOUR_STEPS.length - 1) return done(); i++; draw(); };
+    const bk = el.querySelector('[data-t=back]');
+    if (bk) bk.onclick = () => { i--; draw(); };
+  };
+  draw();
+  document.body.appendChild(el);
+  el.querySelector('[data-t=next]').focus();
 }
 
 // ---------------------------------------------------------------- breaker view
@@ -1533,7 +1677,7 @@ function breakerPlan({ t, slot, pn, isNew, q, base = {}, half }) {
   let pos;
   if (makeGroup) pos = { slot: String(plan[0].slot), size: 'half', half: plan[0].half, poles: plan[0].poles };
   else if (isGroup) pos = { slot: s, size: 'half', half: numberingOf(pn) === 'half' ? base.half || 'A' : half || base.half || 'A', poles: base.size === 'half' && base.btype === t ? base.poles || '1' : '1' };
-  else pos = { slot: s, size: 'full', half: '', poles: t === 'double' ? '2' : '1' };
+  else pos = { slot: s, size: 'full', half: '', poles: t === 'triple' ? '3' : t === 'double' ? '2' : '1' };
   return { isGroup, makeGroup, plan, pos, all: makeGroup ? plan : [pos] };
 }
 // Breakers already on the panel that a breaker being edited could run into.
@@ -1543,11 +1687,13 @@ function othersOnPanel(panelId, existing, sameGroupToo = false) {
 }
 
 // Big buttons in the breaker form. pic = a tiny drawing of the breaker.
+const COMMERCIAL_AMPS = ['15', '20', '30', '40', '50', '60', '70', '80', '90', '100', '125', '150', '175', '200', '225', '250', '300', '400', '600', '800', '1200', 'other'];
 const BTYPE_PICKS = [
   { v: 'single', t: 'Single', d: '1 switch · 1 circuit (120V)', pic: '<i></i>' },
   { v: 'tandem', t: 'Tandem', d: 'One breaker, 2 switches (2 circuits)', pic: '<i></i><i></i>' },
   { v: 'double', t: 'Double-pole 240V', d: '1 wide switch, 2 spaces tall · 1 circuit', pic: '<i></i>' },
   { v: 'quad', t: 'Quad', d: '2 singles + a 240V in the middle', pic: '<i></i><i class="mid"></i><i></i>' },
+  { v: 'triple', t: '3-pole (3-phase)', d: '1 wide switch, 3 spaces tall · A + B + C', pic: '<i></i>' },
 ];
 const breakerTypeText = (b) => {
   const t = breakerType(b);
@@ -1578,7 +1724,7 @@ function renderBreaker(homeId, id) {
     <div class="big-slot">${esc(slotText(b))}</div>
     <div class="detail-title">
       <h2>${esc(b.label || 'Unlabeled breaker')}</h2>
-      <p class="muted">${esc(ampsText(b))} · ${esc(breakerTypeText(b))}${b.leg ? ` · Leg ${esc(b.leg)}` : ''}${b.kind && b.kind !== 'standard' ? ` · ${esc(labelOf(BREAKER_KINDS, b.kind))}` : ''}${cleanWire(b.wire) && wireTag(b.wire) ? ` · ${esc(wireTag(b.wire))}` : ''}${panel ? ` · ${esc(panel.name)}` : ''}</p>
+      <p class="muted">${esc(ampsText(b))} · ${esc(breakerTypeText(b))}${isThreePhase(panel) ? ` · <b class="ph-inline">Phase ${breakerPhases(b, panel).map((x) => `<b class="ph ph-${x}">${x}</b>`).join('')}</b>` : b.leg ? ` · Leg ${esc(b.leg)}` : ''}${b.kind && b.kind !== 'standard' ? ` · ${esc(labelOf(BREAKER_KINDS, b.kind))}` : ''}${cleanWire(b.wire) && wireTag(b.wire) ? ` · ${esc(wireTag(b.wire))}` : ''}${panel ? ` · ${esc(panel.name)}` : ''}</p>
       ${(b.rooms || []).length ? `<div class="chips">${b.rooms.map((r) => `<a class="chip" href="#/h/${homeId}/rooms?room=${encodeURIComponent(r)}">${esc(r)}</a>`).join('')}</div>` : ''}
       <p class="sticker-line"><span class="muted tiny">Label it</span> <span class="sticker">${esc(stickerText(b, panel || 'two'))}</span></p>
     </div>
@@ -1589,7 +1735,7 @@ function renderBreaker(homeId, id) {
   ${breakerWireCard(homeId, b, devices)}
 
   <div class="card">
-    <div class="card-head"><h3>Outlets &amp; lights <span class="count">${devices.length}</span></h3><a class="btn small" href="#/edit/devices/new?home=${homeId}&breaker=${b.id}">+ Add</a></div>
+    <div class="card-head"><h3>What it powers <span class="count">${devices.length}</span></h3><a class="btn small" href="#/edit/devices/new?home=${homeId}&breaker=${b.id}">+ Add</a></div>
     ${devices.length ? `<ul class="list">${devices.map((d) => deviceRow(homeId, d)).join('')}</ul>` : `<p class="muted">Nothing mapped to this breaker yet. Add each outlet and light it feeds, then tap one to list what's plugged in.</p>`}
   </div>
 
@@ -4552,7 +4698,16 @@ function renderEdit(col, id, q) {
   } else if (col === 'panels') {
     const home = byId('homes', homeId) || {};
     const firstType = home.type === 'rv' ? 'rv' : inHome('panels', homeId).length ? 'sub' : 'main';
-    const p = existing || { name: firstType === 'rv' ? 'RV distribution center' : firstType === 'sub' ? 'Sub-panel' : 'Main panel', type: firstType, layout: 'auto', mainAmps: firstType === 'rv' ? '30' : '200', shorePower: '30', spaces: firstType === 'rv' ? '6' : '20', location: '', notes: '' };
+    const com = home.type === 'commercial';
+    const nPanels = inHome('panels', homeId).length;
+    const p = existing || (com
+      ? { name: nPanels ? `LP-${nPanels}` : 'MDP', type: firstType, layout: 'auto', mainAmps: nPanels ? '225' : '800', service: nPanels ? '3ph208' : '3ph480', spaces: '42', location: '', notes: '', ...(q.get('fedFrom') ? { fedFrom: q.get('fedFrom') } : {}) }
+      : { name: firstType === 'rv' ? 'RV distribution center' : firstType === 'sub' ? 'Sub-panel' : 'Main panel', type: firstType, layout: 'auto', mainAmps: firstType === 'rv' ? '30' : '200', shorePower: '30', spaces: firstType === 'rv' ? '6' : '20', location: '', notes: '' });
+    const ampList = (pp) => { const l = mainAmpChoices(home, pp); const cur = pp.mainAmps; return cur && cur !== 'other' && !l.includes(cur) ? [...l.filter((x) => x !== 'other'), cur].sort((a, b) => a - b).concat('other') : l; };
+    const otherPanels = inHome('panels', homeId).filter((x) => x.id !== (existing && existing.id));
+    const feedBrks = (pid) => sortBreakers(inHome('breakers', homeId).filter((b) => b.panelId === pid && b.kind !== 'spare'));
+    const showSvc = isCommercial(home, p);
+    const svcHtml = `<div class="svc-field"><span class="field-name">Service type</span>${chipsHtml('service', SERVICE_TYPES.map((s) => ({ value: s.value, label: s.label })), serviceOf(p).value, { label: 'Service type', cls: 'stack' })}<p class="tiny muted svc-hint">${esc(serviceOf(p).hint)}</p></div>`;
     title = isNew ? 'Add a panel' : 'Edit panel';
     back = isNew ? `#/h/${homeId}/panel` : `#/h/${homeId}/panel/${id}`;
     photo = !isNew;
@@ -4561,17 +4716,14 @@ function renderEdit(col, id, q) {
       <label>Panel name<input name="name" required value="${esc(p.name)}"></label>
       <label>Panel type<select name="type">${opt(PANEL_TYPES, p.type)}</select></label>
       <label class="rv-only" ${rv ? '' : 'hidden'}>Shore power<select name="shorePower" data-other="shorePowerOther">${opt(SHORE_POWER_OPTIONS, p.shorePower || '30')}</select></label>
-      <label class="home-only" ${rv ? 'hidden' : ''}>Power comes from<select name="powerSource">${opt(POWER_SOURCE_OPTIONS, p.powerSource || '')}</select></label>
-      <label class="src-main" ${!rv && ['pole','pedestal','house_meter'].includes(p.powerSource) ? '' : 'hidden'}>Main breaker at the pole / meter (amps)<select name="sourceAmps" data-other="sourceAmpsOther">${opt(MAIN_AMP_OPTIONS, p.sourceAmps || '200')}</select></label>
-      <label class="other-field" ${!rv && ['pole','pedestal','house_meter'].includes(p.powerSource) && p.sourceAmps === 'other' ? '' : 'hidden'}>Pole / meter main amps (type it)<input name="sourceAmpsOther" type="number" inputmode="numeric" value="${esc(p.sourceAmpsOther || '')}"></label>
       <label class="other-field" ${rv && p.shorePower === 'other' ? '' : 'hidden'}>Shore power amps (other)<input name="shorePowerOther" type="number" inputmode="numeric" value="${esc(p.shorePowerOther || '')}"></label>
       <div class="two">
-        <label>Main breaker amps<select name="mainAmps" data-other="mainAmpsOther">${opt(rv ? RV_MAIN_AMP_OPTIONS : MAIN_AMP_OPTIONS, p.mainAmps)}</select></label>
+        <label>Main breaker amps<select name="mainAmps" data-other="mainAmpsOther">${opt(rv ? RV_MAIN_AMP_OPTIONS : ampList(p), p.mainAmps)}</select></label>
         <label>Breaker spaces<select name="spaces" data-other="spacesOther">${opt(SPACE_OPTIONS, p.spaces)}</select></label>
       </div>
       <label class="other-field" ${p.mainAmps === 'other' ? '' : 'hidden'}>Main amps (other)<input name="mainAmpsOther" type="number" inputmode="numeric" value="${esc(p.mainAmpsOther || '')}"></label>
       <label class="other-field" ${p.spaces === 'other' ? '' : 'hidden'}>Number of spaces<input name="spacesOther" type="number" inputmode="numeric" min="1" max="84" value="${esc(p.spacesOther || '')}"></label>
-      <label>Layout<select name="layout">${opt(LAYOUT_OPTIONS, p.layout || 'auto')}</select></label>
+      ${showSvc && !rv ? svcHtml : ''}
       <fieldset class="pick-cards num-pick" id="numbering"><legend>How is your panel numbered?</legend>
         ${[
           { v: 'space', t: '1 number per breaker', d: 'Left side 1, 3, 5… right side 2, 4, 6… (most panels)', pic: '<i>1</i><i>3</i><i>5</i>' },
@@ -4581,12 +4733,37 @@ function renderEdit(col, id, q) {
       <p class="tiny muted num-help">Look at the number strip next to the breakers. With 2 numbers per row, set Breaker spaces to the highest number on the sticker (like 32 or 40). Breakers keep their numbers if you switch: a double-pole at 5 then covers 5–11.</p>
       <label>Where is it?<input name="location" value="${esc(p.location)}" placeholder="${rv ? 'e.g. Under the bed' : 'e.g. Garage, north wall'}"></label>
       <label>Notes<textarea name="notes" rows="3">${esc(p.notes)}</textarea></label>
-      ${rv ? '<p class="tiny muted">12V DC fuses are added on the panel screen after saving.</p>' : ''}`;
+      ${rv ? '<p class="tiny muted">12V DC fuses are added on the panel screen after saving.</p>' : ''}
+      <details class="more-details" id="more" ${q.get('more') || location.hash.endsWith('#more') ? 'open' : ''}><summary><b>More details</b><span class="muted tiny">${rv ? 'layout' : 'Generator, surge protector, grounding, what feeds it…'}</span></summary>
+        <div class="home-only" ${rv ? 'hidden' : ''}>
+        ${showSvc ? '' : svcHtml}
+        ${otherPanels.length ? `<label>Fed from<select name="fedFrom"><option value="">Not fed from another panel (it's the main)</option>${otherPanels.map((x) => `<option value="${esc(x.id)}" ${x.id === p.fedFrom ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
+        <label class="fed-brk" ${p.fedFrom ? '' : 'hidden'}>Which breaker feeds it<select name="fedBreaker"><option value="">Not sure</option>${(p.fedFrom ? feedBrks(p.fedFrom) : []).map((b) => `<option value="${esc(b.id)}" ${b.id === p.fedBreaker ? 'selected' : ''}>${esc(slotLabel(b, byId('panels', p.fedFrom)))} · ${esc(ampsText(b))} · ${esc(b.label || '')}</option>`).join('')}</select></label>
+        <div class="fed-wire" ${p.fedFrom ? '' : 'hidden'}><span class="field-name">Feeder wire</span>${chipsHtml('feeder', FEEDER_SIZES, p.feeder || '')}<label class="other-field" ${p.feeder === 'other' ? '' : 'hidden'}>Feeder (type it)<input name="feederOther" value="${esc(p.feederOther || '')}" placeholder="e.g. 2 sets 350 kcmil AL"></label></div>` : ''}
+        <span class="field-name" id="genHook">Generator hookup</span>${chipsHtml('genHookup', GEN_HOOKUPS.map((g) => ({ value: g.value, label: g.short === 'None' ? 'None' : g.short })), p.genHookup || '', { cls: 'stack' })}
+        <div class="gen-more" ${hasGenerator(p) ? '' : 'hidden'}>
+          <span class="field-name">Generator size</span>${chipsHtml('genSize', GEN_SIZES, p.genSize || '')}
+          <label class="other-field" ${p.genSize === 'other' ? '' : 'hidden'}>Size (type it)<input name="genSizeOther" value="${esc(p.genSizeOther || '')}" placeholder="e.g. 48 kW"></label>
+          <span class="field-name">Where you plug it in (inlet)</span>${chipsHtml('genInlet', GEN_INLETS, p.genInlet || '')}
+        </div>
+        <span class="field-name">Whole-home surge protector</span>${chipsHtml('spd', YES_NO, p.spd || '')}
+        <span class="field-name">Ground rod</span>${chipsHtml('groundRod', GROUND_RODS, p.groundRod || '')}
+        <span class="field-name">Water pipe bonded to ground</span>${chipsHtml('waterBond', YES_NO, p.waterBond || '')}
+        <label>Grounding notes<input name="groundNotes" value="${esc(p.groundNotes || '')}" placeholder="optional"></label>
+        <label>Power comes from<select name="powerSource">${opt(POWER_SOURCE_OPTIONS, p.powerSource || '')}</select></label>
+        <label class="src-main" ${!rv && ['pole','pedestal','house_meter'].includes(p.powerSource) ? '' : 'hidden'}>Main breaker at the pole / meter (amps)<select name="sourceAmps" data-other="sourceAmpsOther">${opt(MAIN_AMP_OPTIONS, p.sourceAmps || '200')}</select></label>
+        <label class="other-field" ${!rv && ['pole','pedestal','house_meter'].includes(p.powerSource) && p.sourceAmps === 'other' ? '' : 'hidden'}>Pole / meter main amps (type it)<input name="sourceAmpsOther" type="number" inputmode="numeric" value="${esc(p.sourceAmpsOther || '')}"></label>
+        </div>
+        <label>Layout<select name="layout">${opt(LAYOUT_OPTIONS, p.layout || 'auto')}</select></label>
+      </details>`;
   } else if (col === 'breakers') {
     const panels = inHome('panels', homeId);
-    const qType = ['single', 'double', 'tandem', 'quad'].includes(q.get('btype')) ? q.get('btype') : '';
-    const b = existing || { panelId: q.get('panel') || (panels[0] && panels[0].id), slot: q.get('slot') || '', poles: '1', amps: '20', label: '', rooms: [], kind: 'standard', notes: '', loads: [], ...(qType === 'tandem' || qType === 'quad' ? { size: 'half', btype: qType, half: q.get('half') === 'B' ? 'B' : 'A' } : {}) };
+    const qType = ['single', 'double', 'triple', 'tandem', 'quad'].includes(q.get('btype')) ? q.get('btype') : '';
+    const b = existing || { panelId: q.get('panel') || (panels[0] && panels[0].id), slot: q.get('slot') || '', poles: '1', amps: '20', label: '', rooms: [], kind: 'standard', notes: '', loads: [], ...(qType === 'tandem' || qType === 'quad' ? { size: 'half', btype: qType, half: q.get('half') === 'B' ? 'B' : 'A' } : qType === 'triple' ? { btype: 'triple', poles: '3', amps: '30' } : {}) };
     const bt = breakerType(b);
+    const bPanel = byId('panels', b.panelId);
+    const bHome = byId('homes', homeId) || {};
+    const ampChoices = isCommercial(bHome, bPanel) ? COMMERCIAL_AMPS : AMP_OPTIONS;
     // adding into one empty half, or editing a half that already has its partner: no partner fields
     const lonelyHalf = (isNew && !!q.get('half')) || (!isNew && !!b.groupId);
     const mateAmps = AMP_OPTIONS.filter((a) => a !== 'other');
@@ -4595,12 +4772,12 @@ function renderEdit(col, id, q) {
     fields = `
       ${panels.length > 1 ? `<label>Panel<select name="panelId">${opt(panels.map((p) => ({ value: p.id, label: p.name })), b.panelId)}</select></label>` : `<input type="hidden" name="panelId" value="${esc(b.panelId)}">`}
       <fieldset class="pick-cards type-pick"><legend>Breaker type</legend>
-        ${BTYPE_PICKS.map((o) => `<label class="pick-card"><input type="radio" name="btype" value="${o.v}" ${bt === o.v ? 'checked' : ''}><span class="pc-pic br-pic ${o.v}" aria-hidden="true">${o.pic}</span><span class="pc-text"><b>${o.t}</b><small>${o.d}</small></span></label>`).join('')}
+        ${BTYPE_PICKS.map((o) => `<label class="pick-card ${o.v === 'triple' ? 'tri-only' : ''}" ${o.v === 'triple' && !isThreePhase(bPanel) ? 'hidden' : ''}><input type="radio" name="btype" value="${o.v}" ${bt === o.v ? 'checked' : ''}><span class="pc-pic br-pic ${o.v}" aria-hidden="true">${o.pic}</span><span class="pc-text"><b>${o.t}</b><small>${o.d}</small></span></label>`).join('')}
       </fieldset>
       <label class="half-pick" hidden>Which half of the space<select name="half">${opt([{ value: 'A', label: 'Top half' }, { value: 'B', label: 'Bottom half' }], b.half === 'B' ? 'B' : 'A')}</select></label>
       <div class="two">
         <label><span class="slot-name">Space / slot #</span><input name="slot" required type="number" inputmode="numeric" min="1" max="84" value="${esc(b.slot)}"></label>
-        <label>Amps<select name="amps" data-other="ampsOther">${opt(AMP_OPTIONS, b.amps)}</select></label>
+        <label>Amps<select name="amps" data-other="ampsOther">${opt(ampChoices.includes(b.amps) ? ampChoices : [b.amps, ...ampChoices], b.amps)}</select></label>
       </div>
       <label class="other-field" ${b.amps === 'other' ? '' : 'hidden'}>Amps (other)<input name="ampsOther" type="number" inputmode="numeric" value="${esc(b.ampsOther || '')}"></label>
       ${(() => { const pn = byId('panels', b.panelId); return pn && pn.type === 'rv' && (pn.shorePower === '50' || pn.shorePower === 'pole') ? `<label>Leg (${pn.shorePower === 'pole' ? '240V service' : '50A service'})<select name="leg">${opt(LEG_OPTIONS, b.leg || '')}</select></label>` : ''; })()}
@@ -4612,25 +4789,40 @@ function renderEdit(col, id, q) {
         <p class="tiny muted mate-hint"></p>
         ${[1, 2].map((k) => `<div class="mate" data-k="${k}"><div class="mate-title"></div><div class="two"><label>Label<input name="m${k}label" placeholder="e.g. Bedroom 2"></label><label>Amps<select name="m${k}amps">${opt(mateAmps, k === 2 ? '15' : '20')}</select></label></div></div>`).join('')}
       </div>
-      <label>Protection<select name="kind">${opt(BREAKER_KINDS, b.kind)}</select></label>
-      ${wireFieldsHtml(b.wire, { legend: 'Wire on this circuit', hint: 'What feeds this breaker. Outlets on it use this wire unless you set a different one on the outlet.' })}
-      <label>Notes<textarea name="notes" rows="3">${esc(b.notes)}</textarea></label>`;
+      <span class="field-name">Protection</span>${chipsHtml('kind', BREAKER_KINDS.filter((k) => k.value !== 'gfpe' || isCommercial(bHome, bPanel) || b.kind === 'gfpe').map((k) => ({ value: k.value, label: k.label.replace(' breaker', '') })), b.kind || 'standard', { label: 'Protection' })}
+      <details class="more-details" ${q.get('focus') === 'wire' || q.get('more') ? 'open' : ''}><summary><b>More details</b><span class="muted tiny">Wire, ${isThreePhase(bPanel) ? 'phase, ' : ''}notes</span></summary>
+        <div class="phase-field" ${isThreePhase(bPanel) ? '' : 'hidden'}><span class="field-name">Phase</span><p class="tiny muted phase-auto"></p>
+          <label>Change it (only if the panel is wired differently)<select name="phase"><option value="">Automatic (from the space)</option>${['A', 'B', 'C', 'AB', 'BC', 'AC', 'ABC'].map((x) => `<option value="${x}" ${String(b.phase || '') === x ? 'selected' : ''}>${x.split('').join(' + ')}</option>`).join('')}</select></label></div>
+        ${wireFieldsHtml(b.wire, { legend: 'Wire on this circuit', hint: 'What feeds this breaker. Outlets on it use this wire unless you set a different one on the outlet.' })}
+        <label>Notes<textarea name="notes" rows="3">${esc(b.notes)}</textarea></label>
+      </details>`;
   } else if (col === 'devices') {
     const brks = sortBreakers(inHome('breakers', homeId));
-    const d = existing || { type: 'outlet', name: '', room: q.get('room') || '', location: '', breakerId: q.get('breaker') || '', gfci: 'unknown', afci: 'unknown', status: 'working', notes: '', readings: [] };
-    title = isNew ? 'Add outlet / light / device' : `Edit ${d.name || 'item'}`;
+    const qt = DEVICE_TYPES.some((t) => t.value === q.get('type')) ? q.get('type') : '';
+    const d = existing || { type: qt || 'outlet', name: '', room: q.get('room') || '', location: '', breakerId: q.get('breaker') || '', gfci: 'unknown', afci: 'unknown', status: 'working', notes: '', readings: [] };
+    title = isNew ? 'Add something' : `Edit ${d.name || 'item'}`;
     back = isNew ? (d.breakerId ? `#/h/${homeId}/breaker/${d.breakerId}` : `#/h/${homeId}/rooms`) : `#/h/${homeId}/device/${id}`;
+    const typeChip = (t) => `<label class="tchip"><input type="radio" name="type" value="${t.value}" ${d.type === t.value ? 'checked' : ''}><span><i aria-hidden="true">${t.icon}</i>${esc(t.label)}</span></label>`;
+    const common = DEVICE_TYPES.filter((t) => t.group === 'common');
+    const moreOpen = !common.some((t) => t.value === d.type);
     fields = `
-      <label>Type<select name="type">${opt(DEVICE_TYPES.map((t) => ({ value: t.value, label: t.icon + ' ' + t.label })), d.type)}</select></label>
+      <fieldset class="type-chips"><legend>What is it?</legend>
+        <div class="tchips">${common.map(typeChip).join('')}</div>
+        <details class="more-types" ${moreOpen ? 'open' : ''}><summary>More types <span class="muted tiny">smoke/CO, EV charger, AC, water heater, well pump, solar…</span></summary>
+          ${DEVICE_GROUPS.filter((g) => g.value !== 'common').map((g) => `<p class="tchip-group">${esc(g.label)}</p><div class="tchips">${DEVICE_TYPES.filter((t) => t.group === g.value).map(typeChip).join('')}</div>`).join('')}
+        </details>
+      </fieldset>
+      <div class="style-field" ${stylesFor(d.type) ? '' : 'hidden'}><span class="field-name">Kind <span class="muted">(optional)</span></span><div class="style-chips">${chipsHtml('style', (stylesFor(d.type) || []).filter((x) => x.value), d.style || '')}</div></div>
+      <p class="tiny muted type-hint">${esc(defaultsHint(d.type, d.style))}</p>
       <label>Name (optional)<input name="name" value="${esc(d.name)}" placeholder="e.g. Outlet by bed, Vanity light"></label>
       ${roomSelect(homeId, d.room)}
+      <label>Breaker<select name="breakerId"><option value="">Not mapped yet</option>${brks.map((b) => `<option value="${b.id}" ${b.id === d.breakerId ? 'selected' : ''}>${esc(brks.some((o) => o.panelId !== b.panelId) ? ((byId('panels', b.panelId) || {}).name || '') + ' ' : '')}#${esc(slotText(b))} · ${esc(ampsText(b))} · ${esc(b.label || '')}</option>`).join('')}</select></label>
+      <details class="more-details" ${q.get('focus') === 'wire' || q.get('more') ? 'open' : ''}><summary><b>More details</b><span class="muted tiny">Where in the room, how many, GFCI/AFCI, wire, status, notes</span></summary>
       <label>Location in the room<input name="location" value="${esc(d.location)}" placeholder="e.g. North wall by bed"></label>
-      <label class="style-field" ${stylesFor(d.type) ? '' : 'hidden'}>Style <span class="muted">(what's there, or what you're putting in)</span><select name="style">${opt(stylesFor(d.type) || [], d.style || '')}</select></label>
       <label>Quantity<input name="qty" type="number" inputmode="numeric" min="1" step="1" value="${esc(String(qtyOf(d)))}"></label>
       <p class="tiny muted field-hint">One entry can stand for several, like "7 outlets, master bedroom".</p>
       <label>Box<select name="box">${opt(BOX_OPTIONS, d.box || '')}</select></label>
       <label>Needs replacing<select name="replace">${opt(REPLACE_OPTIONS, d.replace || '')}</select></label>
-      <label>Breaker<select name="breakerId"><option value="">Not mapped yet</option>${brks.map((b) => `<option value="${b.id}" ${b.id === d.breakerId ? 'selected' : ''}>#${esc(slotText(b))} · ${esc(ampsText(b))} · ${esc(b.label || '')}</option>`).join('')}</select></label>
       <label>GFCI protection<select name="gfci">${opt(GFCI_OPTIONS, d.gfci)}</select></label>
       <label>AFCI protection<select name="afci">${opt(AFCI_OPTIONS, d.afci)}</select></label>
       ${(() => {
@@ -4642,7 +4834,8 @@ function renderEdit(col, id, q) {
         return wireFieldsHtml(own || bw, { legend: 'Wire to this ' + (d.type === 'outlet' || !d.type ? 'outlet' : 'item'), top });
       })()}
       <label>Status<select name="status">${opt(STATUS_OPTIONS, d.status)}</select></label>
-      <label>Notes<textarea name="notes" rows="4" placeholder="Anything useful: wiring, what it controls, fixes...">${esc(d.notes)}</textarea></label>`;
+      <label>Notes<textarea name="notes" rows="4" placeholder="Anything useful: wiring, what it controls, fixes...">${esc(d.notes)}</textarea></label>
+      </details>`;
   } else if (col === 'customers') {
     const c = existing || { name: '', phone: '', email: '', notes: '' };
     title = isNew ? 'New customer' : 'Edit customer';
@@ -4663,6 +4856,7 @@ function renderEdit(col, id, q) {
   app.innerHTML = shell(homeId, '', body, { title, back });
   bindShell();
   const f = document.getElementById('editForm');
+  bindChipClear(f);
   f.querySelectorAll('select[data-other]').forEach((sel) => {
     sel.addEventListener('change', () => {
       const lab = f.querySelector(`[name=${sel.dataset.other}]`).closest('label');
@@ -4683,10 +4877,34 @@ function renderEdit(col, id, q) {
       f.querySelectorAll('.home-only').forEach((el) => (el.hidden = rv));
       syncSrc();
       f.elements.shorePowerOther.closest('label').hidden = !rv || f.elements.shorePower.value !== 'other';
-      const cur = f.elements.mainAmps.value;
-      const list = rv ? RV_MAIN_AMP_OPTIONS : MAIN_AMP_OPTIONS;
-      f.elements.mainAmps.innerHTML = opt(list, list.includes(cur) ? cur : rv ? '30' : '200');
+      syncAmps();
       if (rv && f.elements.spaces.value === '20' && isNew) f.elements.spaces.value = '6';
+    });
+    // commercial sizes (up to 4000A) once it's a commercial building, three-phase or over 400A
+    const home = byId('homes', homeId) || {};
+    const svcVal = () => (f.elements.service ? f.elements.service.value : '');
+    const syncAmps = () => {
+      const rv = t.value === 'rv';
+      const cur = f.elements.mainAmps.value;
+      const list = rv ? RV_MAIN_AMP_OPTIONS : mainAmpChoices(home, { service: svcVal(), mainAmps: cur, mainAmpsOther: f.elements.mainAmpsOther.value });
+      f.elements.mainAmps.innerHTML = opt(list, list.includes(cur) ? cur : rv ? '30' : '200');
+    };
+    f.querySelectorAll('input[name=service]').forEach((r) => r.addEventListener('change', () => {
+      syncAmps();
+      const h = f.querySelector('.svc-hint');
+      if (h) h.textContent = serviceOf({ service: svcVal() }).hint;
+    }));
+    const showIf = (sel, on) => { const el = f.querySelector(sel); if (el) el.hidden = !on; };
+    const radios = (name, fn) => f.querySelectorAll(`input[name=${name}]`).forEach((r) => r.addEventListener('change', fn));
+    radios('genHookup', () => showIf('.gen-more', !['', 'none'].includes(f.elements.genHookup.value)));
+    radios('genSize', () => (f.elements.genSizeOther.closest('label').hidden = f.elements.genSize.value !== 'other'));
+    radios('feeder', () => (f.elements.feederOther.closest('label').hidden = f.elements.feeder.value !== 'other'));
+    if (f.elements.fedFrom) f.elements.fedFrom.addEventListener('change', () => {
+      const pid = f.elements.fedFrom.value;
+      showIf('.fed-brk', !!pid);
+      showIf('.fed-wire', !!pid);
+      const fp = byId('panels', pid);
+      f.elements.fedBreaker.innerHTML = '<option value="">Not sure</option>' + sortBreakers(inHome('breakers', homeId).filter((b) => b.panelId === pid && b.kind !== 'spare')).map((b) => `<option value="${esc(b.id)}">${esc(slotLabel(b, fp))} · ${esc(ampsText(b))} · ${esc(b.label || '')}</option>`).join('');
     });
   }
   if (col === 'breakers') {
@@ -4718,6 +4936,16 @@ function renderEdit(col, id, q) {
       cov.querySelector('.covers-clash').textContent = clash ? `⚠️ ${clashText(clash, P)}` : '';
       cov.classList.toggle('bad', !!clash);
       cov.hidden = !txt;
+      {
+        const three = isThreePhase(pn);
+        f.querySelectorAll('.tri-only').forEach((el) => (el.hidden = !three));
+        const pf = f.querySelector('.phase-field');
+        if (pf) {
+          pf.hidden = !three;
+          const auto = three && typed ? breakerPhases({ ...bp.pos, phase: '' }, pn) : [];
+          pf.querySelector('.phase-auto').textContent = auto.length ? `Automatic: ${auto.join(' + ')} (from where it sits in the panel)` : 'Set from the space number automatically.';
+        }
+      }
       f.querySelector('.slot-name').textContent = halfNum ? (t === 'single' || t === 'double' || bp.makeGroup ? 'Top number on the sticker' : 'Number on the sticker') : 'Space / slot #';
       f.querySelector('.slot-hint').textContent = halfNum
         ? 'This panel is numbered 2 per row (1/3, 5/7 on the left; 2/4, 6/8 on the right). Type the top number of the row; AmpMap fills in the rest.'
@@ -4801,13 +5029,20 @@ function renderEdit(col, id, q) {
     const tog = () => (f.elements.roomNew.closest('label').hidden = rs.value !== '__new');
     rs.addEventListener('change', () => { tog(); if (rs.value === '__new') f.elements.roomNew.focus(); });
     tog();
-    const ts = f.elements.type;
-    ts.addEventListener('change', () => {
-      const list = stylesFor(ts.value);
+    const typeNow = () => (f.querySelector('input[name=type]:checked') || {}).value || 'other';
+    const styleNow = () => (f.querySelector('input[name=style]:checked') || {}).value || '';
+    const hint = () => (f.querySelector('.type-hint').textContent = defaultsHint(typeNow(), styleNow()));
+    const bindStyle = () => f.querySelectorAll('input[name=style]').forEach((r) => r.addEventListener('change', hint));
+    f.querySelectorAll('input[name=type]').forEach((r) => r.addEventListener('change', () => {
+      const list = stylesFor(typeNow());
       const sf = f.querySelector('.style-field');
       sf.hidden = !list;
-      f.elements.style.innerHTML = opt(list || [], '');
-    });
+      sf.querySelector('.style-chips').innerHTML = chipsHtml('style', (list || []).filter((x) => x.value), '');
+      bindChipClear(sf);
+      bindStyle();
+      hint();
+    }));
+    bindStyle();
   }
   if (q.get('focus') === 'wire') setTimeout(() => { const wb = document.getElementById('wireBox'); if (wb) window.scrollTo({ top: wb.getBoundingClientRect().top + window.scrollY - 90 }); }, 30);
   if (photo && existing.photoId)
@@ -4825,6 +5060,27 @@ function renderEdit(col, id, q) {
     if (col === 'homes') next = { ...base, name: v.name.trim(), type: v.type, customerId: v.customerId != null ? v.customerId : base.customerId || '', address: v.address.trim(), notes: v.notes };
     if (col === 'homes' && isNew && v.start) next.start = v.start;
     if (col === 'panels') next = { ...base, homeId, name: v.name.trim(), type: v.type, layout: v.layout, mainAmps: v.mainAmps, mainAmpsOther: v.mainAmpsOther || '', spaces: v.spaces, spacesOther: v.spacesOther || '', shorePower: v.type === 'rv' ? v.shorePower : '', shorePowerOther: v.shorePowerOther || '', powerSource: v.type === 'rv' ? '' : (v.powerSource || ''), sourceAmps: v.type === 'rv' ? '' : (v.sourceAmps || ''), sourceAmpsOther: v.sourceAmpsOther || '', location: v.location.trim(), notes: v.notes, numbering: v.numbering === 'half' ? 'half' : 'space', fuses: base.fuses || [] };
+    if (col === 'panels' && v.type !== 'rv') {
+      // pro / more details: only stored when picked (old panels stay as they were)
+      const svc = v.service || '';
+      setOpt(next, 'service', svc === DEFAULT_SVC && !base.service ? '' : svc);
+      const from = v.fedFrom || '';
+      if (from && wouldLoop(inHome('panels', homeId), next.id, from)) return toast("That panel is fed from this one. Pick a different one.");
+      setOpt(next, 'fedFrom', from);
+      setOpt(next, 'fedBreaker', from ? v.fedBreaker || '' : '');
+      setOpt(next, 'feeder', from ? v.feeder || '' : '');
+      setOpt(next, 'feederOther', from && v.feeder === 'other' ? (v.feederOther || '').trim() : '');
+      if (from && !next.powerSource) next.powerSource = 'subfeed';
+      setOpt(next, 'genHookup', v.genHookup || '');
+      const gen = v.genHookup && v.genHookup !== 'none';
+      setOpt(next, 'genSize', gen ? v.genSize || '' : '');
+      setOpt(next, 'genSizeOther', gen && v.genSize === 'other' ? (v.genSizeOther || '').trim() : '');
+      setOpt(next, 'genInlet', gen ? v.genInlet || '' : '');
+      setOpt(next, 'spd', v.spd || '');
+      setOpt(next, 'groundRod', v.groundRod || '');
+      setOpt(next, 'waterBond', v.waterBond || '');
+      setOpt(next, 'groundNotes', (v.groundNotes || '').trim());
+    }
     if (col === 'breakers') {
       const panelId = v.panelId;
       const slot = String(parseInt(v.slot, 10));
@@ -4845,6 +5101,7 @@ function renderEdit(col, id, q) {
         return toast('That spot is taken - see the note above');
       }
       next = { ...base, homeId, panelId, slot: pos.slot, poles: pos.poles, size: pos.size, half: pos.half, btype: t, groupId, amps: v.amps, ampsOther: v.ampsOther || '', label: v.label.trim(), leg: v.leg || base.leg || '', rooms: v.rooms.split(',').map((s) => s.trim()).filter(Boolean), kind: v.kind, notes: v.notes, loads: base.loads || [] };
+      setOpt(next, 'phase', isThreePhase(byId('panels', panelId)) && /^[ABC]{1,3}$/.test(v.phase || '') ? v.phase : '');
       { const w = wireFromForm(v); if (w) next.wire = w; else delete next.wire; }
       for (const m of mates) await store.put('breakers', m);
     }

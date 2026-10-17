@@ -1,5 +1,5 @@
 // Demo / local mode: everything lives in this browser's localStorage.
-import { seedData, houseExample } from '../lib/seed.js';
+import { seedData, houseExample, commercialExample } from '../lib/seed.js';
 import { codeHash, guardNext, toMillis, randomToken, CLAIM_DAYS, grantId } from '../lib/access.js';
 
 const KEY = 'panelbuddy:data:v1';
@@ -59,6 +59,15 @@ export function createLocalStore() {
               changed = true;
             }
           }
+        if (changed) save();
+      }
+      // ?example=commercial adds the sample commercial building (3-phase, MDP -> LP-1 / HP-1)
+      // to a demo started before it existed. Only its own ids are written.
+      if (typeof location !== 'undefined' && /[?&]example=commercial/.test(location.search)) {
+        const cx = commercialExample();
+        let changed = false;
+        for (const c of ['homes', 'panels', 'breakers', 'devices'])
+          for (const it of cx[c]) if (!data[c].find((x) => x.id === it.id)) { data[c].push(it); changed = true; }
         if (changed) save();
       }
       // ?example=wire fills the sample home's wire (breaker.wire / device.wire, added later)

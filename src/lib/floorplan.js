@@ -237,6 +237,7 @@ export function snapPin(plan, x, y, { max = WALL_SNAP, wall = true } = {}) {
 export function pinKind(d) {
   if (!d) return 'other';
   if (d.type === 'outlet') return d.gfci === 'gfci_outlet' || d.style === 'gfci' ? 'gfci' : 'outlet';
+  if (['ev', 'hvac', 'waterheater', 'wellpump', 'solar', 'generator', 'subpanel'].includes(d.type)) return 'appliance';
   return ['switch', 'light', 'fan', 'appliance'].includes(d.type) ? d.type : 'other';
 }
 export const PIN_KINDS = [

@@ -227,7 +227,8 @@ test('shopping list: totals by type + style, boxes, plates (1 per gang); old doc
   assert.equal(qtyOf({}), 1);
   assert.equal(qtyOf({ qty: '0' }), 1);
   assert.equal(styleOf({ type: 'outlet' }), null);
-  assert.equal(stylesFor('light'), null);
+  assert.equal(stylesFor('appliance'), null); // lights/fans/smoke got styles in pro-electrical
+  assert.ok(stylesFor('light').some((s) => s.value === 'recessed'));
   const all = shoppingList(devices, 'all');
   const by = Object.fromEntries(all.items.map((i) => [i.key, i.qty]));
   assert.equal(by['outlet|tr_duplex'], 10);

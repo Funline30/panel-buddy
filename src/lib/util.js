@@ -13,6 +13,7 @@ export function slotText(b) {
   if (!b) return '';
   const s = parseInt(b.slot, 10);
   if (!Number.isFinite(s)) return b.slot || '?';
+  if (String(b.poles) === '3') return `${s}/${s + 2}/${s + 4}`;
   return String(b.poles) === '2' ? `${s}/${s + 2}` : String(s);
 }
 

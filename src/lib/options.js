@@ -4,6 +4,7 @@ export const AMP_OPTIONS = ['15', '20', '30', '40', '50', '60', 'other'];
 export const POLE_OPTIONS = [
   { value: '1', label: 'Single pole (120V)' },
   { value: '2', label: 'Double pole (240V)' },
+  { value: '3', label: 'Three-pole (3-phase)' },
 ];
 
 // "Breaker type" dropdown. Tandem = 2 half-size breakers in 1 space, each its own circuit.
@@ -19,18 +20,27 @@ export const BREAKER_KINDS = [
   { value: 'gfci', label: 'GFCI breaker' },
   { value: 'afci', label: 'AFCI breaker' },
   { value: 'dual', label: 'Dual function (AFCI + GFCI)' },
+  { value: 'gfpe', label: 'Ground-fault (equipment)' },
   { value: 'spare', label: 'Spare / unused' },
 ];
 
+// group: where it shows in the Add picker (common first, the rest under "More types").
 export const DEVICE_TYPES = [
-  { value: 'outlet', label: 'Outlet', icon: '🔌' },
-  { value: 'light', label: 'Light', icon: '💡' },
-  { value: 'switch', label: 'Switch', icon: '🎚️' },
-  { value: 'fan', label: 'Fan', icon: '🌀' },
-  { value: 'appliance', label: 'Appliance', icon: '🧺' },
-  { value: 'smoke', label: 'Smoke / CO alarm', icon: '🚨' },
-  { value: 'junction', label: 'Junction box', icon: '📦' },
-  { value: 'other', label: 'Other', icon: '⚡' },
+  { value: 'outlet', label: 'Outlet', icon: '🔌', group: 'common' },
+  { value: 'light', label: 'Light', icon: '💡', group: 'common' },
+  { value: 'switch', label: 'Switch', icon: '🎚️', group: 'common' },
+  { value: 'fan', label: 'Fan', icon: '🌀', group: 'common' },
+  { value: 'appliance', label: 'Appliance', icon: '🧺', group: 'common' },
+  { value: 'smoke', label: 'Smoke / CO alarm', icon: '🚨', group: 'safety' },
+  { value: 'junction', label: 'Junction box', icon: '📦', group: 'other' },
+  { value: 'ev', label: 'EV charger', icon: '🚗', group: 'equipment' },
+  { value: 'hvac', label: 'AC / heat pump', icon: '❄️', group: 'equipment' },
+  { value: 'waterheater', label: 'Water heater', icon: '🚿', group: 'equipment' },
+  { value: 'wellpump', label: 'Well pump', icon: '💧', group: 'equipment' },
+  { value: 'solar', label: 'Solar / inverter', icon: '☀️', group: 'equipment' },
+  { value: 'generator', label: 'Generator / inlet', icon: '⛽', group: 'equipment' },
+  { value: 'subpanel', label: 'Sub-panel / disconnect', icon: '🗄️', group: 'equipment' },
+  { value: 'other', label: 'Other', icon: '⚡', group: 'other' },
 ];
 
 export const GFCI_OPTIONS = [
@@ -66,6 +76,7 @@ export const HOME_TYPES = [
   { value: 'house', label: 'House' },
   { value: 'mobile', label: 'Mobile / manufactured home' },
   { value: 'rv', label: 'RV / camper / travel trailer' },
+  { value: 'commercial', label: 'Commercial building (store, office, plant)' },
   { value: 'other', label: 'Other (shop, shed, cabin...)' },
 ];
 
@@ -143,6 +154,11 @@ export const OUTLET_STYLES = [
   { value: 'usb', label: 'USB combo', short: 'USB combo outlet', plate: 'decora' },
   { value: 'double', label: 'Double / quad (2-gang)', short: 'quad (2-gang) outlet', plate: 'duplex', gangs: 2 },
   { value: '20a', label: '20A', short: '20A outlet', plate: 'duplex' },
+  { value: 'weatherproof', label: 'Weatherproof / outdoor', short: 'weatherproof outlet + in-use cover', plate: 'decora' },
+  { value: '240dryer', label: '240V dryer (30A)', short: '30A dryer outlet', plate: 'other' },
+  { value: '240range', label: '240V range (50A)', short: '50A range outlet', plate: 'other' },
+  { value: '240welder', label: '240V welder / shop', short: '240V welder outlet', plate: 'other' },
+  { value: '240ev', label: '240V EV (14-50)', short: '14-50 EV outlet', plate: 'other' },
   { value: 'other', label: 'Other', short: 'other outlet', plate: 'other' },
 ];
 export const SWITCH_STYLES = [
@@ -170,9 +186,33 @@ export const REPLACE_OPTIONS = [
 ];
 export const PLATE_LABELS = { duplex: 'duplex outlet plate', decora: 'Decora (rocker) plate', toggle: 'toggle switch plate', other: 'other plate' };
 
+export const LIGHT_STYLES = [
+  { value: '', label: 'Not set' },
+  { value: 'ceiling', label: 'Ceiling light', short: 'ceiling light' },
+  { value: 'recessed', label: 'Recessed / can', short: 'recessed light' },
+  { value: 'fixture', label: 'Wall / vanity fixture', short: 'wall fixture' },
+  { value: 'exterior', label: 'Outdoor / flood', short: 'outdoor light' },
+  { value: 'other', label: 'Other', short: 'other light' },
+];
+export const FAN_STYLES = [
+  { value: '', label: 'Not set' },
+  { value: 'ceiling', label: 'Ceiling fan', short: 'ceiling fan' },
+  { value: 'ceiling_light', label: 'Ceiling fan + light', short: 'ceiling fan with light' },
+  { value: 'vent', label: 'Bath / vent fan', short: 'vent fan' },
+  { value: 'other', label: 'Other', short: 'other fan' },
+];
+export const SMOKE_STYLES = [
+  { value: '', label: 'Not set' },
+  { value: 'smoke', label: 'Smoke', short: 'smoke alarm' },
+  { value: 'co', label: 'CO', short: 'CO alarm' },
+  { value: 'combo', label: 'Smoke + CO', short: 'smoke + CO alarm' },
+];
 export function stylesFor(type) {
   if (type === 'outlet') return OUTLET_STYLES;
   if (type === 'switch') return SWITCH_STYLES;
+  if (type === 'light') return LIGHT_STYLES;
+  if (type === 'fan') return FAN_STYLES;
+  if (type === 'smoke') return SMOKE_STYLES;
   return null;
 }
 export function styleOf(d) {

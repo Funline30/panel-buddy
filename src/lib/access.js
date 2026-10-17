@@ -135,9 +135,9 @@ export function triesLeft(guard, now = Date.now()) {
 
 // ---------------------------------------------------------------- edit history
 const FIELD_NAMES = {
-  breakers: { label: 'label', amps: 'amps', ampsOther: 'amps', slot: 'spot', poles: 'poles', size: 'size', half: 'half', btype: 'type', rooms: 'rooms', kind: 'kind', notes: 'notes', wire: 'wire', panelId: 'panel', on: 'on/off', loads: 'items', groupId: 'tandem' },
+  breakers: { label: 'label', amps: 'amps', ampsOther: 'amps', slot: 'spot', poles: 'poles', size: 'size', half: 'half', btype: 'type', rooms: 'rooms', kind: 'kind', notes: 'notes', wire: 'wire', panelId: 'panel', on: 'on/off', loads: 'items', groupId: 'tandem', phase: 'phase' },
   devices: { name: 'name', type: 'type', room: 'room', breakerId: 'breaker', wire: 'wire', notes: 'notes', style: 'style', qty: 'qty', box: 'box', replace: 'needs replacing', pos: 'map spot', loads: 'plugged in', wall: 'wall', gfci: 'GFCI', photoId: 'photo' },
-  panels: { name: 'name', location: 'location', mainAmps: 'main amps', mainAmpsOther: 'main amps', spaces: 'spaces', type: 'type', numbering: 'numbering', layout: 'layout', fuses: 'fuses', notes: 'notes' },
+  panels: { name: 'name', location: 'location', mainAmps: 'main amps', mainAmpsOther: 'main amps', spaces: 'spaces', type: 'type', numbering: 'numbering', layout: 'layout', fuses: 'fuses', notes: 'notes', service: 'service type', fedFrom: 'fed from', fedBreaker: 'feeder breaker', feeder: 'feeder wire', feederOther: 'feeder wire', genHookup: 'generator hookup', genSize: 'generator size', genSizeOther: 'generator size', genInlet: 'generator inlet', spd: 'surge protector', groundRod: 'ground rod', waterBond: 'water bond', groundNotes: 'grounding notes', runs: 'wire runs', powerSource: 'power source', sourceAmps: 'pole amps' },
 };
 const SKIP = new Set(['id', 'updatedAt', 'createdAt', 'homeId']);
 const KIND_WORD = { breakers: 'breaker', devices: 'outlet', panels: 'panel', homes: 'home' };
