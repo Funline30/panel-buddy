@@ -115,6 +115,15 @@ export function wireTag(w) {
   return w.size === 'other' ? (w.sizeOther || '') : typeText(w, true);
 }
 
+// Outlet / row label: "12/2 · 12 AWG" (cable + size), else the size or type alone.
+export function wireShort(w) {
+  w = cleanWire(w);
+  if (!w) return '';
+  const n = /^\d+$/.test(w.size || '') ? w.size : '';
+  if (n && ['2g', '3g', '2'].includes(w.cond)) return `${n}/${w.cond[0]} · ${n} AWG`;
+  return sizeText(w) || typeText(w, true) || condText(w) || '';
+}
+
 // The wire an outlet actually has: its own override, else its breaker's.
 export function effectiveWire(device, breaker) {
   const own = cleanWire(device && device.wire);

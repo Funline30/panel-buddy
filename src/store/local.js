@@ -56,6 +56,19 @@ export function createLocalStore() {
           }
         if (changed) save();
       }
+      // ?example=wire fills the sample home's wire (breaker.wire / device.wire, added later)
+      // into a demo started before it existed. Only sample items with no wire are touched.
+      if (typeof location !== 'undefined' && /[?&]example=wire/.test(location.search)) {
+        const ex = seedData();
+        let changed = false;
+        for (const c of ['breakers', 'devices'])
+          for (const it of ex[c]) {
+            if (!it.wire) continue;
+            const i = data[c].findIndex((x) => x.id === it.id && x.homeId === it.homeId);
+            if (i !== -1 && !data[c][i].wire) { data[c][i] = { ...data[c][i], wire: it.wire }; changed = true; }
+          }
+        if (changed) save();
+      }
       data.settings = data.settings || { accountType: 'personal' };
       emit();
     },

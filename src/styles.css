@@ -918,3 +918,16 @@ select.full { margin-top: 0; }
 .wire-inh-note { margin: 10px 0 0; }
 .pill.wire { background: var(--accent-soft); color: var(--accent); }
 .dir-table .wt { font-size: 0.85em; font-weight: 700; color: #1d4ed8; white-space: nowrap; }
+
+/* wire on outlet rows / chips: own = normal ink, inherited from the breaker = light grey */
+.ow { display: inline-flex; align-items: center; gap: 4px; margin-top: 3px; font-size: 0.8rem; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ow.inh { color: var(--muted); font-weight: 600; opacity: 0.85; }
+.ow.inh .wire-ic { color: var(--muted); }
+.row-main .ow { display: flex; }
+.map-txt .ow.sm { display: block; margin-top: 1px; font-size: 0.72rem; }
+.wire-head { display: inline-flex; align-items: center; gap: 10px; margin-top: 8px; padding: 6px 12px 6px 6px; border-radius: 12px; background: var(--card-2); border: 1px solid var(--line); color: var(--ink); }
+.wire-head.inh b { color: var(--ink-2); }
+.wire-head .tiny { font-size: 0.74rem; }
+.check-line[hidden] { display: none !important; }
+.ow .wire-ic { margin-right: 2px; }
+.map-txt .ow.sm .wire-ic { margin-right: 4px; }

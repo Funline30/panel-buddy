@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cleanWire, hasWire, wireFromForm, wireText, wireTag, cableText, sizeText, typeText, condText, effectiveWire, usualMaxAmps, wireChecks, wireWarning, WIRE_GUIDANCE, WIRE_SIZES, WIRE_TYPES, WIRE_CONDUCTORS, WIRE_COLORS } from '../src/lib/wire.js';
+import { wireShort, cleanWire, hasWire, wireFromForm, wireText, wireTag, cableText, sizeText, typeText, condText, effectiveWire, usualMaxAmps, wireChecks, wireWarning, WIRE_GUIDANCE, WIRE_SIZES, WIRE_TYPES, WIRE_CONDUCTORS, WIRE_COLORS } from '../src/lib/wire.js';
 import { breakersCsv, devicesCsv } from '../src/lib/csv.js';
 import { seedData } from '../src/lib/seed.js';
 import { breakerAmps } from '../src/lib/load.js';
@@ -124,4 +124,18 @@ test('wire: sample home has wire, one 14 AWG on a 20A breaker and one outlet ove
   assert.equal(effectiveWire(tv, brk[tv.breakerId]).from, 'outlet');
   const bed = s.devices.find((d) => d.id === 'd2');
   assert.equal(effectiveWire(bed, brk[bed.breakerId]).from, 'circuit');
+});
+
+test('wire: outlet label shows cable + size ("12/2 · 12 AWG")', () => {
+  assert.equal(wireShort({ size: '12', cond: '2g', type: 'nm' }), '12/2 · 12 AWG');
+  assert.equal(wireShort({ size: '10', cond: '3g' }), '10/3 · 10 AWG');
+  assert.equal(wireShort({ size: '14' }), '14 AWG');
+  assert.equal(wireShort({ type: 'mc' }), 'MC');
+  assert.equal(wireShort({ size: 'other', sizeOther: '2/0 AL' }), '2/0 AL');
+  assert.equal(wireShort(null), '');
+  // inherited vs own, as the outlet rows show it
+  const b = { amps: '15', wire: { size: '14', cond: '2g', type: 'nm' } };
+  assert.equal(wireShort(effectiveWire({}, b).wire), '14/2 · 14 AWG');
+  assert.equal(effectiveWire({}, b).from, 'circuit');
+  assert.equal(wireShort(effectiveWire({ wire: { size: '12', cond: '2g' } }, b).wire), '12/2 · 12 AWG');
 });
