@@ -157,6 +157,22 @@ if tester is None:
 else:
     st, j = call("POST", f"/v1/betaGroups/{GID}/relationships/betaTesters", {"data": [{"type": "betaTesters", "id": tester["id"]}]})
     note("notice", "tester", f"{email} already a tester; group add: {st} {'' if st in (200, 204) else errs(j)}")
+    if st not in (200, 204):
+        # The tester record may belong to another app's groups (e.g. Runs Ledger). Creating the tester
+        # again with this group attached is Apple's documented way to add an existing person to a group.
+        st2, j2 = call("POST", "/v1/betaTesters", {"data": {"type": "betaTesters",
+                                                         "attributes": {"email": email, "firstName": first, "lastName": last},
+                                                         "relationships": {"betaGroups": {"data": [{"type": "betaGroups", "id": GID}]}}}})
+        note("notice", "tester", f"re-create with group '{group['attributes'].get('name')}': {st2} {'' if st2 in (200, 201) else errs(j2)}")
+        if st2 in (200, 201):
+            tester = j2["data"]
+
+# who is in the group now
+st, j = call("GET", f"/v1/betaGroups/{GID}/betaTesters?limit=50&fields[betaTesters]=email,inviteType,state")
+if st == 200:
+    note("notice", "group members", ", ".join(f"{t['attributes'].get('email')} ({t['attributes'].get('inviteType')}, {t['attributes'].get('state')})" for t in j.get("data", [])) or "(none)")
+else:
+    print("group members", st, errs(j), flush=True)
 
 st, j = call("POST", "/v1/betaTesterInvitations", {"data": {"type": "betaTesterInvitations", "relationships": {
     "app": {"data": {"type": "apps", "id": APP_ID}},
