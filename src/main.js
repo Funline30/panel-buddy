@@ -32,6 +32,7 @@ import { compressPhoto } from './lib/photo.js';
 import { WIRE_SIZES, WIRE_TYPES, WIRE_CONDUCTORS, WIRE_COLORS, JACKET_SIZE, WIRE_GUIDANCE, cleanWire, wireFromForm, wireText, wireTag, wireShort, effectiveWire, wireChecks, sizeText, typeText, condText, colorText, cableText } from './lib/wire.js';
 import { buildHouseMap, outletsOnBreaker, NO_ROOM, roomSort } from './lib/housemap.js';
 import { planBulk, BULK_TYPES, partsOf } from './lib/bulk.js';
+import { parseLabel, mergeScans, toBulkRows, nextScanSlot, spacesNeeded } from './lib/labelScan.js';
 import { QUICK_AMPS, QUICK_WIRES, quickWire, FEEDS_SUGGESTIONS, nextFreeSlot, quickBreaker, spacesUsed, slotName } from './lib/quick.js';
 import { planOf, planToSave, clampRoom, moveRoom, resizeRoom, resizePlan, roomAt, snapPin, inBounds, pinKind, PIN_KINDS, kindFields, splitPlaced, pinsByBreaker, roomsOnBreaker, newRoomSpot, TEMPLATES, applyTemplate, floorOfPos, swapRooms, movePins, resizeCorner, rotateRoom, overlapping, shapeOf, bboxOf, cleanPts, validShape, moveCorner, addCorner, removeCorner, moveEdge, presetShape, roomsOutside, fitRoomsToShape, normalizeShape, polyArea, outlineFromRooms, withAutoOutline, growArea, clearPlan, planHasDrawing, fmtFtIn, ftInParts, setRoomSize, snapToRooms, rectPts, pointInPoly } from './lib/floorplan.js';
 import { planOpenSegs, openAt, openWallAt, closeWall, setSideOpen, sideState, moveOpenEnd, setOpenSpan, openWallsAfterRoomMove, openWallsOfRooms, doorsOnOpen, segOnOpen, sharedSpan, SIDES as WALL_SIDES, SIDE_WORDS } from './lib/walls.js';
@@ -444,6 +445,7 @@ async function render() {
     if (view === 'map') return renderMap(homeId, q);
     if (view === 'bulk') return renderBulk(homeId, q);
     if (view === 'quick') return renderQuick(homeId, q);
+    if (view === 'labelscan') return renderLabelScan(homeId, q);
     if (view === 'search' && id === 'dev') return renderCatalogItem(homeId, parts[4], q);
     if (view === 'search' && id === 'add') return renderAddPicker(homeId, parts[4], q);
     if (view === 'search') return renderSearch(homeId, q.get('q') || '', q.get('cat') || '');
@@ -599,7 +601,13 @@ function leaveGuest(msg = '') {
   location.hash = gi && gi.token ? `#/share/${gi.token}` : '#/';
   location.reload();
 }
-function guestDenied() {
+function guestDenied(e) {
+  // The code still works, but the server has the older security rules (before full access):
+  // adding/removing panels and changing rooms isn't allowed yet. Stay in, say so kindly.
+  if (e && e.code === 'ampmap/needs-owner') {
+    alert(`Adding or removing panels and changing rooms isn't switched on for edit codes yet, so that part didn't save. Ask the homeowner to do that part for now.${e.saved ? ' Your other changes were saved.' : ''}`);
+    return;
+  }
   leaveGuest('Your edit access ended: the homeowner changed or turned off the code. Your last change may not have saved.');
 }
 
@@ -632,7 +640,7 @@ async function startGuest(gi) {
       if (!local.demoCodeStillValid(gi.token, gi.hash)) throw new Error('ended');
       return commit(changes, entry);
     };
-    return createScopedStore(backend, { ownerUid: 'demo', homeId: gi.homeId, editorUid: 'demo-guest', name: gi.name, afterCommit: () => backend.refreshShare(gi.token, sharePayload(gi.homeId)), ...common });
+    return createScopedStore(backend, { ownerUid: 'demo', homeId: gi.homeId, editorUid: 'demo-guest', name: gi.name, afterCommit: async (d) => { await backend.refreshShare(gi.token, sharePayload(gi.homeId)); await backend.registerPanels(gi.token, d.panels.map((p) => p.id)); }, ...common });
   }
   if (!isFirebaseConfigured()) throw new Error('no cloud');
   if (gi.mode === 'code') {
@@ -663,7 +671,7 @@ function renderGuestMore(homeId) {
   <div class="card">
     <h3>You're editing ${esc(home ? home.name : 'this home')}</h3>
     <p class="muted">As <b>${esc(store.guest.name)}</b>. Your changes save to the homeowner's AmpMap with your name, and they can undo them.</p>
-    <p class="muted">You can change breakers, outlets, wire and labels. Photos and sharing stay with the homeowner.</p>
+    <p class="muted">You have full access to this home: add or remove panels, breakers, outlets, rooms, wire runs and photos. Codes, sharing and deleting the home stay with the homeowner.</p>
     <button class="btn primary" id="guestDone">Done editing</button>
     ${gi.token ? `<a class="btn ghost" href="#/share/${esc(gi.token)}">See the read-only view</a>` : ''}
   </div>
@@ -1206,6 +1214,7 @@ function renderPanel(homeId, panelId) {
   ${(() => { const h = byId('homes', homeId); const c = h && h.customerId && byId('customers', h.customerId); return c ? `<a class="breaker-link" href="#/customers/${c.id}"><span class="big-icon sm" aria-hidden="true">👤</span><span><b>${esc(c.name)}</b><span class="muted">${c.lastServiced ? 'Last serviced ' + esc(c.lastServiced) : 'No visits logged'} · ${(c.visits || []).length} service note${(c.visits || []).length === 1 ? '' : 's'}</span></span><span aria-hidden="true">›</span></a>` : ''; })()}
   ${over || warn ? `<a class="alert ${over ? 'over' : 'warn'}" href="#/h/${homeId}/load">${over ? `${over} circuit${over > 1 ? 's' : ''} over 100%` : ''}${over && warn ? ' · ' : ''}${warn ? `${warn} at 80%+` : ''} typical - see Load check</a>` : ''}
   ${peakOver ? `<a class="peak-note" href="#/h/${homeId}/load">⚠️ ${peakOver} circuit${peakOver > 1 ? 's' : ''} could trip if everything runs at once</a>` : ''}
+  ${!breakers.length && panel.type !== 'rv' ? scanCard(homeId, panel) : ''}
   ${clashes.length ? `<div class="card clash-card"><h3>⚠️ ${clashes.length === 1 ? 'Two breakers share a spot' : `${clashes.length} spots are shared`}</h3><ul class="list">${clashes.map(([a, b2]) => `<li class="clash-row"><span><b>${esc(stickerText(a, panel))}</b> and <b>${esc(stickerText(b2, panel))}</b> overlap.${canJoinTandem(a, b2, panel) ? ' One breaker with 2 switches?' : ''}</span>${canJoinTandem(a, b2, panel) ? `<button type="button" class="btn small primary" data-join="${esc(a.id)}|${esc(b2.id)}">Make it a tandem</button>` : `<a class="btn small" href="#/edit/breakers/${b2.id}?home=${homeId}">Fix ${esc(slotLabel(b2, panel))}</a>`}</li>`).join('')}</ul></div>` : ''}
   <div class="panel-box">
     <div class="panel-main">${panel.type === 'rv' ? '120V AC · ' : ''}MAIN ${esc(mainAmpsText(panel))}${panel.mainAmps ? 'A' : ''}${three ? ` · ${esc(serviceOf(panel).short)}` : ''}</div>
@@ -3413,6 +3422,7 @@ function renderQuick(homeId, q) {
     </div>
     <div class="qk-meter" aria-hidden="true"><span style="width:${sp.max ? Math.min(100, Math.round((sp.used / sp.max) * 100)) : 0}%"></span></div>
   </section>
+  ${!breakers.length && panel.type !== 'rv' ? scanCard(homeId, panel, { compact: true }) : ''}
   <form id="quickForm" class="card form qk-card" novalidate autocomplete="off">
     <div class="qk-top">
       <h3>${slot ? 'Next breaker' : 'Panel is full'}</h3>
@@ -4395,6 +4405,256 @@ async function decodeImageData(imgData) {
   return r ? r.data : null;
 }
 
+// ---------------------------------------------------------------- scan a panel label photo
+// #/h/H/labelscan?panel=P : photo -> on-device reading -> review grid -> build breakers.
+// Nothing is saved until "Looks good - build my panel". Same breakers as typing them in.
+let labelUI = { key: '', step: 'pick', src: '', rotate: 0, circuits: [], skipped: [], quality: '', progress: 0, msg: '', sel: -1, name: '', errors: {} };
+const SCAN_SAMPLE = './demo/panel-label.jpg';
+
+function scanCard(homeId, panel, { compact = false } = {}) {
+  return `<a class="card scan-card${compact ? ' compact' : ''}" href="#/h/${homeId}/labelscan?panel=${panel ? panel.id : ''}">
+    <span class="scan-ic" aria-hidden="true">📷</span>
+    <span><b>Scan the panel label</b><span class="muted tiny block">Already labeled? Take a photo of the list on the panel door and we'll fill in the breakers for you to check. Optional.</span></span>
+    <span aria-hidden="true">›</span>
+  </a>`;
+}
+
+function scanTarget(homeId, q) {
+  const panels = inHome('panels', homeId);
+  const p = panels.find((x) => x.id === q.get('panel'));
+  const empty = p && !inHome('breakers', homeId).some((b) => b.panelId === p.id);
+  return empty ? p : null; // null = build a new panel
+}
+
+function renderLabelScan(homeId, q) {
+  const key = `${homeId}|${q.get('panel') || ''}`;
+  if (labelUI.key !== key) labelUI = { key, step: 'pick', src: '', rotate: 0, circuits: [], skipped: [], quality: '', progress: 0, msg: '', sel: -1, name: '', errors: {} };
+  const target = scanTarget(homeId, q);
+  const layout = target ? layoutOf(target) : 'two';
+  const S = labelUI;
+  const demo = store.mode === 'demo' || (isGuest() && store.guest && store.guest.ownerUid === 'demo');
+  if (q.get('sample') === '1' && S.step === 'pick' && !S.src) { S.src = SCAN_SAMPLE; S.step = 'photo'; }
+  let body = '';
+  const back = target ? `#/h/${homeId}/panel/${target.id}` : `#/h/${homeId}/panel`;
+  if (S.step === 'pick') {
+    body = `
+    <div class="card scan-intro">
+      <h2>📷 Scan the panel label</h2>
+      <p class="muted">Take a clear, straight photo of the breaker list on the panel door. We'll read it and fill in the breakers. You check them before anything is saved.</p>
+      <label class="btn primary big scan-pick">📷 Take a photo<input type="file" accept="image/*" capture="environment" id="scanCam" hidden></label>
+      <label class="btn big scan-pick">🖼️ Choose a photo<input type="file" accept="image/*" id="scanFile" hidden></label>
+      ${demo ? `<button class="btn ghost" id="scanSample">Try it with a sample label</button>` : ''}
+      <p class="tiny muted">Works best with printed labels in good light. Handwriting may not read well. The photo is read on your phone.</p>
+      <a class="btn ghost small" href="${target ? `#/h/${homeId}/quick?panel=${target.id}` : `#/edit/panels/new?home=${homeId}`}">Skip, I'll type them in</a>
+    </div>`;
+  } else if (S.step === 'photo' || S.step === 'reading') {
+    const reading = S.step === 'reading';
+    body = `
+    <div class="card scan-photo">
+      <h2>${reading ? 'Reading the label…' : 'Is it straight?'}</h2>
+      <div class="scan-img-wrap"><img id="scanImg" src="${esc(S.src)}" alt="Panel label photo" style="transform:rotate(${S.rotate}deg)"></div>
+      ${reading
+        ? `<div class="scan-progress" role="progressbar" aria-valuenow="${Math.round(S.progress * 100)}"><span style="width:${Math.round(S.progress * 100)}%"></span></div><p class="muted tiny" id="scanMsg">${esc(S.msg || '')}</p>`
+        : `<p class="muted">Words should read left to right. Turn it if needed.</p>
+           <div class="row-actions"><button class="btn" id="scanTurn">↻ Turn</button><button class="btn ghost" id="scanAgain">Different photo</button></div>
+           <button class="btn primary big full" id="scanRead">Read the label</button>`}
+    </div>`;
+  } else if (S.step === 'none') {
+    body = `
+    <div class="card scan-none">
+      <h2>Couldn't read much from this one</h2>
+      <p class="muted">${S.msg ? esc(S.msg) : "That's OK. Labels that are handwritten, faded, shiny or at an angle are hard to read."} Try a closer, straight photo in good light, or type them in. It only takes a few minutes.</p>
+      <button class="btn primary big full" id="scanRetry">Try another photo</button>
+      ${S.circuits.length ? `<button class="btn big full" id="scanUseAnyway">Use the ${S.circuits.length} it found</button>` : ''}
+      <a class="btn big full" href="${target ? `#/h/${homeId}/quick?panel=${target.id}` : `#/edit/panels/new?home=${homeId}`}">Type them in</a>
+    </div>`;
+  } else if (S.step === 'review') {
+    const cs = S.circuits;
+    const step2 = layout === 'one' ? 1 : 2;
+    const covered = new Map(); // slot -> circuit index (second half of a 2-pole)
+    cs.forEach((c, i) => { if (c.poles === '2') covered.set(Number(c.slot) + step2, i); });
+    const maxSlot = Math.max(spacesNeeded(cs, layout), target ? panelSpaces(target) : 0, 2);
+    const cells = [];
+    for (let n = 1; n <= maxSlot; n++) {
+      const i = cs.findIndex((c) => Number(c.slot) === n);
+      const col = layout === 'one' ? 1 : n % 2 ? 1 : 2;
+      const row = layout === 'one' ? n : Math.ceil(n / 2);
+      if (i >= 0) {
+        const c = cs[i];
+        const err = S.errors[i];
+        cells.push(`<button type="button" class="sc-cell ${c.poles === '2' ? 'dbl' : ''} ${i === S.sel ? 'sel' : ''} ${c.guessed ? 'guess' : ''} ${err ? 'err' : ''}" data-sc="${i}" style="grid-column:${col};grid-row:${row}${c.poles === '2' && layout !== 'one' ? ' / span 2' : ''}">
+          <b class="sc-n">${n}${c.guessed ? '?' : ''}</b><span class="sc-name">${esc(c.label)}</span><span class="sc-tags">${esc(c.amps)}A${c.poles === '2' ? ' · 240V' : ''}${c.device ? ` · ${esc(c.device)}` : ''}</span>
+        </button>`);
+      } else if (!covered.has(n)) {
+        cells.push(`<button type="button" class="sc-cell empty" data-scadd="${n}" style="grid-column:${col};grid-row:${row}"><b class="sc-n">${n}</b><span class="sc-name muted">+ add</span></button>`);
+      }
+    }
+    const sel = S.sel >= 0 ? cs[S.sel] : null;
+    const errCount = Object.keys(S.errors).length;
+    body = `
+    <div class="card scan-review">
+      <h2>Found ${cs.length} breaker${cs.length === 1 ? '' : 's'}</h2>
+      <p class="muted">Tap any one to fix it. ${cs.some((c) => c.guessed) ? 'A <b>?</b> means we guessed the number. ' : ''}Nothing is saved yet.</p>
+      ${target ? '' : `<label>Panel name<input id="scanName" value="${esc(S.name || (inHome('panels', homeId).length ? 'Scanned panel' : 'Main panel'))}"></label>`}
+      ${errCount ? `<p class="err">${errCount === 1 ? 'One breaker needs a fix' : `${errCount} breakers need a fix`} (shown in red): ${esc(Object.values(S.errors)[0])}</p>` : ''}
+      <div class="sc-grid ${layout === 'one' ? 'one' : ''}">${cells.join('')}</div>
+      ${sel ? `<div class="card sc-edit form" id="scEdit">
+        <h3>Space ${esc(String(sel.slot))}</h3>
+        <label>What it feeds<input id="scLabel" value="${esc(sel.label)}" list="feedsList" autocapitalize="sentences"></label>
+        <datalist id="feedsList">${FEEDS_SUGGESTIONS.map((s) => `<option value="${esc(s)}">`).join('')}</datalist>
+        <label>Space number<input id="scSlot" type="number" inputmode="numeric" min="1" max="84" value="${esc(String(sel.slot))}"></label>
+        <div class="seg-pick" role="radiogroup" aria-label="Breaker type">
+          <label class="seg-opt"><input type="radio" name="scPoles" value="1" ${sel.poles !== '2' ? 'checked' : ''}><span>Single · 120V</span></label>
+          <label class="seg-opt"><input type="radio" name="scPoles" value="2" ${sel.poles === '2' ? 'checked' : ''}><span>2-pole · 240V</span></label>
+        </div>
+        <div class="chip-pick" role="radiogroup" aria-label="Amps">${['15', '20', '30', '40', '50', '60'].map((a) => `<label class="chip-opt"><input type="radio" name="scAmps" value="${a}" ${String(sel.amps) === a ? 'checked' : ''}><span>${a}A</span></label>`).join('')}</div>
+        ${sel.maybe2 ? '<p class="tiny muted">This sounds like a 240V breaker (2 spaces), but the space below it has another name. Check the panel.</p>' : ''}
+        <div class="row-actions"><button class="btn primary" id="scDone">Done</button><button class="btn danger-ghost" id="scDel">Delete</button></div>
+      </div>` : ''}
+      ${S.skipped.length ? `<details class="sc-skipped"><summary class="muted tiny">Also read (not used): ${S.skipped.length} line${S.skipped.length === 1 ? '' : 's'}</summary><div class="chip-row">${S.skipped.slice(0, 12).map((t, i) => `<button type="button" class="chip" data-scskip="${i}">+ ${esc(t.slice(0, 30))}</button>`).join('')}</div></details>` : ''}
+      <button class="btn ghost small" id="scAdd">+ Add a breaker</button>
+    </div>
+    <div class="scan-bar ${sel ? 'editing' : ''}">
+      <button class="btn primary big" id="scBuild" ${cs.length ? '' : 'disabled'}>Looks good — build my panel</button>
+      <button class="btn ghost small" id="scStart">Start over</button>
+    </div>`;
+  }
+  app.innerHTML = shell(homeId, 'panel', `<div class="lscan"><p class="lscan-back"><a class="tiny" href="${back}">‹ Back</a></p>${body}</div>`);
+  bindShell();
+  bindLabelScan(homeId, q, target, layout);
+}
+
+function bindLabelScan(homeId, q, target, layout) {
+  const S = labelUI;
+  const $ = (id) => document.getElementById(id);
+  const onFile = (input) => {
+    if (!input) return;
+    input.onchange = () => {
+      const f = input.files && input.files[0];
+      if (!f) return;
+      const r = new FileReader();
+      r.onload = () => { Object.assign(S, { src: r.result, rotate: 0, step: 'photo' }); render(); };
+      r.readAsDataURL(f);
+    };
+  };
+  onFile($('scanCam'));
+  onFile($('scanFile'));
+  if ($('scanSample')) $('scanSample').onclick = () => { Object.assign(S, { src: SCAN_SAMPLE, rotate: 0, step: 'photo' }); render(); };
+  if ($('scanTurn')) $('scanTurn').onclick = () => { S.rotate = (S.rotate + 90) % 360; render(); };
+  if ($('scanAgain')) $('scanAgain').onclick = () => { Object.assign(S, { src: '', step: 'pick' }); render(); };
+  if ($('scanRetry')) $('scanRetry').onclick = () => { Object.assign(S, { src: '', step: 'pick', circuits: [], skipped: [] }); render(); };
+  if ($('scanUseAnyway')) $('scanUseAnyway').onclick = () => { S.step = 'review'; render(); };
+  if ($('scanRead')) $('scanRead').onclick = async () => {
+    Object.assign(S, { step: 'reading', progress: 0, msg: 'Getting ready…' });
+    render();
+    const paint = () => {
+      const bar = document.querySelector('.scan-progress span');
+      if (bar) bar.style.width = Math.round(S.progress * 100) + '%';
+      const m = $('scanMsg');
+      if (m) m.textContent = S.msg;
+    };
+    try {
+      const { loadImage, prepareCanvas, readText } = await import('./ocr.js');
+      const img = await loadImage(S.src);
+      const canvas = prepareCanvas(img, S.rotate);
+      const texts = await readText(canvas, (p, msg) => { S.progress = p; S.msg = msg; paint(); });
+      const res = texts.map((t) => parseLabel(t, { layout })).reduce((a, b) => mergeScans(a, b, layout), null);
+      const text = texts.join('\n---\n');
+      Object.assign(S, { circuits: res.circuits, skipped: res.skipped, quality: res.quality, sel: -1, errors: {}, text });
+      S.step = res.quality === 'little' ? 'none' : 'review';
+      S.msg = '';
+    } catch (e) {
+      console.error(e);
+      Object.assign(S, { step: 'none', circuits: [], msg: e && e.code === 'offline' ? 'The label reader needs an internet connection the first time.' : "Something went wrong reading the photo." });
+    }
+    if (parseRoute().parts[2] === 'labelscan') render();
+  };
+  // review
+  document.querySelectorAll('[data-sc]').forEach((b) => { b.onclick = () => { S.sel = S.sel === Number(b.dataset.sc) ? -1 : Number(b.dataset.sc); render(); const e = $('scEdit'); if (e) e.scrollIntoView({ block: 'nearest' }); }; });
+  const addAt = (slot, label = '') => {
+    S.circuits.push({ slot, poles: '1', amps: '20', label: label || 'New breaker', type: '', device: '', guessed: false });
+    S.circuits.sort((a, b) => a.slot - b.slot);
+    S.sel = S.circuits.findIndex((c) => c.slot === slot);
+    S.errors = {};
+    render();
+    const l = $('scLabel');
+    if (l && !label) { l.focus(); l.select(); }
+  };
+  document.querySelectorAll('[data-scadd]').forEach((b) => { b.onclick = () => addAt(Number(b.dataset.scadd)); });
+  document.querySelectorAll('[data-scskip]').forEach((b) => { b.onclick = () => { const t = S.skipped.splice(Number(b.dataset.scskip), 1)[0]; addAt(nextScanSlot(S.circuits, layout), t); }; });
+  if ($('scAdd')) $('scAdd').onclick = () => addAt(nextScanSlot(S.circuits, layout));
+  if ($('scName')) $('scName').oninput = (e) => { S.name = e.target.value; };
+  const saveSel = () => {
+    const c = S.circuits[S.sel];
+    if (!c) return;
+    const label = $('scLabel').value.trim();
+    const slot = parseInt($('scSlot').value, 10);
+    const poles = (document.querySelector('input[name="scPoles"]:checked') || {}).value || '1';
+    const amps = (document.querySelector('input[name="scAmps"]:checked') || {}).value || c.amps;
+    Object.assign(c, { label: label || c.label, slot: slot >= 1 && slot <= 84 ? slot : c.slot, poles, amps, guessed: c.guessed && slot === c.slot, maybe2: false });
+    S.circuits.sort((a, b) => a.slot - b.slot);
+  };
+  if ($('scDone')) $('scDone').onclick = () => { saveSel(); S.sel = -1; S.errors = {}; render(); };
+  if ($('scDel')) $('scDel').onclick = () => { S.circuits.splice(S.sel, 1); S.sel = -1; S.errors = {}; render(); };
+  if ($('scStart')) $('scStart').onclick = () => { if (!confirm('Start over? What was read will be cleared.')) return; Object.assign(S, { step: 'pick', src: '', circuits: [], skipped: [], sel: -1, errors: {} }); render(); };
+  if ($('scBuild')) $('scBuild').onclick = async (ev) => {
+    if (S.sel >= 0 && $('scLabel')) saveSel();
+    S.sel = -1;
+    const btn = ev.target;
+    let panel = target;
+    const needed = spacesNeeded(S.circuits, layout);
+    const fitSpaces = (n) => SPACE_OPTIONS.find((o) => o !== 'other' && Number(o) >= n) || 'other';
+    const draftPanel = panel || { id: 'p_' + uid(), homeId, name: (S.name || (inHome('panels', homeId).length ? 'Scanned panel' : 'Main panel')).trim() || 'Panel', type: inHome('panels', homeId).length ? 'sub' : 'main', layout: 'auto', mainAmps: '', spaces: '', createdAt: Date.now() };
+    const spaces = Math.max(panelSpaces(panel || { spaces: '0' }) || 0, needed);
+    const sizedPanel = needed > (panel ? panelSpaces(panel) : 0) ? { ...draftPanel, spaces: fitSpaces(spaces), ...(fitSpaces(spaces) === 'other' ? { spacesOther: String(spaces) } : {}) } : draftPanel;
+    const rows = toBulkRows(S.circuits);
+    const res = planBulk(rows, sizedPanel, inHome('breakers', homeId).filter((b) => b.panelId === sizedPanel.id), { homeId });
+    if (!res.ok) {
+      S.errors = {};
+      res.rows.forEach((r, i) => { if (r.error) S.errors[i] = r.error; });
+      render();
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = 'Building…';
+    try {
+      if (!panel || sizedPanel !== draftPanel) await store.put('panels', sizedPanel);
+      panel = sizedPanel;
+      const made = res.rows.flatMap((r) => r.breakers.map((b) => ({ ...b, homeId, panelId: panel.id })));
+      for (const b of made) await store.put('breakers', b);
+      // equipment the label names (dryer, A/C, water heater...) goes on the list too, linked to its breaker
+      const devs = [];
+      S.circuits.forEach((c, i) => {
+        if (!c.type) return;
+        const b = (res.rows[i] && res.rows[i].breakers[0]) || null;
+        if (!b) return;
+        devs.push({ id: 'd_' + uid(), homeId, type: c.type, name: c.device || c.label, room: '', location: '', breakerId: b.id, gfci: '', afci: '', status: 'ok', notes: 'Added from the panel label scan', readings: [], style: '', qty: 1, box: '', replace: '' });
+      });
+      for (const d of devs) await store.put('devices', d);
+      // keep the label photo with the panel (only if the panel has no photo yet)
+      if (!panel.photoId && S.src) {
+        try {
+          const { loadImage, photoDataUrl } = await import('./ocr.js');
+          const url = photoDataUrl(await loadImage(S.src), S.rotate);
+          const pid = 'ph_' + uid();
+          await store.putPhoto(pid, url);
+          await store.put('panels', { ...panel, photoId: pid });
+        } catch (e) { console.warn('label photo not kept', e); }
+      }
+      if (store.settle) await store.settle().catch(() => {});
+      const n = made.length;
+      labelUI = { key: '', step: 'pick', src: '', rotate: 0, circuits: [], skipped: [], quality: '', progress: 0, msg: '', sel: -1, name: '', errors: {} };
+      toast(`Built ${n} breaker${n === 1 ? '' : 's'}. Tap any to fix.`);
+      go(`#/h/${homeId}/panel/${panel.id}`);
+    } catch (e) {
+      console.error(e);
+      btn.disabled = false;
+      btn.textContent = 'Looks good — build my panel';
+      toast((e && e.message) || "Couldn't build the panel");
+    }
+  };
+}
+
 async function renderScan() {
   const homeId = currentHomeId();
   const body = `
@@ -4703,7 +4963,7 @@ function renderEdit(col, id, q) {
     fields = `
       <label>Name<input name="name" required value="${esc(h.name)}" placeholder="e.g. My house, Rental on 5th, Camper"></label>
       <label>Type<select name="type">${opt(HOME_TYPES, h.type || 'house')}</select></label>
-      ${isPro() || h.customerId ? `<label>Customer<select name="customerId"><option value="">None (my own)</option>${customers.map((c) => `<option value="${esc(c.id)}" ${c.id === h.customerId ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>` : ''}
+      ${!isGuest() && (isPro() || h.customerId) ? `<label>Customer<select name="customerId"><option value="">None (my own)</option>${customers.map((c) => `<option value="${esc(c.id)}" ${c.id === h.customerId ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>` : ''}
       <label>Address (optional)<input name="address" value="${esc(h.address)}"></label>
       ${isNew ? `<fieldset class="pick-cards start-pick"><legend>How do you want to start?</legend>
         <label class="pick-card"><input type="radio" name="start" value="panel" checked><span class="sp-ic" aria-hidden="true">⚡</span><span><b>Panel only</b><span class="muted tiny block">Fastest. Just the breakers: what each one feeds, amps and wire. Print the schedule for the panel door.</span></span></label>
@@ -4867,7 +5127,7 @@ function renderEdit(col, id, q) {
     <div class="row-actions"><button class="btn primary" type="submit">Save</button><a class="btn ghost" href="${back}">Cancel</a></div>
   </form>
   ${photo ? `<div class="card"><h3>Panel photo (optional)</h3><div id="photoBox" class="muted">${existing.photoId ? 'Loading...' : 'No photo.'}</div><label class="btn small file-btn">${existing.photoId ? 'Replace photo' : 'Add photo'}<input type="file" accept="image/*" id="photoIn" hidden></label>${existing.photoId ? '<button class="btn small ghost" id="photoDel">Remove photo</button>' : ''}</div>` : ''}
-  ${!isNew ? `<button class="btn danger full" id="delBtn">Delete ${col === 'customers' ? 'customer (their properties stay, unlinked)' : col === 'homes' ? 'home and everything in it' : col === 'panels' ? 'panel and its breakers' : col === 'breakers' ? 'breaker' : 'item'}</button>` : ''}`;
+  ${!isNew && !(col === 'homes' && isGuest()) ? `<button class="btn danger full" id="delBtn">Delete ${col === 'customers' ? 'customer (their properties stay, unlinked)' : col === 'homes' ? 'home and everything in it' : col === 'panels' ? 'panel and its breakers' : col === 'breakers' ? 'breaker' : 'item'}</button>` : ''}`;
   app.innerHTML = shell(homeId, '', body, { title, back });
   bindShell();
   const f = document.getElementById('editForm');

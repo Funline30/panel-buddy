@@ -3,3 +3,4 @@ dist
 site
 .DS_Store
 *.local
+dist-demo/
