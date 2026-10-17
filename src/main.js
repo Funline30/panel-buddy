@@ -27,6 +27,7 @@ import { parseBreakerQuery } from './lib/search.js';
 import { CATALOG, CATEGORIES, CATALOG_NOTE, catById, categoryOf, wattsRange, ampsRange, surgeText, circuitTag } from './lib/catalog.js';
 import { searchHome, searchCatalog, lookupUrl, projectedPct, wattsFromAmps } from './lib/devicesearch.js';
 import { uid, esc, ampsText, sortBreakers, download } from './lib/util.js';
+import { isNativeApp, initNative, publicBase } from './native.js';
 import { breakersCsv, devicesCsv, fusesCsv } from './lib/csv.js';
 import { compressPhoto } from './lib/photo.js';
 import { WIRE_SIZES, WIRE_TYPES, WIRE_CONDUCTORS, WIRE_COLORS, JACKET_SIZE, WIRE_GUIDANCE, cleanWire, wireFromForm, wireText, wireTag, wireShort, effectiveWire, wireChecks, sizeText, typeText, condText, colorText, cableText } from './lib/wire.js';
@@ -65,6 +66,7 @@ function dirRowsHtml(panel, breakers, { wire = false } = {}) {
 
 // ---------------------------------------------------------------- startup
 async function start() {
+  initNative();
   applyTheme();
   guestEnded = sessionStorage.getItem('ampmap:guestEnded') || '';
   sessionStorage.removeItem('ampmap:guestEnded');
@@ -114,7 +116,7 @@ async function start() {
   bindLoadActions();
   window.addEventListener('hashchange', render);
   render();
-  if ('serviceWorker' in navigator && import.meta.env.PROD && !location.pathname.includes('/previews/')) {
+  if (!isNativeApp() && 'serviceWorker' in navigator && import.meta.env.PROD && !location.pathname.includes('/previews/')) {
     navigator.serviceWorker.register('./sw.js').catch(() => {});
   }
 }
@@ -273,7 +275,7 @@ const go = (h) => {
   if (location.hash === h) render();
   else location.hash = h;
 };
-const deepLink = (path) => `${location.origin}${location.pathname}#${path}`;
+const deepLink = (path) => `${publicBase()}#${path}`;
 
 function toast(msg) {
   let t = document.getElementById('toast');
@@ -404,7 +406,7 @@ async function render() {
   if (isGuest()) {
     const gh = store.guest.homeId;
     if (parts[0] === 'edit' && !['panels', 'breakers', 'devices'].includes(parts[1])) { toast('Only the homeowner can change that.'); return go(`#/h/${gh}/panel`); }
-    if (parts[0] === 'customers' || parts[0] === 'login' || (parts[0] === 'h' && parts[1] !== gh)) return go(`#/h/${gh}/panel`);
+    if (parts[0] === 'customers' || parts[0] === 'login' || parts[0] === 'account' || (parts[0] === 'h' && parts[1] !== gh)) return go(`#/h/${gh}/panel`);
     if (parts[0] === 'h' && ['more', 'access'].includes(parts[2])) return renderGuestMore(gh);
     if (parts[0] === 'h' && parts[2] === 'print' && parts[3] === 'setup') return go(`#/h/${gh}/panel`);
   }
@@ -422,6 +424,7 @@ async function render() {
     localStorage.removeItem('panelbuddy:pendingType');
     store.saveSettings({ accountType: t });
   }
+  if (parts[0] === 'account' && parts[1] === 'delete') return renderDeleteAccount();
   if (parts[0] === 'edit') return renderEdit(parts[1], parts[2], q);
   if (parts[0] === 'customers') return parts[1] ? renderCustomer(parts[1]) : renderCustomers(q);
 
@@ -1038,6 +1041,67 @@ function renderNotFound() {
   bindShell();
 }
 
+// ---------------------------------------------------------------- delete account
+// Apple (and Google) require that anyone who can make an account can delete it in the app.
+function renderDeleteAccount() {
+  if (store.mode !== 'cloud' || !store.user) {
+    app.innerHTML = `<div class="auth"><h1>Delete account</h1><p class="muted">You're using the demo, so there's no account to delete. Demo data lives only on this device; Settings > "Reset demo" clears it.</p><a class="btn primary" href="#/">Back</a></div>`;
+    return;
+  }
+  app.innerHTML = `<div class="auth del-acct">
+    <h1>Delete my account</h1>
+    <div class="card">
+      <p>This permanently deletes <b>${esc(store.user.email)}</b> and everything in it:</p>
+      <ul class="muted">
+        <li>every home, panel, breaker, outlet, light and device you mapped</li>
+        <li>your photos, notes, customers and service history</li>
+        <li>share links, QR sticker links and edit codes (they stop working)</li>
+        <li>access you gave to other people, and access others gave you</li>
+      </ul>
+      <p class="muted">It can't be undone. Want a copy first? Settings > Export a backup.</p>
+    </div>
+    <form id="delForm" class="card form">
+      <label>Your password<input type="password" name="pw" autocomplete="current-password" required></label>
+      <label>Type DELETE to confirm<input type="text" name="confirm" autocomplete="off" autocapitalize="characters" required></label>
+      <button class="btn danger-ghost" type="submit">Delete my account forever</button>
+      <p class="muted tiny" id="delStep" aria-live="polite"></p>
+      <p class="err" id="delErr" role="alert"></p>
+    </form>
+    <a class="btn ghost" href="#/">Cancel</a>
+  </div>`;
+  const f = document.getElementById('delForm');
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const err = document.getElementById('delErr');
+    const step = document.getElementById('delStep');
+    err.textContent = '';
+    if (f.elements.confirm.value.trim().toUpperCase() !== 'DELETE') {
+      err.textContent = 'Type DELETE in the box to confirm.';
+      return;
+    }
+    if (!confirm('Last check: delete your AmpMap account and all its data for good?')) return;
+    const btn = f.querySelector('button[type=submit]');
+    btn.disabled = true;
+    try {
+      await store.deleteAccount(f.elements.pw.value, (s) => { step.textContent = s; });
+      localStorage.removeItem('panelbuddy:pendingType');
+      toast('Account deleted. Your AmpMap data is gone.');
+      go('#/');
+    } catch (ex) {
+      btn.disabled = false;
+      step.textContent = '';
+      const c = String((ex && ex.code) || '');
+      err.textContent = c.includes('wrong-password') || c.includes('invalid-credential') || c.includes('invalid-login')
+        ? "That password isn't right."
+        : c.includes('too-many-requests')
+          ? 'Too many tries. Wait a few minutes and try again.'
+          : c.includes('network') || c.includes('unavailable')
+            ? 'No internet connection. Deleting needs signal; try again.'
+            : `Couldn't finish deleting: ${(ex && ex.message) || 'something went wrong'}. Try again, or email margoittac@gmail.com and we'll delete it for you.`;
+    }
+  };
+}
+
 // ---------------------------------------------------------------- login
 function renderLogin() {
   const cloud = store.mode === 'cloud';
@@ -1128,7 +1192,7 @@ function renderFirstHome() {
   app.innerHTML = `<div class="auth"><img class="auth-logo" src="./brand/badge.png" alt="AmpMap logo" width="116" height="128"><h1>Welcome to AmpMap</h1>
   <p class="muted">Start by adding your home. You can add more properties later.</p>
   <a class="btn primary" href="#/edit/homes/new">Add my home</a>
-  ${store.mode === 'cloud' ? `<p class="tiny muted">Signed in as ${esc(store.user.email)} · <a href="#" id="so">Sign out</a></p>` : ''}</div>`;
+  ${store.mode === 'cloud' ? `<p class="tiny muted">Signed in as ${esc(store.user.email)} · <a href="#" id="so">Sign out</a> · <a href="#/account/delete">Delete account</a></p>` : ''}</div>`;
   const so = document.getElementById('so');
   if (so) so.onclick = (e) => { e.preventDefault(); store.signOut(); };
 }
@@ -4145,14 +4209,14 @@ function renderMore(homeId) {
   <div class="card">
     <h3>Account</h3>
     ${store.mode === 'cloud'
-      ? `<p>Signed in as <b>${esc(store.user.email)}</b>. Synced across your devices; works offline and syncs when you have signal.</p><button class="btn" id="signOut">Sign out</button>`
+      ? `<p>Signed in as <b>${esc(store.user.email)}</b>. Synced across your devices; works offline and syncs when you have signal.</p><div class="stack"><button class="btn" id="signOut">Sign out</button><a class="btn danger" href="#/account/delete">Delete my account</a></div>`
       : `<p>Demo mode: everything is saved only in this browser.</p>
          <div class="stack">${isFirebaseConfigured() ? '<button class="btn primary" id="goCloud">Sign in / create a free account</button>' : ''}<button class="btn ghost" id="resetDemo">Reset demo to the sample home</button></div>`}
   </div>
-  <div class="card">
+  ${isNativeApp() ? '' : `<div class="card">
     <h3>Install on your phone</h3>
     <p class="muted"><b>iPhone:</b> open in Safari, tap Share, then "Add to Home Screen".<br><b>Android / Windows (Chrome or Edge):</b> menu, then "Install app".</p>
-  </div>
+  </div>`}
   <p class="tiny muted center">AmpMap · free, no ads, no trackers. Not a substitute for a licensed electrician; turn the breaker off and verify with a tester before touching wiring.<br><a href="/privacy.html">Privacy Policy</a></p>`;
   app.innerHTML = shell(homeId, 'more', body);
   bindShell();

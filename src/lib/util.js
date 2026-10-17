@@ -28,6 +28,11 @@ export function sortBreakers(list) {
 }
 
 export function download(filename, text, type = 'application/json') {
+  // Inside the iPhone app a download link does nothing; src/native.js hands the file to the share sheet.
+  if (typeof window !== 'undefined' && typeof window.AmpNativeDownload === 'function') {
+    window.AmpNativeDownload(filename, text, type).catch((e) => console.warn('share file', e));
+    return;
+  }
   const blob = new Blob([text], { type });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);

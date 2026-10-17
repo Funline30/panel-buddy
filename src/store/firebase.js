@@ -4,6 +4,12 @@
 import { initializeApp } from 'firebase/app';
 import {
   getAuth,
+  initializeAuth,
+  indexedDBLocalPersistence,
+  browserLocalPersistence,
+  EmailAuthProvider,
+  reauthenticateWithCredential,
+  deleteUser,
   onAuthStateChanged,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
@@ -30,12 +36,15 @@ import {
 } from 'firebase/firestore';
 import { codeHash, toMillis, grantId, homePhotoIds, claimCopy, randomToken, CLAIM_DAYS } from '../lib/access.js';
 import { proveCode, createScopedStore, cloudBackend } from './scoped-cloud.js';
+import { isNativeApp } from '../native.js';
 
 const COLS = ['homes', 'panels', 'breakers', 'devices', 'customers'];
 
 export function createFirebaseStore(config) {
   const app = initializeApp(config);
-  const auth = getAuth(app);
+  // Inside the iPhone app, skip the web popup/redirect helper (it loads a hidden page from the
+  // auth domain that never answers inside the app); email + password sign-in works the same.
+  const auth = isNativeApp() ? initializeAuth(app, { persistence: [indexedDBLocalPersistence, browserLocalPersistence] }) : getAuth(app);
   let db;
   try {
     db = initializeFirestore(app, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) });
@@ -353,6 +362,71 @@ export function createFirebaseStore(config) {
     },
     async signOut() {
       await signOut(auth);
+    },
+    // Delete this account and everything it owns (Settings > Delete my account).
+    // Uses only what the existing Firestore rules already allow the owner to do.
+    async deleteAccount(password, onStep = () => {}) {
+      const u = auth.currentUser;
+      if (!u) throw new Error('Not signed in');
+      const uid = u.uid;
+      onStep('Checking your password...');
+      await reauthenticateWithCredential(u, EmailAuthProvider.credential(u.email, password));
+      unsubs.forEach((x) => x());
+      unsubs = [];
+      const del = async (ref) => {
+        try {
+          await deleteDoc(ref);
+        } catch {
+          /* not ours, or already gone */
+        }
+      };
+      const all = async (col) => {
+        try {
+          return (await getDocs(collection(db, 'users', uid, col))).docs;
+        } catch {
+          return [];
+        }
+      };
+      onStep('Turning off share links and edit codes...');
+      const homes = await all('homes');
+      const panels = await all('panels');
+      for (const h of homes) {
+        const t = h.data().shareToken;
+        if (!t) continue;
+        await del(doc(db, 'codeGuards', t)); // needs the edit code to still exist, so first
+        await del(doc(db, 'editCodes', t));
+        await del(doc(db, 'shares', t));
+      }
+      for (const p of panels) await del(doc(db, 'sharedPanels', p.id));
+      for (const field of ['owner', 'editor']) {
+        try {
+          const s = await getDocs(query(collection(db, 'grants'), where(field, '==', uid)));
+          for (const d of s.docs) await del(d.ref);
+        } catch {
+          /* none */
+        }
+      }
+      try {
+        const s = await getDocs(query(collection(db, 'claims'), where('from', '==', uid)));
+        for (const d of s.docs) {
+          await del(doc(db, 'codeGuards', d.id));
+          await del(d.ref);
+        }
+      } catch {
+        /* none */
+      }
+      await del(doc(db, 'codeSessions', uid));
+      onStep('Deleting your homes, panels and photos...');
+      for (const c of ['breakers', 'devices', 'panels', 'photos', 'customers', 'history', 'settings', 'homes']) {
+        const refs = (c === 'homes' ? homes : c === 'panels' ? panels : await all(c)).map((d) => d.ref);
+        for (let i = 0; i < refs.length; i += 400) {
+          const b = writeBatch(db);
+          for (const r of refs.slice(i, i + 400)) b.delete(r);
+          await b.commit();
+        }
+      }
+      onStep('Deleting your sign-in...');
+      await deleteUser(u);
     },
     _ref(col, id) {
       if (!store.user) throw new Error('Not signed in');

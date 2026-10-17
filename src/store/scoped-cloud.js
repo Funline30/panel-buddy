@@ -1,7 +1,8 @@
 // Firestore side of edit codes: proving a code (with the lockout counter), the scoped
 // backend for editing someone else's home, and the electrician's anonymous sign-in.
 import { initializeApp, getApps } from 'firebase/app';
-import { getAuth, signInAnonymously, signOut as fbSignOut } from 'firebase/auth';
+import { getAuth, initializeAuth, indexedDBLocalPersistence, browserLocalPersistence, signInAnonymously, signOut as fbSignOut } from 'firebase/auth';
+import { isNativeApp } from '../native.js';
 import { initializeFirestore, getFirestore, doc, getDoc, setDoc, deleteDoc, collection, query, where, onSnapshot, writeBatch, serverTimestamp } from 'firebase/firestore';
 import { codeHash, guardNext, GUARD_MAX } from '../lib/access.js';
 import { createScopedStore } from './scoped.js';
@@ -136,7 +137,16 @@ function guestApp(config) {
   } catch {
     db = getFirestore(app);
   }
-  return { app, auth: getAuth(app), db };
+  let auth;
+  if (isNativeApp()) {
+    // same as the main sign-in: no web popup helper inside the iPhone app
+    try {
+      auth = initializeAuth(app, { persistence: [indexedDBLocalPersistence, browserLocalPersistence] });
+    } catch {
+      auth = getAuth(app);
+    }
+  } else auth = getAuth(app);
+  return { app, auth, db };
 }
 
 async function anonUser(auth) {
