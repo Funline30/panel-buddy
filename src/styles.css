@@ -831,3 +831,42 @@ select.full { margin-top: 0; }
 .pl-sheet .pl-sheet-go { color: #fff; background: var(--over); border-color: var(--over); }
 .pl-sheet-pins { display: flex; align-items: center; gap: 10px; min-height: 44px; margin-bottom: 4px; }
 .pl-sheet-pins input { width: 22px; height: 22px; }
+
+/* ---- room sizes + doors */
+.pl-room .pl-rdim.measured { fill: var(--ink-2); font-weight: 650; }
+.pl-size-view { margin-top: 0; }
+.pl-door { fill: none; stroke: var(--ink); stroke-linecap: round; pointer-events: none; }
+.pl-door .dr-gap { stroke: var(--card); stroke-linecap: butt; }
+.pl-door .dr-jamb { stroke-width: inherit; }
+.pl-door .dr-arc { stroke-width: 0.6px; stroke-dasharray: none; opacity: 0.75; vector-effect: non-scaling-stroke; }
+.pl-door .dr-win { vector-effect: non-scaling-stroke; stroke-width: 1.4px; }
+.pl-door.sel { stroke: var(--accent); }
+.pl-door.sel .dr-arc { opacity: 1; stroke-width: 1.2px; }
+.dr-hit-g { cursor: grab; touch-action: none; }
+.dr-hit { stroke: transparent; fill: none; stroke-linecap: round; }
+.dr-grip-dot { fill: var(--accent); stroke: #fff; stroke-width: 2.5; }
+.dr-grip-ic { stroke: #fff; stroke-width: 2.2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.pl-move-btn.on { background: var(--accent); color: #fff; }
+.pl-move-btn.on .pk-ic { color: #fff; }
+.dr-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 9px; }
+.dr-lbl { font-size: 0.8rem; font-weight: 650; color: var(--ink-2); margin-right: 2px; }
+.dr-chip { min-height: 40px; min-width: 52px; padding: 0 11px; border-radius: 999px; border: 1.5px solid var(--line-2); background: var(--card); color: var(--ink-2); font: inherit; font-size: 0.86rem; font-weight: 650; cursor: pointer; }
+.dr-chip.on { border-color: var(--accent); background: var(--accent-soft); color: var(--ink); }
+.dr-custom label { display: inline-flex; align-items: center; gap: 4px; font-size: 0.84rem; font-weight: 600; }
+.dr-custom input { width: 62px; min-height: 40px; padding: 4px 8px; font-size: 16px; }
+.dr-ext { display: inline-block; margin-left: 4px; padding: 1px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 0.72rem; font-weight: 700; vertical-align: 1px; }
+.dr-swings { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-top: 10px; }
+.dr-swing { display: flex; flex-direction: column; align-items: center; gap: 2px; min-height: 84px; padding: 4px 2px 6px; border: 1.5px solid var(--line-2); border-radius: 12px; background: var(--card); color: var(--ink-2); font: inherit; font-size: 0.72rem; font-weight: 650; line-height: 1.15; cursor: pointer; text-align: center; }
+.dr-swing small { display: block; font-weight: 500; color: var(--muted); font-size: 0.68rem; }
+.dr-swing.on { border-color: var(--accent); background: var(--accent-soft); color: var(--ink); }
+.dr-swing svg .dp-room { fill: color-mix(in srgb, var(--accent) 12%, transparent); stroke: none; }
+.dr-swing svg .dp-wall { stroke: var(--ink); stroke-width: 0.12; fill: none; }
+.dr-swing svg .pl-door .dr-arc, .dr-swing svg .pl-door .dr-win { vector-effect: none; stroke-width: 0.04; }
+.dr-swing.on svg .pl-door { stroke: var(--accent); }
+.dr-swing svg .pl-door .dr-gap { stroke: transparent; }
+.pl-size-sheet h3 { display: flex; align-items: center; gap: 8px; }
+.sz-row { display: flex; align-items: center; gap: 8px; margin: 10px 0; }
+.sz-row > b { width: 64px; font-size: 0.95rem; }
+.sz-box { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--ink-2); }
+.sz-box input { width: 76px; min-height: 50px; padding: 6px 10px; font-size: 20px; font-weight: 700; text-align: center; border: 1.5px solid var(--input-line, var(--line-2)); border-radius: 12px; background: var(--card-2); color: var(--ink); }
+.sz-prev { font-size: 1.05rem; font-weight: 750; text-align: center; margin: 4px 0 2px !important; color: var(--accent); }

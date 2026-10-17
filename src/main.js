@@ -24,7 +24,8 @@ import { breakersCsv, devicesCsv, fusesCsv } from './lib/csv.js';
 import { compressPhoto } from './lib/photo.js';
 import { buildHouseMap, outletsOnBreaker, NO_ROOM, roomSort } from './lib/housemap.js';
 import { planBulk, BULK_TYPES, partsOf } from './lib/bulk.js';
-import { planOf, planToSave, clampRoom, moveRoom, resizeRoom, resizePlan, roomAt, snapPin, inBounds, pinKind, PIN_KINDS, kindFields, splitPlaced, pinsByBreaker, roomsOnBreaker, newRoomSpot, TEMPLATES, applyTemplate, floorOfPos, swapRooms, movePins, resizeCorner, rotateRoom, overlapping, shapeOf, bboxOf, cleanPts, validShape, moveCorner, addCorner, removeCorner, moveEdge, presetShape, roomsOutside, fitRoomsToShape, normalizeShape, polyArea, outlineFromRooms, withAutoOutline, growArea, clearPlan, planHasDrawing } from './lib/floorplan.js';
+import { planOf, planToSave, clampRoom, moveRoom, resizeRoom, resizePlan, roomAt, snapPin, inBounds, pinKind, PIN_KINDS, kindFields, splitPlaced, pinsByBreaker, roomsOnBreaker, newRoomSpot, TEMPLATES, applyTemplate, floorOfPos, swapRooms, movePins, resizeCorner, rotateRoom, overlapping, shapeOf, bboxOf, cleanPts, validShape, moveCorner, addCorner, removeCorner, moveEdge, presetShape, roomsOutside, fitRoomsToShape, normalizeShape, polyArea, outlineFromRooms, withAutoOutline, growArea, clearPlan, planHasDrawing, fmtFtIn, ftInParts, setRoomSize, snapToRooms, rectPts, pointInPoly } from './lib/floorplan.js';
+import { planDoorSegs, doorSvg, placeDoor, doorSpot, slideDoor, doorSeg, doorsAfterRoomMove, doorsOfRooms, clampDoor, DOOR_KINDS, DOOR_WIDTHS, isSideways } from './lib/doors.js';
 
 const app = document.getElementById('app');
 const MODE_KEY = 'panelbuddy:mode';
@@ -1181,12 +1182,14 @@ function renderMap(homeId, q) {
 // device.pos (lib/floorplan.js). The optional background photo is a normal photo doc.
 const MAPVIEW_KEY = 'panelbuddy:mapView';
 const PLAN_PAD = 1; // ft of margin around the outline
-const planUI = { home: '', mode: 'view', sel: '', kind: 'outlet', placing: '', z: 0, bid: '', oid: '', drop: null, photo: null, floor: '', picker: false, swap: '', undo: [], corner: -1 };
+const planUI = { home: '', mode: 'view', sel: '', kind: 'outlet', placing: '', z: 0, bid: '', oid: '', drop: null, photo: null, floor: '', picker: false, swap: '', undo: [], corner: -1, door: '', doorAdd: '', wOther: false };
 // Plan settings kept on this phone: show feet labels, and whether rooms follow the house when
 // it is stretched in Shape house.
 const FEET_KEY = 'panelbuddy:planFeet';
 const FIT_KEY = 'panelbuddy:planFitRooms';
-const showFeet = () => localStorage.getItem(FEET_KEY) !== '0';
+const showFeet = () => localStorage.getItem(FEET_KEY) !== '0'; // "Show sizes": room sizes, wall lengths
+const DOOR_IC = '<svg viewBox="0 0 24 24" width="18" height="18" class="pk-ic" aria-hidden="true"><path d="M3 20h6M15 20h6M9 20V8M9 8a12 12 0 0 1 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+const RULER_IC = '<svg viewBox="0 0 24 24" width="18" height="18" class="pk-ic" aria-hidden="true"><path d="M3 15 15 3l6 6L9 21z M7 11l2 2M10 8l2 2M13 5l2 2" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" stroke-linecap="round"/></svg>';
 const fitRooms = () => localStorage.getItem(FIT_KEY) !== '0';
 const HOUSE_IC = '<svg viewBox="0 0 24 24" width="18" height="18" class="pk-ic" aria-hidden="true"><path d="M4 20V9.5L12 4l8 5.5V20z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="4" cy="20" r="2" fill="currentColor"/><circle cx="20" cy="20" r="2" fill="currentColor"/><circle cx="12" cy="4" r="2" fill="currentColor"/></svg>';
 const SCRATCH_IC = '<svg viewBox="0 0 24 24" width="18" height="18" class="pk-ic" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
@@ -1219,7 +1222,7 @@ function mapToggle(homeId, active) {
 
 function renderPlan(homeId, q) {
   const home = byId('homes', homeId);
-  if (planUI.home !== homeId) Object.assign(planUI, { home: homeId, mode: 'view', sel: '', placing: '', z: 0, bid: '', oid: '', drop: null, photo: null, floor: '', picker: false, swap: '', undo: [], corner: -1 });
+  if (planUI.home !== homeId) Object.assign(planUI, { home: homeId, mode: 'view', sel: '', placing: '', z: 0, bid: '', oid: '', drop: null, photo: null, floor: '', picker: false, swap: '', undo: [], corner: -1, door: '', doorAdd: '', wOther: false });
   // ?b= / ?o= / ?mode= deep links apply once per address (not again on every save)
   if (location.hash !== planUI.qh) {
     planUI.qh = location.hash;
@@ -1254,6 +1257,20 @@ function renderPlan(homeId, q) {
   const savePlan = (next) => {
     if (next.autoOutline) Object.assign(next, withAutoOutline(growArea(next)));
     return store.put('homes', { ...byId('homes', homeId), floorplan: planToSave(next) });
+  };
+  // the outline as drawn, for outside doors (auto outline, the drawn shape, or the w x h box)
+  const doorPoly = (pl) => {
+    if (pl.autoOutline && !shaping) { const a = outlineFromRooms(pl.rooms); return a.length >= 4 ? a : null; }
+    if (pl.outlinePts && pl.outlinePts.length >= 3) return pl.outlinePts;
+    return pl.outline === 'rooms' ? null : rectPts(pl.w, pl.h);
+  };
+  // a room door on the house's outside wall counts as an outside door
+  const isOutside = (sg, poly) => {
+    if (!sg) return false;
+    if (sg.outside) return true;
+    if (!poly) return false;
+    const mx = (sg.a.x + sg.b.x) / 2, my = (sg.a.y + sg.b.y) / 2;
+    return !pointInPoly({ x: mx - sg.nx * 0.4, y: my - sg.ny * 0.4 }, poly, 0);
   };
   const tag = (id) => {
     const i = id && map.breakers[id];
@@ -1302,13 +1319,26 @@ function renderPlan(homeId, q) {
       s += `<g class="pl-room ${rc}" data-r="${esc(r.id)}">
         <rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" stroke-width="${px(2)}"/>
         <text x="${r.x + r.w / 2}" y="${editing ? r.y + r.h / 2 - fs * 0.15 : r.y + Math.min(r.h / 2, fs * 1.6 + px(4))}" font-size="${fs}" text-anchor="middle" class="pl-rname">${esc(r.name || 'Room')}</text>
-        ${editing && feet ? `<text x="${r.x + r.w / 2}" y="${r.y + r.h / 2 + fs * 1.15}" font-size="${Math.min(px(11.5), fs * 0.85)}" text-anchor="middle" class="pl-rdim">${r.w} × ${r.h} ft</text>` : ''}
+        ${feet && (editing || r.measured) ? `<text x="${r.x + r.w / 2}" y="${editing ? r.y + r.h / 2 + fs * 1.15 : r.y + Math.min(r.h / 2, fs * 1.6 + px(4)) + Math.min(px(12.5), fs) * 1.15}" font-size="${Math.min(px(11.5), r.w / 7, fs * (editing ? 0.85 : 0.8))}" text-anchor="middle" class="pl-rdim ${r.measured ? 'measured' : ''}">${fmtFtIn(r.w)} × ${fmtFtIn(r.h)}</text>` : ''}
       </g>`;
     }
     if (poly) s += `<polygon class="pl-outline ${shaping ? 'shaping' : ''} ${auto ? 'auto' : ''}" points="${polyStr}" stroke-width="${px(shaping ? 5 : 4)}" stroke-linejoin="round"/>`;
     else if (auto) { /* rooms first, no rooms yet: no outline */ }
     else if (!open) s += `<rect class="pl-outline" x="0" y="0" width="${pl.w}" height="${pl.h}" stroke-width="${px(4)}"/>`;
     else for (const r of pl.rooms) s += `<rect class="pl-outline thin" x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" stroke-width="${px(3)}"/>`;
+    // doors and windows: a gap in the wall with the door's swing (drawn once on a shared wall)
+    const dpoly = doorPoly(pl);
+    const segs = (pl.doors || []).length ? planDoorSegs(pl, dpoly) : [];
+    for (const sg of segs) {
+      const sel = editing && planUI.door === sg.id;
+      s += `<g class="pl-door ${sel ? 'sel' : ''} ${isOutside(sg, dpoly) ? 'ext' : ''}" stroke-width="${px(sel ? 2.6 : 2)}">${doorSvg(sg, px, { sel })}</g>`;
+      if (editing && !planUI.swap) {
+        const mx = (sg.a.x + sg.b.x) / 2, my = (sg.a.y + sg.b.y) / 2;
+        s += `<g class="dr-hit-g" data-door="${esc(sg.id)}"><path class="dr-hit" d="M${sg.a.x} ${sg.a.y}L${sg.b.x} ${sg.b.y}" stroke-width="${px(34)}"/>`;
+        if (sel) s += `<g class="dr-grip" transform="translate(${mx + sg.nx * px(0)} ${my}) scale(${px(1)})"><circle r="15" class="dr-grip-dot"/><path d="${sg.ux ? 'M-7 0H7M-7 0l3.5-3.5M-7 0l3.5 3.5M7 0l-3.5-3.5M7 0l-3.5 3.5' : 'M0 -7V7M0 -7l-3.5 3.5M0 -7l3.5 3.5M0 7l-3.5-3.5M0 7l3.5-3.5'}" class="dr-grip-ic"/></g>`;
+        s += '</g>';
+      }
+    }
     if (editing && planUI.sel) {
       const r = pl.rooms.find((x) => x.id === planUI.sel);
       if (r) {
@@ -1364,7 +1394,7 @@ function renderPlan(homeId, q) {
   const over = [...overlapping(plan.rooms)].map((id) => plan.rooms.find((r) => r.id === id).name || 'Room');
   const outNames = plan.outlinePts ? [...roomsOutside(plan.rooms, plan.outlinePts)].map((id) => plan.rooms.find((r) => r.id === id).name || 'Room') : [];
   const outTxt = outNames.length ? `<p class="pl-hint warn">⚠️ ${esc(outNames.join(', '))} ${outNames.length === 1 ? 'sticks' : 'stick'} out of the house.${m === 'shape' ? ' Pull the wall out, or move ' + (outNames.length === 1 ? 'it' : 'them') + ' in Move rooms.' : ' That\'s OK if it\'s on purpose.'}</p>` : '';
-  const feetBox = `<label class="pl-check pl-feet"><input type="checkbox" id="plFeet" ${showFeet() ? 'checked' : ''}> Show feet</label>`;
+  const feetBox = `<label class="pl-check pl-feet"><input type="checkbox" id="plFeet" ${showFeet() ? 'checked' : ''}> Show sizes</label>`;
   const hb = bboxOf(shapeOf(plan));
   const aboutTxt = `about ${Math.round(hb.w)} × ${Math.round(hb.h)} ft`;
   const overTxt = over.length ? `<p class="pl-hint warn">⚠️ ${esc(over.join(', '))} overlap${over.length === 2 ? '' : ' each other'}. That's OK if it's on purpose.</p>` : '';
@@ -1385,13 +1415,13 @@ function renderPlan(homeId, q) {
       <label class="btn small pl-photo-btn">📷 Photo<input type="file" accept="image/*" id="plPhoto" hidden></label>
       <button type="button" class="btn small primary" id="plDone">Done</button>
     </div>
-    <div class="pl-tools pl-tools2"><button type="button" class="btn small pl-move-btn" id="plShape">${HOUSE_IC} Shape house</button>${undoBtn}<span class="pl-zoom">${zoomBtns}</span></div>
+    <div class="pl-tools pl-tools2"><button type="button" class="btn small pl-move-btn ${planUI.doorAdd ? 'on' : ''}" id="plAddDoor" aria-pressed="${!!planUI.doorAdd}">${DOOR_IC} + Door</button><button type="button" class="btn small pl-move-btn" id="plShape">${HOUSE_IC} Shape house</button>${undoBtn}<span class="pl-zoom">${zoomBtns}</span></div>
     <div class="pl-fit pl-auto" role="group" aria-label="House outline"><span>Outline</span><button type="button" class="${plan.autoOutline ? 'on' : ''}" data-auto="1" aria-pressed="${!!plan.autoOutline}">Auto from rooms</button><button type="button" class="${plan.autoOutline ? '' : 'on'}" data-auto="0" aria-pressed="${!plan.autoOutline}">Keep as is</button></div>
     ${(!plan.autoOutline && plan.rooms.length) || planHasDrawing(plan) ? `<div class="pl-tools pl-tools2">${!plan.autoOutline && plan.rooms.length ? '<button type="button" class="btn small" id="plMakeOutline">⬚ Make outline from rooms</button>' : ''}${planHasDrawing(plan) ? `<button type="button" class="btn small" id="plScratch">${SCRATCH_IC} Start from scratch</button>` : ''}</div>` : ''}
-    <p class="pl-hint move">${planUI.swap ? `Now tap the room to swap with <b>${esc((plan.rooms.find((r) => r.id === planUI.swap) || {}).name || 'this room')}</b>.` : !plan.rooms.length ? '<b>Tap + Room</b> to add your first room. Add the rest next to it' + (plan.autoOutline ? ' and the house outline draws itself.' : '.') : `<b>Press any room and drag it.</b> Tap a room for Swap, Turn, and corner handles to resize.${plan.autoOutline ? ' The outline follows your rooms.' : ''}`}</p>${overTxt}${plan.autoOutline ? '' : outTxt}
+    <p class="pl-hint move">${planUI.doorAdd ? `<b>Tap a wall</b>${planUI.doorAdd !== '*' ? ` of ${esc((plan.rooms.find((r) => r.id === planUI.doorAdd) || {}).name || 'the room')}` : ''} where the door goes. Outside walls work too.` : planUI.swap ? `Now tap the room to swap with <b>${esc((plan.rooms.find((r) => r.id === planUI.swap) || {}).name || 'this room')}</b>.` : !plan.rooms.length ? '<b>Tap + Room</b> to add your first room. Add the rest next to it' + (plan.autoOutline ? ' and the house outline draws itself.' : '.') : `<b>Press any room and drag it.</b> Tap a room for Size, + Door, Swap, Turn, and corner handles.${plan.autoOutline ? ' The outline follows your rooms.' : ''}`}</p>${overTxt}${plan.autoOutline ? '' : outTxt}
     <div class="pl-size">${feetBox}${plan.outline === 'rooms' && !plan.outlinePts && !plan.autoOutline ? `<label class="pl-check" title="A garage sticking out: the rooms are the outline"><input type="checkbox" id="plOpen" checked> Outline = rooms</label>` : ''}</div>
     ${plan.photoId ? `<div class="pl-size pl-photo-row"><span>Photo</span><label class="pl-fade">Fade <input id="plFade" type="range" min="10" max="90" step="5" value="${Math.round(plan.photoOpacity * 100)}"></label><button type="button" class="btn small" id="plRot" aria-label="Turn photo">↻ Turn</button><button type="button" class="btn small" id="plPhotoDel">Remove</button></div>` : ''}
-    <p class="muted tiny pl-hint">Snaps to a 1-ft grid. Plugs move with their room.${plan.autoOutline ? ' Rooms up to 2 ft apart join into one house.' : ''}${plan.photoId ? ' The photo stays on this phone' + (store.mode === 'cloud' ? ' and in your account' : '') + '.' : ''}</p>`;
+    <p class="muted tiny pl-hint">Dragging snaps to 1 ft. For exact feet and inches, tap a room, then Size. Plugs and doors move with their room.${plan.autoOutline ? ' Rooms up to 2 ft apart join into one house.' : ''}${plan.photoId ? ' The photo stays on this phone' + (store.mode === 'cloud' ? ' and in your account' : '') + '.' : ''}</p>`;
   } else if (m === 'add') {
     tools = `<div class="pl-tools">${placingDev ? `<b class="pl-placing">${pinIconSvg(pinKind(placingDev))} ${esc(devName(placingDev))}</b>` : `<div class="pk-row">${kinds}</div>`}<button type="button" class="btn small" id="plCancel">Cancel</button></div>
     <p class="pl-hint add">${placingDev ? `Tap where <b>${esc(devName(placingDev))}</b> is${placingDev.room ? ` (${esc(placingDev.room)})` : ''}.` : 'Tap the wall where it is.'} It snaps to the nearest wall.</p>`;
@@ -1404,7 +1434,7 @@ function renderPlan(homeId, q) {
       <span class="pl-zoom">${zoomBtns}</span>
     </div>
     ${planHasDrawing(plan) ? `<div class="pl-tools pl-tools2 pl-more"><button type="button" class="btn small" id="plScratch">${SCRATCH_IC} Start from scratch</button><button type="button" class="btn small" id="plTemplates">Templates</button></div>` : ''}
-    <p class="muted tiny pl-hint">Tap a breaker or a plug to light up everything on it. Drag a plug to move it.${plan.rooms.length ? ' Press and hold a room to move it.' : ''}</p>${outTxt}`;
+    <p class="muted tiny pl-hint">Tap a breaker or a plug to light up everything on it. Drag a plug to move it.${plan.rooms.length ? ' Press and hold a room to move it.' : ''}${plan.rooms.length ? ' Sizes and doors: Move rooms.' : ''}</p>${plan.rooms.some((r) => r.measured) ? `<div class="pl-size pl-size-view">${feetBox}</div>` : ''}${outTxt}`;
   }
   // template picker: shown on an empty plan, or from "Templates"
   const thumb = (tp) => {
@@ -1483,6 +1513,43 @@ function renderPlan(homeId, q) {
         <div class="mb-sub">Drag it to move it, or take it out (the walls on each side join up).</div>
         <div class="mb-actions"><button type="button" class="btn small danger-ghost" id="plDelCorner" ${n <= 3 ? 'disabled' : ''}>Remove corner</button><button type="button" class="btn small primary" id="plCornerOk">Done</button></div>`;
     }
+    if (m === 'rooms' && planUI.doorAdd) {
+      return `<div class="mb-top"><b class="mb-label">${DOOR_IC} Add a door</b><button type="button" class="icon-btn small" id="plDoorAddX" aria-label="Cancel">✕</button></div>
+        <div class="mb-sub">Tap the wall where it goes. You can slide it after, and pick the width and swing.</div>
+        <div class="mb-actions"><button type="button" class="btn small" id="plDoorAddCancel">Cancel</button></div>`;
+    }
+    if (m === 'rooms' && planUI.door) {
+      const d = (plan.doors || []).find((x) => x.id === planUI.door);
+      const poly = doorPoly(plan);
+      const sg = d && doorSeg(d, plan, poly);
+      if (!sg) return '';
+      const room = d.roomId !== 'outline' && plan.rooms.find((r) => r.id === d.roomId);
+      const ext = isOutside(sg, poly);
+      const kind = d.kind || 'door';
+      const kt = (DOOR_KINDS.find((k) => k.v === kind) || DOOR_KINDS[0]).t;
+      const side = isSideways(d.wall) || (sg.uy && !sg.ux);
+      const words = { start: side ? 'top' : 'left', end: side ? 'bottom' : 'right' };
+      const inW = room ? 'Into room' : 'Inward', outW = room ? 'Out of room' : 'Outward';
+      const preset = DOOR_WIDTHS.some((w) => Math.abs(w - d.widthFt) < 0.01) && !planUI.wOther;
+      const parts = ftInParts(d.widthFt);
+      // little pictures of each swing, drawn on this wall's direction (room side shaded)
+      const pic = (swing, hinge) => {
+        const ux = sg.ux, uy = sg.uy, nx = sg.nx, ny = sg.ny;
+        const a = { x: -0.5 * ux, y: -0.5 * uy }, b = { x: 0.5 * ux, y: 0.5 * uy };
+        const q = (p) => `${p.x} ${p.y}`;
+        const shade = `<path d="M${q({ x: -1.1 * ux, y: -1.1 * uy })}L${q({ x: 1.1 * ux, y: 1.1 * uy })}L${q({ x: 1.1 * ux + nx * 1.1, y: 1.1 * uy + ny * 1.1 })}L${q({ x: -1.1 * ux + nx * 1.1, y: -1.1 * uy + ny * 1.1 })}Z" class="dp-room"/>`;
+        const wall = `<path d="M${q({ x: -1.1 * ux, y: -1.1 * uy })}L${q(a)}M${q(b)}L${q({ x: 1.1 * ux, y: 1.1 * uy })}" class="dp-wall"/>`;
+        return `<svg viewBox="-1.15 -1.15 2.3 2.3" width="46" height="46" aria-hidden="true">${shade}${wall}<g class="pl-door" stroke-width="0.09">${doorSvg({ a, b, ux, uy, nx, ny, w: 1, kind, swing, hinge }, (n) => n / 22)}</g></svg>`;
+      };
+      const swings = kind === 'door' ? [['in', 'start'], ['in', 'end'], ['out', 'start'], ['out', 'end']] : kind === 'double' ? [['in', 'start'], ['out', 'start']] : [];
+      return `<div class="mb-top"><b class="mb-label">${DOOR_IC} ${esc(kt)}${room ? ` · ${esc(room.name || 'Room')}` : ''}${ext ? ' <span class="dr-ext">outside</span>' : ''}</b><button type="button" class="icon-btn small" id="mbClose" aria-label="Close">✕</button></div>
+        <div class="dr-row" role="group" aria-label="Type">${DOOR_KINDS.map((k) => `<button type="button" class="dr-chip ${kind === k.v ? 'on' : ''}" data-dkind="${k.v}" aria-pressed="${kind === k.v}">${esc(k.t)}</button>`).join('')}</div>
+        <div class="dr-row" role="group" aria-label="Width"><span class="dr-lbl">Width</span>${DOOR_WIDTHS.map((w) => `<button type="button" class="dr-chip ${preset && Math.abs(w - d.widthFt) < 0.01 ? 'on' : ''}" data-dw="${w}">${fmtFtIn(w)}</button>`).join('')}<button type="button" class="dr-chip ${preset ? '' : 'on'}" id="drOther" aria-expanded="${!preset}">Other</button></div>
+        ${preset ? '' : `<div class="dr-row dr-custom"><span class="dr-lbl">Width</span><label><input id="drWf" type="number" inputmode="numeric" min="1" max="20" value="${parts.ft}" aria-label="Width feet"><span>ft</span></label><label><input id="drWi" type="number" inputmode="numeric" min="0" max="11" value="${parts.in}" aria-label="Width inches"><span>in</span></label></div>`}
+        ${swings.length ? `<div class="dr-swings" role="group" aria-label="Which way it opens">${swings.map(([sw, hg]) => { const on = (d.swing === 'out' ? 'out' : 'in') === sw && (kind === 'double' || (d.hinge === 'end' ? 'end' : 'start') === hg); return `<button type="button" class="dr-swing ${on ? 'on' : ''}" data-swing="${sw}" data-hinge="${hg}" aria-pressed="${on}">${pic(sw, hg)}<span>${sw === 'in' ? inW : outW}${kind === 'door' ? `<small>hinge ${words[hg]}</small>` : ''}</span></button>`; }).join('')}</div>` : `<div class="mb-sub muted">${kind === 'window' ? 'A window: drawn as a thin double line.' : 'An opening with no door (a doorway or archway).'}</div>`}
+        <div class="mb-sub muted">Drag it along the wall to move it.</div>
+        <div class="mb-actions"><button type="button" class="btn small danger-ghost" id="plDelDoor">Delete</button><button type="button" class="btn small primary" id="plDoorOk">Done</button></div>`;
+    }
     if (m === 'rooms' && planUI.swap) {
       const r = plan.rooms.find((x) => x.id === planUI.swap);
       if (r) return `<div class="mb-top"><b class="mb-label">⇄ Swap <span class="pl-swapname">${esc(r.name || 'Room')}</span> with…</b><button type="button" class="icon-btn small" id="plSwapX" aria-label="Cancel swap">✕</button></div>
@@ -1494,8 +1561,9 @@ function renderPlan(homeId, q) {
       if (!r) return '';
       return `<div class="mb-top"><label class="pl-rn"><span class="sr-only">Room name</span><input id="plRoomName" list="plRoomNames" value="${esc(r.name)}" placeholder="Room name" autocomplete="off"></label><button type="button" class="icon-btn small" id="mbClose" aria-label="Close">✕</button></div>
         <datalist id="plRoomNames">${knownRooms.map((n) => `<option value="${esc(n)}">`).join('')}</datalist>
-        <div class="pl-steps"><span>W</span><button type="button" class="icon-btn small" data-step="w-">−</button><b>${showFeet() ? r.w + ' ft' : ''}</b><button type="button" class="icon-btn small" data-step="w+">+</button>
-          <span>L</span><button type="button" class="icon-btn small" data-step="h-">−</button><b>${showFeet() ? r.h + ' ft' : ''}</b><button type="button" class="icon-btn small" data-step="h+">+</button></div>
+        <div class="pl-steps"><span>W</span><button type="button" class="icon-btn small" data-step="w-" aria-label="Narrower">−</button><b>${showFeet() ? fmtFtIn(r.w) : ''}</b><button type="button" class="icon-btn small" data-step="w+" aria-label="Wider">+</button>
+          <span>L</span><button type="button" class="icon-btn small" data-step="h-" aria-label="Shorter">−</button><b>${showFeet() ? fmtFtIn(r.h) : ''}</b><button type="button" class="icon-btn small" data-step="h+" aria-label="Longer">+</button></div>
+        <div class="pl-ract"><button type="button" class="btn pl-big" id="plSize">${RULER_IC} Size</button><button type="button" class="btn pl-big" id="plRoomDoor">${DOOR_IC} + Door</button></div>
         <div class="pl-ract">${plan.rooms.length > 1 ? '<button type="button" class="btn pl-big" id="plSwap">⇄ Swap</button>' : ''}<button type="button" class="btn pl-big" id="plTurn" ${r.w === r.h ? 'disabled' : ''}>⟳ Turn</button></div>
         <div class="mb-actions"><button type="button" class="btn small danger-ghost" id="plDelRoom">Delete room</button><button type="button" class="btn small primary" id="plRoomOk">Done</button></div>`;
     }
@@ -1519,7 +1587,7 @@ function renderPlan(homeId, q) {
     bar.innerHTML = html;
     bar.hidden = !html;
     const c = document.getElementById('mbClose');
-    if (c) c.onclick = () => { planUI.bid = ''; planUI.oid = ''; planUI.sel = ''; planUI.swap = ''; planUI.corner = -1; planUI.drop = null; if (m === 'add') { planUI.mode = 'view'; planUI.placing = ''; } quietHash(`#/h/${homeId}/map?view=plan`); rerender(); };
+    if (c) c.onclick = () => { planUI.bid = ''; planUI.oid = ''; planUI.sel = ''; planUI.swap = ''; planUI.corner = -1; planUI.drop = null; planUI.door = ''; planUI.doorAdd = ''; planUI.wOther = false; if (m === 'add') { planUI.mode = 'view'; planUI.placing = ''; } quietHash(`#/h/${homeId}/map?view=plan`); rerender(); };
     bindBar();
   };
   const select = (bid, oid = '') => {
@@ -1527,16 +1595,22 @@ function renderPlan(homeId, q) {
     quietHash(`#/h/${homeId}/map?view=plan${oid ? '&o=' + encodeURIComponent(oid) : bid ? '&b=' + encodeURIComponent(bid) : ''}`);
     rerender();
   };
-  const setMode = (mode) => { quietHash(`#/h/${homeId}/map?view=plan`); if ((mode === 'shape') !== (planUI.mode === 'shape')) planUI.z = 0; planUI.corner = -1; planUI.mode = mode; planUI.picker = false; planUI.sel = ''; planUI.swap = ''; planUI.drop = null; if (mode !== 'add') planUI.placing = ''; if (mode !== 'view') { planUI.oid = ''; } rerender(); };
+  const setMode = (mode) => { quietHash(`#/h/${homeId}/map?view=plan`); if ((mode === 'shape') !== (planUI.mode === 'shape')) planUI.z = 0; planUI.corner = -1; planUI.door = ''; planUI.doorAdd = ''; planUI.wOther = false; planUI.mode = mode; planUI.picker = false; planUI.sel = ''; planUI.swap = ''; planUI.drop = null; if (mode !== 'add') planUI.placing = ''; if (mode !== 'view') { planUI.oid = ''; } rerender(); };
   const placeAt = async (d, pos) => { await store.put('devices', { ...d, pos }); };
   // One room change (move / resize / swap / turn / delete), saved with an undo step.
   // moves = [{ from, to, turn? }]: those rooms get their new rectangle and their plugs go along.
-  const changeRooms = async (moves, { rooms = null } = {}) => {
+  // Doors go with their room (and go when it's deleted).
+  const changeRooms = async (moves, { rooms = null, grow = null } = {}) => {
     const pinPos = movePins(plan, data.devices, moves);
     const next = rooms || plan.rooms.map((r) => { const mv = moves.find((x) => x.from.id === r.id); return mv ? mv.to : r; });
-    const same = JSON.stringify(next) === JSON.stringify(plan.rooms) && !Object.keys(pinPos).length;
+    let doors = plan.doors || [];
+    for (const mv of moves) doors = doorsAfterRoomMove(doors, mv.from, mv.to, { turn: mv.turn });
+    doors = doorsOfRooms(doors, next);
+    const same = JSON.stringify(next) === JSON.stringify(plan.rooms) && JSON.stringify(doors) === JSON.stringify(plan.doors || []) && !Object.keys(pinPos).length;
     if (same) return rerender();
-    planUI.undo = [...(planUI.undo || []).slice(-29), { floor: plan.floor, rooms: plan.rooms, pins: Object.keys(pinPos).map((id) => ({ id, pos: (byId('devices', id) || {}).pos })) }];
+    planUI.undo = [...(planUI.undo || []).slice(-29), { floor: plan.floor, rooms: plan.rooms, doors: plan.doors || [], w: plan.w, h: plan.h, pins: Object.keys(pinPos).map((id) => ({ id, pos: (byId('devices', id) || {}).pos })) }];
+    if (grow) { plan.w = grow.w; plan.h = grow.h; }
+    plan.doors = doors;
     plan.rooms = next;
     await savePlan(plan);
     for (const [id, pos] of Object.entries(pinPos)) { const d = byId('devices', id); if (d) await store.put('devices', { ...d, pos }); }
@@ -1564,6 +1638,21 @@ function renderPlan(homeId, q) {
     await savePlan(plan);
     for (const [id, pos] of Object.entries(pins)) { const d = byId('devices', id); if (d) await store.put('devices', { ...d, pos }); }
   };
+  // One door change (add / slide / width / swing / delete), saved with an undo step.
+  const changeDoors = async (doors) => {
+    if (JSON.stringify(doors) === JSON.stringify(plan.doors || [])) return rerender();
+    planUI.undo = [...(planUI.undo || []).slice(-29), { floor: plan.floor, rooms: plan.rooms, doors: plan.doors || [], pins: [] }];
+    plan.doors = doors;
+    await savePlan(plan);
+  };
+  const editDoor = (fn) => {
+    const d = (plan.doors || []).find((x) => x.id === planUI.door);
+    if (!d) return;
+    let n = fn(d);
+    const room = n.roomId !== 'outline' && plan.rooms.find((r) => r.id === n.roomId);
+    if (room) n = clampDoor(n, room);
+    changeDoors(plan.doors.map((x) => (x.id === d.id ? n : x)));
+  };
   const undo = async () => {
     const list = planUI.undo || [];
     let i = list.length - 1;
@@ -1576,6 +1665,8 @@ function renderPlan(homeId, q) {
     else {
       if (planUI.sel && !u.rooms.some((r) => r.id === planUI.sel)) planUI.sel = '';
       plan.rooms = u.rooms;
+      if (u.doors) { plan.doors = u.doors; if (planUI.door && !u.doors.some((d) => d.id === planUI.door)) planUI.door = ''; }
+      if (u.w && u.h && !plan.autoOutline) { plan.w = u.w; plan.h = u.h; }
     }
     await savePlan(plan);
     for (const { id, pos } of u.pins) { const d = byId('devices', id); if (d && pos) await store.put('devices', { ...d, pos }); }
@@ -1602,6 +1693,34 @@ function renderPlan(homeId, q) {
     ['plSwapX', 'plSwapCancel'].forEach((id) => { const el = document.getElementById(id); if (el) el.onclick = swx; });
     const tn = document.getElementById('plTurn');
     if (tn) tn.onclick = () => { const r0 = plan.rooms.find((r) => r.id === planUI.sel); if (r0) changeRooms([{ from: r0, to: rotateRoom(r0, plan), turn: true }]); };
+    // doors
+    const daX = () => { planUI.doorAdd = ''; rerender(); };
+    ['plDoorAddX', 'plDoorAddCancel'].forEach((id) => { const el = document.getElementById(id); if (el) el.onclick = daX; });
+    const rd = document.getElementById('plRoomDoor');
+    if (rd) rd.onclick = () => { planUI.doorAdd = planUI.sel || '*'; planUI.door = ''; rerender(); };
+    const sz0 = document.getElementById('plSize');
+    if (sz0) sz0.onclick = () => sizeSheet(planUI.sel);
+    bar.querySelectorAll('[data-dkind]').forEach((b) => (b.onclick = () => editDoor((d) => {
+      const kind = b.dataset.dkind;
+      // a double door is usually 5 ft; going back to one door from a double: 3 ft
+      const widthFt = kind === 'double' && d.widthFt < 4 ? 5 : d.kind === 'double' && kind === 'door' && d.widthFt >= 4 ? 3 : d.widthFt;
+      return { ...d, kind, widthFt };
+    })));
+    bar.querySelectorAll('[data-dw]').forEach((b) => (b.onclick = () => { planUI.wOther = false; editDoor((d) => { const widthFt = Number(b.dataset.dw); return { ...d, widthFt, kind: widthFt >= 5 && (d.kind || 'door') === 'door' ? 'double' : widthFt < 4 && d.kind === 'double' ? 'door' : d.kind || 'door' }; }); }));
+    const oth = document.getElementById('drOther');
+    if (oth) oth.onclick = () => { planUI.wOther = true; rerender(); setTimeout(() => { const f = document.getElementById('drWf'); if (f) f.focus(); }, 30); };
+    const cw = () => {
+      const f = Number(document.getElementById('drWf').value) || 0, i = Number(document.getElementById('drWi').value) || 0;
+      const w = f + Math.min(11, Math.max(0, i)) / 12;
+      if (!(w >= 1 && w <= 20)) return toast('Width: 1 to 20 ft');
+      editDoor((d) => ({ ...d, widthFt: w }));
+    };
+    ['drWf', 'drWi'].forEach((id) => { const el = document.getElementById(id); if (el) el.onchange = cw; });
+    bar.querySelectorAll('[data-swing]').forEach((b) => (b.onclick = () => editDoor((d) => ({ ...d, swing: b.dataset.swing, hinge: b.dataset.hinge }))));
+    const dd = document.getElementById('plDelDoor');
+    if (dd) dd.onclick = () => { const id = planUI.door; planUI.door = ''; planUI.wOther = false; changeDoors((plan.doors || []).filter((x) => x.id !== id)); toast('Door deleted · Undo is up top'); };
+    const dok = document.getElementById('plDoorOk');
+    if (dok) dok.onclick = () => { planUI.door = ''; planUI.wOther = false; rerender(); };
     const dc = document.getElementById('plDelCorner');
     if (dc) dc.onclick = () => { const pts = shapeOf(plan), i = planUI.corner; planUI.corner = -1; const next = removeCorner(pts, i); if (next === pts) { toast("Can't take that corner out"); return rerender(); } applyShape(next, { fit: false }); };
     const cok = document.getElementById('plCornerOk');
@@ -1633,6 +1752,7 @@ function renderPlan(homeId, q) {
   const on = (id, fn) => { const el = document.getElementById(id); if (el) el.onclick = fn; };
   on('plAdd', () => { planUI.bid = ''; setMode('add'); });
   on('plEdit', () => setMode('rooms'));
+  on('plAddDoor', () => { if (planUI.doorAdd) planUI.doorAdd = ''; else { planUI.doorAdd = planUI.sel || '*'; planUI.door = ''; } rerender(); });
   on('plShape', async () => {
     // Shape house edits the outline by hand, so Auto outline turns off (the last outline stays)
     if (plan.autoOutline) { plan.autoOutline = false; await savePlan(plan); toast('Auto outline is off so you can drag the walls'); }
@@ -1686,6 +1806,44 @@ function renderPlan(homeId, q) {
     else toast('Floor plan cleared. Undo brings it back.');
     window.scrollTo(0, 0);
   };
+  // Room size: type what you measured (feet + inches). The top-left corner stays put.
+  const sizeSheet = (roomId) => {
+    const r0 = plan.rooms.find((r) => r.id === roomId);
+    if (!r0) return;
+    const W0 = ftInParts(r0.w), H0 = ftInParts(r0.h);
+    const box = (id, v, max, lbl) => `<label class="sz-box"><input id="${id}" type="number" inputmode="numeric" pattern="[0-9]*" min="0" max="${max}" value="${v}" aria-label="${lbl}"><span>${lbl.split(' ').pop()}</span></label>`;
+    const el = document.createElement('div');
+    el.className = 'pl-sheet-bg';
+    el.innerHTML = `<div class="pl-sheet pl-size-sheet" role="dialog" aria-modal="true" aria-labelledby="szT">
+      <h3 id="szT">${RULER_IC} ${esc(r0.name || 'Room')} size</h3>
+      <p class="muted tiny">Type what you measured. Width goes across the plan, length goes down it.</p>
+      <div class="sz-row"><b>Width</b>${box('szWf', W0.ft, 200, 'Width ft')}${box('szWi', W0.in, 11, 'Width in')}</div>
+      <div class="sz-row"><b>Length</b>${box('szHf', H0.ft, 200, 'Length ft')}${box('szHi', H0.in, 11, 'Length in')}</div>
+      <p class="sz-prev" id="szPrev"></p>
+      <button type="button" class="btn full primary" id="szGo">Set size</button>
+      <button type="button" class="btn full" id="szNo">Cancel</button>
+    </div>`;
+    document.body.appendChild(el);
+    const v = (id) => Number(el.querySelector('#' + id).value) || 0;
+    const read = () => ({ w: v('szWf') + Math.min(11, v('szWi')) / 12, h: v('szHf') + Math.min(11, v('szHi')) / 12 });
+    const prev = () => { const { w, h } = read(); el.querySelector('#szPrev').textContent = w >= 3 && h >= 3 ? `${fmtFtIn(w)} × ${fmtFtIn(h)}` : 'At least 3 ft each way'; };
+    el.querySelectorAll('input').forEach((i) => { i.oninput = prev; i.onfocus = () => i.select(); });
+    prev();
+    const close = () => el.remove();
+    el.onclick = (e) => { if (e.target === el) close(); };
+    el.querySelector('#szNo').onclick = close;
+    el.querySelector('#szGo').onclick = async () => {
+      const { w, h } = read();
+      if (!(w >= 3 && h >= 3 && w <= 200 && h <= 200)) return toast('At least 3 ft each way');
+      const cur = plan.rooms.find((r) => r.id === roomId);
+      if (!cur) return close();
+      const res = setRoomSize(cur, w, h, plan);
+      close();
+      await changeRooms([{ from: cur, to: res.room }], { grow: res.plan !== plan ? { w: res.plan.w, h: res.plan.h } : null });
+      toast(`${cur.name || 'Room'} is ${fmtFtIn(res.room.w)} × ${fmtFtIn(res.room.h)}`);
+    };
+    setTimeout(() => { const f = el.querySelector('#szWf'); if (f) f.focus(); }, 60);
+  };
   const scratchSheet = (then = '') => {
     const n = data.devices.filter((d) => d.pos).length;
     const multiF = plan.floors.length > 1;
@@ -1737,7 +1895,7 @@ function renderPlan(homeId, q) {
     const any = plan.floors.some((f) => f.rooms.length);
     if (any && !confirm('Replace your rooms with this layout? Plugs stay where they are.')) return;
     const f = applyTemplate(b.dataset.tpl, plan, knownRooms);
-    plan = { ...plan, w: f.w, h: f.h, outline: f.outline, floors: f.floors, floor: f.floors[0].id, rooms: f.floors[0].rooms, outlinePts: null, autoOutline: false };
+    plan = { ...plan, w: f.w, h: f.h, outline: f.outline, floors: f.floors, floor: f.floors[0].id, rooms: f.floors[0].rooms, outlinePts: null, autoOutline: false, doors: [] };
     Object.assign(planUI, { picker: false, mode: 'rooms', sel: '', floor: plan.floor, z: 0, corner: -1 });
     await savePlan(plan);
     if (b.dataset.tpl === 'blank') { planUI.mode = 'shape'; planUI.z = 0; await savePlan(plan); }
@@ -1748,14 +1906,14 @@ function renderPlan(homeId, q) {
     const n = plan.floors.length + 1;
     let id = 'f' + n;
     while (plan.floors.some((f) => f.id === id)) id += 'x';
-    plan = { ...plan, floors: [...plan.floors.map((f) => (f.id === plan.floor ? { ...f, rooms: plan.rooms } : f)), { id, name: `Floor ${n}`, rooms: [], ...(plan.outlinePts ? { outlinePts: plan.outlinePts } : {}) }], floor: id, rooms: [] };
+    plan = { ...plan, floors: [...plan.floors.map((f) => (f.id === plan.floor ? { ...f, rooms: plan.rooms, doors: plan.doors || [] } : f)), { id, name: `Floor ${n}`, rooms: [], ...(plan.outlinePts ? { outlinePts: plan.outlinePts } : {}) }], floor: id, rooms: [], doors: [] };
     planUI.floor = id; planUI.sel = '';
     plan.outlinePts = plan.floors.find((f) => f.id === id).outlinePts || null;
     savePlan(plan);
   });
   on('plDelFloor', () => {
     const floors = plan.floors.filter((f) => f.id !== plan.floor);
-    plan = { ...plan, floors, floor: floors[0].id, rooms: floors[0].rooms };
+    plan = { ...plan, floors, floor: floors[0].id, rooms: floors[0].rooms, outlinePts: floors[0].outlinePts || null, doors: floors[0].doors || [] };
     planUI.floor = plan.floor;
     savePlan(plan);
   });
@@ -1809,10 +1967,11 @@ function renderPlan(homeId, q) {
     t.addEventListener('touchend', () => t.removeEventListener('touchmove', noScroll), { once: true });
     if (planUI.mode === 'view' && t.closest('.pin')) e.preventDefault();
     else if (planUI.mode === 'shape' && (t.closest('.sh-c') || t.closest('.sh-e') || t.closest('.sh-add'))) e.preventDefault();
+    else if (planUI.mode === 'rooms' && !planUI.swap && !planUI.doorAdd && t.closest('.dr-hit-g')) e.preventDefault();
     else if (planUI.mode === 'rooms' && !planUI.swap && (t.closest('.pl-h') || (planUI.sel && t.closest(`.pl-room[data-r="${CSS.escape(planUI.sel)}"]`)))) e.preventDefault();
   }, { passive: false });
   // once a room is picked up, the finger drags it instead of scrolling the page
-  const noScroll = (e) => { if (drag && (drag.lifted || drag.shape) && e.cancelable) e.preventDefault(); };
+  const noScroll = (e) => { if (drag && (drag.lifted || drag.shape || drag.door) && e.cancelable) e.preventDefault(); };
   svg.addEventListener('touchmove', noScroll, { passive: false });
   svg.addEventListener('contextmenu', (e) => { if (drag && (drag.lifted || drag.timer)) e.preventDefault(); });
   let drag = null;
@@ -1835,7 +1994,8 @@ function renderPlan(homeId, q) {
     const moves = [{ from: dr.r0, to: r }];
     const pos = movePins(plan, data.devices, moves);
     const rooms = plan.rooms.map((x) => (x.id === r.id ? r : x));
-    svg.innerHTML = svgInner({ ...plan, rooms }, { pins: placed.map((d) => (pos[d.id] ? { ...d, pos: pos[d.id] } : d)), lift: dr.lifted && !dr.h ? r.id : '' });
+    const doors = (plan.doors || []).length ? doorsAfterRoomMove(plan.doors, dr.r0, r) : plan.doors;
+    svg.innerHTML = svgInner({ ...plan, rooms, doors }, { pins: placed.map((d) => (pos[d.id] ? { ...d, pos: pos[d.id] } : d)), lift: dr.lifted && !dr.h ? r.id : '' });
   };
   // dragging a room near the top / bottom of the screen scrolls the page (a single-wide is long)
   const autoScroll = (dr) => {
@@ -1852,8 +2012,34 @@ function renderPlan(homeId, q) {
     const p = ptOf({ clientX: dr.cx, clientY: dr.cy });
     const dx = p.x - dr.start.x, dy = p.y - dr.start.y;
     if (!dr.r0) return;
-    dr.room1 = dr.h ? resizeCorner(dr.r0, dr.h, dx, dy, plan) : moveRoom(dr.r0, dx, dy, plan);
+    dr.room1 = dr.h ? resizeCorner(dr.r0, dr.h, dx, dy, plan) : snapToRooms(moveRoom(dr.r0, dx, dy, plan), plan.rooms, plan);
     preview(dr);
+  };
+  // keep the picked door above the door sheet (the sheet covers the bottom of the screen)
+  const keepDoorInView = () => setTimeout(() => {
+    const el = planUI.door && document.querySelector(`.dr-hit-g[data-door="${CSS.escape(planUI.door)}"]`);
+    const sheet = document.getElementById('mapBar');
+    if (!el || !sheet || sheet.hidden) return;
+    const b = el.getBoundingClientRect(), top = sheet.getBoundingClientRect().top;
+    if (b.bottom + 24 > top) window.scrollBy(0, b.bottom + 60 - top);
+    else if (b.top < 80) window.scrollBy(0, b.top - 120);
+  }, 30);
+  // ---- doors: drag along the wall; pulled well away from it, it hops to the wall under the finger
+  const doorMove = (dr, e) => {
+    const d0 = dr.d0;
+    if (!d0) return;
+    const p = ptOf(e), poly = doorPoly(plan);
+    let n = slideDoor(d0, plan, p.x, p.y, poly);
+    const sg = doorSeg(n, plan, poly);
+    if (sg && Math.abs((p.x - sg.a.x) * sg.nx + (p.y - sg.a.y) * sg.ny) > 1.6) {
+      const spot = doorSpot(plan, p.x, p.y, { poly, widthFt: d0.widthFt, max: 1.2 });
+      if (spot) {
+        const { x, y, wall, offsetFt, roomId, ...keep } = d0; void x; void y; void wall; void offsetFt; void roomId;
+        n = { ...keep, ...spot };
+      }
+    }
+    dr.next = n;
+    svg.innerHTML = svgInner({ ...plan, doors: (plan.doors || []).map((x) => (x.id === n.id ? n : x)) });
   };
   // ---- Shape house: drag a corner or a wall; tap ⊕ = new corner, tap a corner = pick it
   const shapePreview = (dr) => {
@@ -1915,6 +2101,16 @@ function renderPlan(homeId, q) {
     const pin = t.closest('.pin[data-o]');
     const h = t.closest('.pl-h');
     const start = ptOf(e);
+    // doors (Move rooms): + Door waits for a tap on a wall; a door drags along its wall
+    if (m === 'rooms' && !planUI.swap) {
+      const dh = !planUI.doorAdd && !h && t.closest('.dr-hit-g');
+      if (planUI.doorAdd || dh) {
+        if (drag && drag.timer) clearTimeout(drag.timer);
+        drag = { start, sx: e.clientX, sy: e.clientY, cx: e.clientX, cy: e.clientY, moved: false, id: e.pointerId, timer: 0, lifted: false, doorAdd: !!planUI.doorAdd, door: dh ? dh.dataset.door : '' };
+        if (dh) { drag.d0 = (plan.doors || []).find((x) => x.id === drag.door); try { svg.setPointerCapture(e.pointerId); } catch { /* gone */ } e.preventDefault(); }
+        return;
+      }
+    }
     const under = roomUnder(start);
     if (drag && drag.timer) clearTimeout(drag.timer);
     drag = { start, sx: e.clientX, sy: e.clientY, cx: e.clientX, cy: e.clientY, moved: false, pin: m === 'view' && pin ? pin.dataset.o : '', h: m === 'rooms' && !planUI.swap && h ? h.dataset.h : '', room: under ? under.id : '', id: e.pointerId, timer: 0, lifted: false };
@@ -1939,6 +2135,8 @@ function renderPlan(homeId, q) {
     if (!dr.moved && far < 6) return;
     dr.moved = true;
     if (dr.shape) return shapeMove(dr, e);
+    if (dr.doorAdd) { dr.scrolling = true; return; }
+    if (dr.door) return doorMove(dr, e);
     const p = ptOf(e);
     if (dr.pin) {
       const at = snapPin(plan, p.x, p.y);
@@ -1951,8 +2149,27 @@ function renderPlan(homeId, q) {
     const dr = drag;
     drag = null;
     if (dr.timer) clearTimeout(dr.timer);
-    if (e && e.type === 'pointercancel') { if (dr.lifted || dr.pin || dr.shape) rerender(); return; }
+    if (e && e.type === 'pointercancel') { if (dr.lifted || dr.pin || dr.shape || dr.door) rerender(); return; }
     if (dr.shape) return shapeEnd(dr);
+    if (dr.door) {
+      if (dr.moved && dr.next) { planUI.door = dr.door; planUI.sel = ''; await changeDoors((plan.doors || []).map((x) => (x.id === dr.door ? dr.next : x))); return keepDoorInView(); }
+      if (dr.moved) return rerender();
+      planUI.door = planUI.door === dr.door ? '' : dr.door; planUI.sel = ''; planUI.wOther = false;
+      rerender();
+      return keepDoorInView();
+    }
+    if (dr.doorAdd) {
+      if (dr.scrolling || dr.moved) return;
+      const poly = doorPoly(plan);
+      const only = planUI.doorAdd !== '*' && plan.rooms.find((r) => r.id === planUI.doorAdd);
+      let d = only ? placeDoor({ ...plan, rooms: [only] }, dr.start.x, dr.start.y, { id: 'dr' + uid().slice(0, 6) }) : null;
+      if (!d) d = placeDoor(plan, dr.start.x, dr.start.y, { poly, id: 'dr' + uid().slice(0, 6) });
+      if (!d) return toast('Tap right on a wall');
+      Object.assign(planUI, { doorAdd: '', door: d.id, sel: '', wOther: false });
+      await changeDoors([...(plan.doors || []), d]);
+      keepDoorInView();
+      return toast('Door added. Drag it to slide it.');
+    }
     if (dr.scrolling) return;
     if (dr.lifted) {
       const r1 = dr.room1, r0 = dr.r0;
@@ -1987,6 +2204,7 @@ function renderPlan(homeId, q) {
         return toast(`Swapped ${a0.name || 'room'} and ${b0.name || 'room'}`);
       }
       planUI.sel = dr.room || '';
+      planUI.door = ''; planUI.wOther = false;
       rerender();
       // keep the picked room (and its handles) above the bottom sheet
       const el = planUI.sel && document.querySelector(`.pl-room[data-r="${CSS.escape(planUI.sel)}"] rect`);

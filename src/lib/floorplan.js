@@ -3,6 +3,8 @@
 //                    or, for 2+ floors, floors: [{ id, name, rooms }] instead of rooms
 //                    outlinePts?: [{ x, y }] = the house outline drawn by eye (per floor; see shapeOf)
 //                    autoOutline?: true = rooms first, the outline is drawn around the rooms
+//                    doors?: [door] (per floor, like outlinePts; see lib/doors.js)
+//   room.measured?    true = he typed its size (w / h can be any inch, e.g. 12.5 = 12'6")
 //   device.pos     = { x, y, floor? }   (feet from the plan's top-left corner; no floor = first floor)
 // outline 'box' (default) draws the w x h outline; 'rooms' = the house is just its rooms
 // (L-shapes, a garage sticking out), the w x h box is only the drawing area.
@@ -15,6 +17,43 @@ export const WALL_SNAP = 2; // ft: a tap this close to a wall lands on the wall
 export const snap = (v, step = 1) => Math.round((Number(v) || 0) / step) * step + 0; // + 0: no -0
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const r1 = (v) => Math.round(v * 10) / 10;
+// Feet kept to the nearest inch (typed sizes like 12' 7" = 12.5833...).
+export const inch = (v) => Math.round((Number(v) || 0) * 12) / 12 + 0;
+// A room's numbers: a whole inch stays (typed 12' 6"), anything in between snaps to the foot.
+const gridV = (v) => { const n = Number(v) || 0; return Math.abs(n * 12 - Math.round(n * 12)) < 0.01 ? inch(n) : snap(n); };
+
+// ---- feet + inches: "12' 6"" <-> 12.5
+// Takes 12' 6", 12'6, 12 6, 12ft 6in, 12-6, 12.5, 150", 6in, curly quotes. -> feet (to the inch) or null.
+export function parseFtIn(text) {
+  if (typeof text === 'number') return Number.isFinite(text) && text > 0 ? inch(text) : null;
+  let t = String(text == null ? '' : text).trim().toLowerCase().replace(/[\u2018\u2019\u2032]/g, "'").replace(/[\u201c\u201d\u2033]/g, '"').replace(/''/g, '"');
+  if (!t) return null;
+  t = t.replace(/\s*(feet|foot|ft)\.?/g, "'").replace(/\s*(inches|inch|in)\.?/g, '"');
+  let m = t.match(/^(\d+(?:\.\d+)?)\s*'\s*(?:-?\s*(\d+(?:\.\d+)?)\s*"?)?$/); // 12' 6" / 12'6 / 12'
+  if (!m) m = t.match(/^(\d+(?:\.\d+)?)\s*(?:-|\s)\s*(\d+(?:\.\d+)?)\s*"?$/); // 12 6 / 12-6
+  if (m) {
+    const ft = Number(m[1]), ins = m[2] != null ? Number(m[2]) : 0;
+    if (m[2] != null && ins >= 12) return null;
+    const v = ft + ins / 12;
+    return v > 0 ? inch(v) : null;
+  }
+  m = t.match(/^(\d+(?:\.\d+)?)\s*"$/); // 150" = inches only
+  if (m) return Number(m[1]) > 0 ? inch(Number(m[1]) / 12) : null;
+  m = t.match(/^(\d+(?:\.\d+)?)$/); // plain number = feet
+  if (m) return Number(m[1]) > 0 ? inch(Number(m[1])) : null;
+  return null;
+}
+
+// 12.5 -> 12'6"   14 -> 14'   0.5 -> 6"   (nearest inch)
+export function fmtFtIn(ft) {
+  const t = Math.round((Number(ft) || 0) * 12);
+  const f = Math.floor(t / 12), i = t - f * 12;
+  if (!f) return `${i}"`;
+  return i ? `${f}'${i}"` : `${f}'`;
+}
+
+// Feet and inches as two whole numbers (for the two boxes on the size sheet).
+export const ftInParts = (ft) => { const t = Math.round((Number(ft) || 0) * 12); return { ft: Math.floor(t / 12), in: t % 12 }; };
 
 export function defaultSize(home) {
   if (home && (home.type === 'mobile' || home.type === 'rv')) return home.type === 'rv' ? { w: 8, h: 30 } : { w: 16, h: 76 };
@@ -33,19 +72,32 @@ export function planOf(home, floorId = '') {
   const single = !(fp && Array.isArray(fp.floors) && fp.floors.length);
   plan.floors = raw.map((f, i) => {
     const pts = okPts(single ? fp && fp.outlinePts : f.outlinePts);
-    return { id: f.id || 'f' + (i + 1), name: f.name || `Floor ${i + 1}`, rooms: (f.rooms || []).filter((r) => r && r.id).map((r) => clampRoom(r, plan)), ...(pts ? { outlinePts: pts } : {}) };
+    const rooms = (f.rooms || []).filter((r) => r && r.id).map((r) => clampRoom(r, plan));
+    const doors = okDoors(single ? fp && fp.doors : f.doors, rooms);
+    return { id: f.id || 'f' + (i + 1), name: f.name || `Floor ${i + 1}`, rooms, ...(pts ? { outlinePts: pts } : {}), ...(doors.length ? { doors } : {}) };
   });
   const cur = plan.floors.find((f) => f.id === floorId) || plan.floors[0];
   plan.floor = cur.id;
   plan.rooms = cur.rooms;
   plan.outlinePts = cur.outlinePts || null;
+  plan.doors = cur.doors || [];
   return plan;
+}
+
+// Saved doors, checked: a room door needs its room (gone = dropped), an outside door a spot.
+const DOOR_KINDS = ['door', 'double', 'opening', 'window'];
+function okDoors(list, rooms) {
+  if (!Array.isArray(list)) return [];
+  const ids = new Set(rooms.map((r) => r.id));
+  return list.filter((d) => d && d.id && Number(d.widthFt) > 0 && (d.roomId === 'outline' ? Number.isFinite(Number(d.x)) && Number.isFinite(Number(d.y)) : ids.has(d.roomId) && ['n', 'e', 's', 'w'].includes(d.wall)))
+    .map((d) => ({ ...d, widthFt: inch(d.widthFt), kind: DOOR_KINDS.includes(d.kind) ? d.kind : 'door', ...(d.roomId === 'outline' ? { x: r1(Number(d.x)), y: r1(Number(d.y)) } : { offsetFt: inch(Math.max(0, Number(d.offsetFt) || 0)) }) }));
 }
 
 // A saved outline, checked: 3+ finite points (snapped to 0.1 ft), else null.
 function okPts(pts) {
   if (!Array.isArray(pts) || pts.length < 3) return null;
-  const out = pts.filter((p) => p && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y))).map((p) => ({ x: r1(Number(p.x)), y: r1(Number(p.y)) }));
+  const rr = (v) => (Math.abs(inch(v) - v) < 0.005 ? inch(v) : r1(v)); // keeps typed inches (12' 7")
+  const out = pts.filter((p) => p && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y))).map((p) => ({ x: rr(Number(p.x)), y: rr(Number(p.y)) }));
   return out.length >= 3 ? out : null;
 }
 
@@ -56,13 +108,14 @@ export function withRooms(plan, rooms) {
 
 // What gets saved on the home (no derived fields). One floor = { rooms }, more = { floors }.
 export function planToSave(plan) {
-  const room = ({ id, name, x, y, w, h }) => ({ id, name: name || '', x, y, w, h });
-  const floors = (plan.floors || [{ id: 'f1', name: 'Floor 1', rooms: plan.rooms }]).map((f) => (f.id === plan.floor ? { ...f, rooms: plan.rooms, outlinePts: plan.outlinePts } : f));
+  const room = ({ id, name, x, y, w, h, measured }) => ({ id, name: name || '', x, y, w, h, ...(measured ? { measured: true } : {}) });
+  const dl = (f) => (f.doors && f.doors.length ? { doors: f.doors.map((d) => ({ ...d })) } : {});
+  const floors = (plan.floors || [{ id: 'f1', name: 'Floor 1', rooms: plan.rooms }]).map((f) => (f.id === plan.floor ? { ...f, rooms: plan.rooms, outlinePts: plan.outlinePts, doors: plan.doors } : f));
   const out = { w: plan.w, h: plan.h };
   // the outline is only saved when it isn't just the w x h box
   const pts = (f) => (f.outlinePts && f.outlinePts.length >= 3 && !isBox(f.outlinePts, plan.w, plan.h) ? { outlinePts: f.outlinePts.map(({ x, y }) => ({ x, y })) } : {});
-  if (floors.length > 1) out.floors = floors.map((f) => ({ id: f.id, name: f.name, rooms: f.rooms.map(room), ...pts(f) }));
-  else { out.rooms = (floors[0] ? floors[0].rooms : plan.rooms).map(room); Object.assign(out, pts(floors[0] || plan)); }
+  if (floors.length > 1) out.floors = floors.map((f) => ({ id: f.id, name: f.name, rooms: f.rooms.map(room), ...pts(f), ...dl(f) }));
+  else { out.rooms = (floors[0] ? floors[0].rooms : plan.rooms).map(room); Object.assign(out, pts(floors[0] || plan), dl(floors[0] || plan)); }
   if (plan.outline === 'rooms') out.outline = 'rooms';
   if (plan.autoOutline) out.autoOutline = true;
   if (plan.photoId) { out.photoId = plan.photoId; out.photoOpacity = plan.photoOpacity; out.photoRot = plan.photoRot || 0; }
@@ -72,22 +125,49 @@ export function planToSave(plan) {
 // Floor a pin is on ('' = first floor).
 export const floorOfPos = (pos, plan) => (pos && pos.floor && plan.floors.some((f) => f.id === pos.floor) ? pos.floor : plan.floors[0].id);
 
-// Snap a room to the 1-ft grid, keep it at least MIN_ROOM and inside the outline.
+// Keep a room at least MIN_ROOM and inside the outline. Kept to the inch (typed sizes);
+// dragging moves and resizes in whole feet (moveRoom, resizeCorner).
 export function clampRoom(r, plan) {
-  const w = clamp(snap(r.w), MIN_ROOM, plan.w);
-  const h = clamp(snap(r.h), MIN_ROOM, plan.h);
-  const x = clamp(snap(r.x), 0, plan.w - w);
-  const y = clamp(snap(r.y), 0, plan.h - h);
+  const w = clamp(gridV(r.w), MIN_ROOM, plan.w);
+  const h = clamp(gridV(r.h), MIN_ROOM, plan.h);
+  const x = clamp(gridV(r.x), 0, inch(plan.w - w));
+  const y = clamp(gridV(r.y), 0, inch(plan.h - h));
   return { ...r, x, y, w, h };
 }
 
-export const moveRoom = (r, dx, dy, plan) => clampRoom({ ...r, x: r.x + dx, y: r.y + dy }, plan);
+// Drag a room: it moves in whole feet (a room at 2'6" stays on the half foot).
+export const moveRoom = (r, dx, dy, plan) => clampRoom({ ...r, x: r.x + snap(dx), y: r.y + snap(dy) }, plan);
+
+// A dragged room's walls click onto a nearby room's walls (within tol ft), so a typed
+// 12'6" room and its neighbour still line up after a whole-foot drag.
+export function snapToRooms(r, rooms, plan, tol = 0.6) {
+  let bx = null, by = null;
+  for (const o of rooms || []) {
+    if (!o || o.id === r.id) continue;
+    const nearY = r.y < o.y + o.h + tol && r.y + r.h > o.y - tol, nearX = r.x < o.x + o.w + tol && r.x + r.w > o.x - tol;
+    if (nearY) for (const d of [o.x - r.x, o.x + o.w - r.x, o.x - (r.x + r.w), o.x + o.w - (r.x + r.w)]) if (Math.abs(d) > 1e-6 && Math.abs(d) <= tol && (bx == null || Math.abs(d) < Math.abs(bx))) bx = d;
+    if (nearX) for (const d of [o.y - r.y, o.y + o.h - r.y, o.y - (r.y + r.h), o.y + o.h - (r.y + r.h)]) if (Math.abs(d) > 1e-6 && Math.abs(d) <= tol && (by == null || Math.abs(d) < Math.abs(by))) by = d;
+  }
+  if (bx == null && by == null) return r;
+  return clampRoom({ ...r, x: r.x + (bx || 0), y: r.y + (by || 0) }, plan);
+}
 
 // Resize from the bottom-right corner; the top-left stays put.
 export function resizeRoom(r, dw, dh, plan) {
-  const w = clamp(snap(r.w + dw), MIN_ROOM, plan.w - r.x);
-  const h = clamp(snap(r.h + dh), MIN_ROOM, plan.h - r.y);
+  const w = clamp(gridV(r.w + dw), MIN_ROOM, inch(plan.w - r.x));
+  const h = clamp(gridV(r.h + dh), MIN_ROOM, inch(plan.h - r.y));
   return { ...r, w, h };
+}
+
+// A typed size (feet, to the inch): the top-left corner stays put; the drawing area grows to
+// fit when it has to. -> { room, plan } (plan = the same plan, or a bigger one).
+export function setRoomSize(r, w, h, plan) {
+  w = clamp(inch(w), MIN_ROOM, 200); h = clamp(inch(h), MIN_ROOM, 200);
+  let next = plan;
+  const needW = Math.ceil(r.x + w), needH = Math.ceil(r.y + h);
+  if (needW > plan.w || needH > plan.h) next = { ...plan, w: clamp(Math.max(plan.w, needW), 6, 200), h: clamp(Math.max(plan.h, needH), 6, 200) };
+  const room = clampRoom({ ...r, w, h, measured: true }, next);
+  return { room, plan: next };
 }
 
 // New outline size: rooms that no longer fit are pulled back inside (and shrunk if needed).
@@ -330,7 +410,9 @@ export function resizeCorner(r, corner, dx, dy, plan) {
 // Turn a room a quarter: w and h swap around its middle, then it's pulled back inside.
 export function rotateRoom(r, plan) {
   const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
-  return clampRoom({ ...r, w: r.h, h: r.w, x: cx - r.h / 2, y: cy - r.w / 2 }, plan);
+  // the corner lands on the foot (or the inch, when the room was already off the foot grid)
+  const on = (v, was) => (Number.isInteger(was) ? snap(v) : inch(v));
+  return clampRoom({ ...r, w: r.h, h: r.w, x: on(cx - r.h / 2, r.x), y: on(cy - r.w / 2, r.y) }, plan);
 }
 
 // Two rooms trade places -> { a, b } (the new rectangles).
@@ -605,7 +687,7 @@ export function fitRoomsToShape(plan, devices, from, to) {
 // box around the outline(s), rooms and plugs. -> { plan, pins: { [deviceId]: pos } }
 // devices: every device of the home (plugs on any floor shift together).
 export function normalizeShape(plan, devices = []) {
-  const floors = plan.floors.map((f) => (f.id === plan.floor ? { ...f, rooms: plan.rooms, outlinePts: plan.outlinePts } : f));
+  const floors = plan.floors.map((f) => (f.id === plan.floor ? { ...f, rooms: plan.rooms, outlinePts: plan.outlinePts, doors: plan.doors } : f));
   const xs = [], ys = [];
   for (const f of floors) {
     const pts = f.outlinePts && f.outlinePts.length >= 3 ? f.outlinePts : f.id === plan.floor ? null : rectPts(plan.w, plan.h);
@@ -623,10 +705,11 @@ export function normalizeShape(plan, devices = []) {
   const sx = Math.max(0, Math.floor(Math.min(...xs))), sy = Math.max(0, Math.floor(Math.min(...ys)));
   const ox = dx - sx, oy = dy - sy;
   const mv = (p) => ({ ...p, x: snap(p.x + ox), y: snap(p.y + oy) });
-  const nf = floors.map((f) => ({ ...f, rooms: f.rooms.map((r) => ({ ...r, x: r.x + ox, y: r.y + oy })), ...(f.outlinePts ? { outlinePts: f.outlinePts.map(mv) } : {}) }));
+  const mvDoor = (d) => (d.roomId === 'outline' ? { ...d, x: r1(d.x + ox), y: r1(d.y + oy) } : d);
+  const nf = floors.map((f) => ({ ...f, rooms: f.rooms.map((r) => ({ ...r, x: r.x + ox, y: r.y + oy })), ...(f.outlinePts ? { outlinePts: f.outlinePts.map(mv) } : {}), ...(f.doors ? { doors: f.doors.map(mvDoor) } : {}) }));
   const w = clamp(Math.ceil(Math.max(...xs) + ox), 6, 200), h = clamp(Math.ceil(Math.max(...ys) + oy), 6, 200);
   const cur = nf.find((f) => f.id === plan.floor);
-  const next = { ...plan, w, h, floors: nf, rooms: cur.rooms, outlinePts: cur.outlinePts || null };
+  const next = { ...plan, w, h, floors: nf, rooms: cur.rooms, outlinePts: cur.outlinePts || null, doors: cur.doors || plan.doors || [] };
   const pins = {};
   if (ox || oy) for (const d of placed) pins[d.id] = { ...d.pos, x: r1(d.pos.x + ox), y: r1(d.pos.y + oy) };
   return { plan: next, pins };
@@ -710,8 +793,34 @@ export function outlineFromRooms(rooms, { gap = 2 } = {}) {
     const a = polyArea(loop);
     if (a > bestA) { best = loop; bestA = a; }
   }
-  const pts = dropStraight(best);
+  let pts = dropStraight(best);
+  // rooms sized to the inch (12' 6"): the 1-ft cells overshoot by less than a foot, so each
+  // wall is pulled onto the room wall it came from
+  if (rs.some((r) => [r.x, r.y, r.w, r.h].some((v) => !Number.isInteger(v)))) pts = exactWalls(pts, rs);
   return pts.length >= 4 ? pts : [];
+}
+
+function exactWalls(pts, rooms) {
+  const xs = [...new Set(rooms.flatMap((r) => [inch(r.x), inch(r.x + r.w)]))], ys = [...new Set(rooms.flatMap((r) => [inch(r.y), inch(r.y + r.h)]))];
+  const near = (v, list) => { let b = v, bd = 1; for (const c of list) { const d = Math.abs(c - v); if (d < bd - 1e-9) { b = c; bd = d; } } return b; };
+  const mx = new Map(), my = new Map();
+  for (const p of pts) { if (!mx.has(p.x)) mx.set(p.x, near(p.x, xs)); if (!my.has(p.y)) my.set(p.y, near(p.y, ys)); }
+  const out = [];
+  for (const p of pts) {
+    const q = { x: mx.get(p.x), y: my.get(p.y) };
+    const last = out[out.length - 1];
+    if (!last || last.x !== q.x || last.y !== q.y) out.push(q);
+  }
+  while (out.length > 1 && out[0].x === out[out.length - 1].x && out[0].y === out[out.length - 1].y) out.pop();
+  let changed = true; // drop corners that ended up in a straight line
+  while (changed && out.length > 3) {
+    changed = false;
+    for (let i = 0; i < out.length; i++) {
+      const a = out[(i - 1 + out.length) % out.length], q = out[i], b = out[(i + 1) % out.length];
+      if (Math.abs((q.x - a.x) * (b.y - q.y) - (q.y - a.y) * (b.x - q.x)) < 1e-9) { out.splice(i, 1); changed = true; break; }
+    }
+  }
+  return out.length >= 4 && validShape(out) ? out : pts;
 }
 
 // The plan with its outline redrawn from the rooms when Auto outline is on (else unchanged).
@@ -738,13 +847,13 @@ export function growArea(plan, room = 8) {
 // size and the photo stay; breakers, outlets and other devices aren't part of the plan).
 // autoOutline: what the cleared plan starts with (true = rooms first).
 export function clearPlan(plan, { autoOutline = false } = {}) {
-  const floors = (plan.floors || [{ id: 'f1', name: 'Floor 1', rooms: [] }]).map(({ outlinePts, ...f }) => { void outlinePts; return { ...f, rooms: [] }; });
+  const floors = (plan.floors || [{ id: 'f1', name: 'Floor 1', rooms: [] }]).map(({ outlinePts, doors, ...f }) => { void outlinePts; void doors; return { ...f, rooms: [] }; });
   const cur = floors.find((f) => f.id === plan.floor) || floors[0];
-  return { ...plan, floors, floor: cur.id, rooms: [], outline: 'box', outlinePts: null, autoOutline: !!autoOutline };
+  return { ...plan, floors, floor: cur.id, rooms: [], outline: 'box', outlinePts: null, autoOutline: !!autoOutline, doors: [] };
 }
 
 // Is there anything on the plan to clear (rooms or a drawn outline on any floor)?
 export function planHasDrawing(plan) {
   const fl = (plan.floors || []).map((f) => (f.id === plan.floor ? { ...f, rooms: plan.rooms, outlinePts: plan.outlinePts } : f));
-  return fl.some((f) => (f.rooms && f.rooms.length) || (f.outlinePts && f.outlinePts.length >= 3));
+  return fl.some((f) => (f.rooms && f.rooms.length) || (f.outlinePts && f.outlinePts.length >= 3) || (f.id === plan.floor ? plan.doors : f.doors || []).length);
 }
