@@ -503,8 +503,8 @@ function renderSticker(homeId, q) {
       <div class="st-ib-foot"><span class="tiny muted">${isPro() ? 'Saved on this home, and used as your default on new stickers.' : 'Saved on this home.'}</span><button type="button" class="btn small" id="ibSave" hidden>Save</button></div>
     </div>
     ${home.shareToken
-      ? `<label>QR opens<select id="stQr">${opt([{ value: '', label: 'This panel (read-only shared copy)' }, { value: 'get', label: 'Just the app download' }], prefer)}</select></label>`
-      : `<p class="tiny muted st-hint">The QR opens the AmpMap download page. To let people who scan see this panel too, turn on <a href="#/h/${homeId}/more">More › Share a read-only copy</a>.</p>`}
+      ? `<label>Scanning opens<select id="stQr">${opt([{ value: '', label: 'This panel (view only)' }, { value: 'get', label: 'The app download' }], prefer)}</select></label>`
+      : `<p class="tiny muted st-hint">Scanning opens the AmpMap download page. To show this panel instead, turn on <a href="#/h/${homeId}/more#share">Settings › Share</a>.</p>`}
     <label>Paper<select id="stPaper">${opt([{ value: 'label', label: `${size.label} (label printer / sticker sheet)` }, { value: 'letter', label: 'Regular 8.5 x 11 paper (cut it out)' }], paper)}</select></label>
     <button class="btn primary" id="doPrint">Print / Save as PDF</button>
   </div>
@@ -619,7 +619,7 @@ async function startGuest(gi) {
 
 function guestBanner() {
   const g = store.guest;
-  return `<div class="guest-banner" role="status">✎ Editing for the homeowner as <b>${esc(g.name)}</b> · saved to their AmpMap, with your name · <a href="#/h/${esc(g.homeId)}/more">Done</a></div>`;
+  return `<div class="guest-banner" role="status">✎ Editing as <b>${esc(g.name)}</b> · changes save for the homeowner · <a href="#/h/${esc(g.homeId)}/more">Done</a></div>`;
 }
 
 function renderGuestMore(homeId) {
@@ -628,8 +628,8 @@ function renderGuestMore(homeId) {
   const body = `
   <div class="card">
     <h3>You're editing ${esc(home ? home.name : 'this home')}</h3>
-    <p class="muted">As <b>${esc(store.guest.name)}</b>. Every change goes straight into the homeowner's AmpMap with your name and the date, and they can undo it.</p>
-    <p class="muted">You can change breakers, outlets, wire, labels and rooms. The homeowner keeps the home itself, photos and sharing.</p>
+    <p class="muted">As <b>${esc(store.guest.name)}</b>. Your changes save to the homeowner's AmpMap with your name, and they can undo them.</p>
+    <p class="muted">You can change breakers, outlets, wire and labels. Photos and sharing stay with the homeowner.</p>
     <button class="btn primary" id="guestDone">Done editing</button>
     ${gi.token ? `<a class="btn ghost" href="#/share/${esc(gi.token)}">See the read-only view</a>` : ''}
   </div>
@@ -660,7 +660,7 @@ async function renderCodeEntry(token) {
   <main class="main share-main">
     <div class="card code-card">
       <div class="code-home"><img src="./brand/house-108.png" alt="" width="40" height="40"><div><b>${esc(doc.home.name)}</b>${doc.home.address ? `<br><span class="muted tiny">${esc(doc.home.address)}</span>` : ''}</div></div>
-      <p class="muted">Ask the homeowner for their AmpMap edit code. No account needed.</p>
+      <p class="muted">Type the edit code from the homeowner. No account needed.</p>
       <form id="codeForm" class="form" autocomplete="off">
         <label>Your name and company<input name="who" required maxlength="60" value="${esc(lastName)}" placeholder="Mike · Bright Line Electric" autocomplete="name"></label>
         <label>Edit code<input name="code" required class="code-input" inputmode="text" autocapitalize="characters" autocomplete="one-time-code" spellcheck="false" maxlength="40" placeholder="6-digit code"></label>
@@ -733,7 +733,7 @@ const spaced = (code) => (/^\d{6}$/.test(code) ? `${code.slice(0, 3)} ${code.sli
 
 async function renderAccess(homeId, q) {
   const home = byId('homes', homeId);
-  app.innerHTML = shell(homeId, 'more', `<div class="center-msg">Loading...</div>`, { title: 'Edit codes & access', back: `#/h/${homeId}/more` });
+  app.innerHTML = shell(homeId, 'more', `<div class="center-msg">Loading...</div>`, { title: 'Who can edit', back: `#/h/${homeId}/more` });
   const token = home.shareToken;
   let code = null;
   let rulesMissing = false;
@@ -756,26 +756,27 @@ async function renderAccess(homeId, q) {
   const shareLink = token ? deepLink('/share/' + token) : '';
   const body = `
   ${welcome ? `<div class="alert ok-alert">🎉 ${esc(home.name)} is yours now. Make a temporary code below whenever an electrician comes.</div>` : ''}
-  ${rulesMissing ? `<div class="alert warn">Edit codes need a one-time security update on the AmpMap database before they work.</div>` : ''}
+  ${rulesMissing ? `<div class="alert warn">Edit codes aren't switched on yet. They need a one-time update by the AmpMap owner.</div>` : ''}
   <div class="card access-card" id="codes">
     <h3>Let an electrician edit</h3>
-    <p class="muted">They scan the panel QR, tap <b>Edit</b> and type your code. No account needed. Everything they change lands in your AmpMap with their name on it.</p>
+    <p class="muted">Give the electrician a code. They scan the QR on your panel, tap <b>Edit</b> and type it. No account needed.</p>
     <div class="code-status ${st.on ? 'on' : ''}"><span class="dot-st"></span>${esc(st.text)}</div>
     ${showCode ? `<div class="big-code" aria-label="Edit code">${esc(spaced(showCode))}</div><div class="stack"><button class="btn primary" id="codeShare">Send the code</button></div>` : ''}
-    ${st.on && !showCode ? `<p class="tiny muted">For safety, AmpMap never shows a code you chose. If you forgot it, set a new one.</p>` : ''}
-    ${locked ? `<div class="alert warn">Too many wrong tries. Editing with a code is paused until ${esc(new Date(guardNext(guard).until).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }))}. <button class="btn small" id="unlock">Unpause now</button></div>` : ''}
+    ${st.on && !showCode ? `<p class="tiny muted">AmpMap doesn't show a code you chose. Forgot it? Set a new one.</p>` : ''}
+    ${locked ? `<div class="alert warn">Too many wrong tries. The code is paused until ${esc(new Date(guardNext(guard).until).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }))}. <button class="btn small" id="unlock">Unpause now</button></div>` : ''}
     <div class="access-block">
-      <h4>Make a temporary code</h4>
+      <h4>Temporary code</h4>
+      <p class="tiny muted">A new 6-digit code that stops working after the time you pick.</p>
       <div class="chips" role="group" aria-label="Works for">${EXPIRY_CHOICES.map((c) => `<button type="button" class="chip ${pick === c.value ? 'on' : ''}" data-exp="${c.value}" aria-pressed="${pick === c.value}">${esc(c.label)}</button>`).join('')}</div>
-      <button class="btn primary" id="makeTemp">${st.on ? 'Make a new 6-digit code' : 'Make a 6-digit code'}</button>
+      <button class="btn ${showCode ? '' : 'primary'}" id="makeTemp">${st.on ? 'Make a new code' : 'Make a code'}</button>
     </div>
     <div class="access-block">
-      <h4>Or set your own code</h4>
-      <form id="ownForm" class="inline-form"><input name="own" placeholder="At least 6 letters or numbers" maxlength="32" autocomplete="off" aria-label="Your own code"><button class="btn" type="submit">Save</button></form>
+      <h4>Your own code</h4>
+      <p class="tiny muted">One you choose and can reuse. Works until you change it or turn it off.</p>
+      <form id="ownForm" class="inline-form"><input name="own" placeholder="6 or more letters or numbers" maxlength="32" autocomplete="off" aria-label="Your own code"><button class="btn" type="submit">Save</button></form>
       <p class="err" id="ownErr" role="alert"></p>
     </div>
-    ${st.on ? `<button class="btn danger" id="codeOff">Turn off editing</button>` : ''}
-    <p class="tiny muted">A new code or turning it off ends access for everyone using the old one, right away. 10 wrong tries in an hour pauses the code.</p>
+    ${st.on ? `<div class="access-block"><h4>Turn off editing</h4><p class="tiny muted">The code stops working right away. Making a new code does the same to the old one.</p><button class="btn danger" id="codeOff">Turn off editing</button></div>` : ''}
   </div>
 
   <div class="card access-card" id="people">
@@ -784,13 +785,13 @@ async function renderAccess(homeId, q) {
       <li><span><b>You</b> · owner</span></li>
       ${st.on ? `<li><span>Anyone with the code · can edit</span><span class="muted tiny">${code.kind === 'temp' ? 'temporary' : 'your code'}</span></li>` : ''}
       ${grants.map((g) => `<li><span><b>${esc(g.editorName || 'Installer')}</b> · can edit</span><button class="btn small danger" data-ungrant="${esc(g.id)}">Remove</button></li>`).join('')}
-      ${token ? `<li><span>Anyone with the link or QR · can view</span><a class="btn small" href="#/h/${homeId}/more#share">Manage</a></li>` : ''}
+      ${token ? `<li><span>Anyone who scans your QR · can view</span><a class="btn small" href="#/h/${homeId}/more#share">Manage</a></li>` : ''}
     </ul>
   </div>
 
   <div class="card access-card" id="history">
     <h3>Edit history</h3>
-    ${hist == null ? `<p class="muted">The history shows up here after the security update.</p>` : !hist.length ? `<p class="muted">No edits by others yet. When an electrician changes something, you'll see who, when and what here.</p>` : `<ul class="history">${hist.slice(0, 40).map((e) => `
+    ${hist == null ? `<p class="muted">Edit history turns on with the same one-time update.</p>` : !hist.length ? `<p class="muted">No changes by others yet. You'll see who changed what, and when.</p>` : `<ul class="history">${hist.slice(0, 40).map((e) => `
       <li class="${e.undoneAt ? 'undone' : ''}">
         <div class="h-head"><b>Changed by: ${esc(e.by)}</b> · ${esc(fmtWhen(e.at))}${e.undoneAt ? ' · <span class="muted">undone</span>' : ''}</div>
         <ul class="h-lines">${(e.summary || []).map((l) => `<li>${esc(l)}</li>`).join('')}</ul>
@@ -803,12 +804,12 @@ async function renderAccess(homeId, q) {
     ${claim ? `<p class="muted">${esc(claimStatus(claim).text)}</p>
       <div class="big-code claim">${esc(prettyClaimCode(claimPriv.code))}</div>
       <div class="stack"><a class="btn primary" href="#/h/${homeId}/print/setup">Print the setup page</a><button class="btn danger" id="claimCancel">Cancel the hand-off</button></div>`
-      : `<p class="muted">Set this up for someone else (a new build or a customer)? Make a one-time setup code and leave the printed page at the panel. They scan it, make their free account, enter the code, and the home becomes theirs. Then they control edit codes.</p>
-      <label>Your name or company (shows on the page)<input id="claimFrom" maxlength="60" value="${esc((home.installedBy && home.installedBy.company) || localStorage.getItem('ampmap:installer') || '')}" placeholder="Bright Line Electric"></label>
-      <button class="btn" id="claimMake">Make a setup code</button>`}
-    <p class="tiny muted">The code works once, for 30 days. After the hand-off this home leaves your account; the homeowner can let you keep editing.</p>
+      : `<p class="muted">Setting this up for someone else? Print a setup page and leave it at the panel. When they enter the code, the home moves to their account.</p>
+      <label>Your name or company<input id="claimFrom" maxlength="60" value="${esc((home.installedBy && home.installedBy.company) || localStorage.getItem('ampmap:installer') || '')}" placeholder="Bright Line Electric"></label>
+      <button class="btn" id="claimMake">Make the setup page</button>`}
+    <p class="tiny muted">The code works once, for 30 days. After that the home is theirs; they can let you keep editing.</p>
   </div>`;
-  app.innerHTML = shell(homeId, 'more', body, { title: 'Edit codes & access', back: `#/h/${homeId}/more` });
+  app.innerHTML = shell(homeId, 'more', body, { title: 'Who can edit', back: `#/h/${homeId}/more` });
   bindShell();
   const $ = (id) => document.getElementById(id);
   const fail = (ex) => alert(ex && ex.code === 'ampmap/rules' ? 'This needs the one-time security update first (the AmpMap owner deploys it).' : "Couldn't save: " + ((ex && ex.message) || ex));
@@ -934,11 +935,11 @@ function renderClaim(claimId) {
   <main class="main share-main">
     <div class="card code-card">
       <h3>Make this home yours</h3>
-      <p class="muted">Your electrician mapped this home's panel in AmpMap. Enter the 8-character setup code from the page they left you.</p>
+      <p class="muted">Your electrician mapped this home's panel. Type the code from the setup page they left you.</p>
       ${store.user && store.user.email ? `<p class="tiny muted">Signed in as ${esc(store.user.email)}.</p>` : ''}
       <form id="claimForm" class="form" autocomplete="off">
         <label>Setup code<input name="code" required class="code-input" autocapitalize="characters" spellcheck="false" maxlength="12" placeholder="ABCD-2345"></label>
-        <label class="check"><input type="checkbox" name="keep" checked> Let the installer keep edit access (you can remove them any time)</label>
+        <label class="check"><input type="checkbox" name="keep" checked> Let the installer keep editing (you can remove them later)</label>
         <button class="btn primary" type="submit">Make it my home</button>
         <p class="err" id="claimErr" role="alert"></p>
         <p class="muted tiny" id="claimStep"></p>
@@ -1176,7 +1177,7 @@ function renderPanel(homeId, panelId) {
     <a class="btn" href="#/edit/panels/new?home=${homeId}">+ Panel</a>
     <a class="btn" href="#/h/${homeId}/print/directory/${panel.id}">Print schedule</a>
     <a class="btn" href="#/h/${homeId}/sticker">Print panel sticker</a>
-    ${isGuest() ? '' : `<a class="btn" href="#/h/${homeId}/access">🔑 Edit codes</a>`}
+    ${isGuest() ? '' : `<a class="btn" href="#/h/${homeId}/access">🔑 Who can edit</a>`}
   </div>
   <div class="legend"><span class="dot lvl-ok"></span>under 80% <span class="dot lvl-warn"></span>80%+ <span class="dot lvl-over"></span>over 100% <span class="dot lvl-none"></span>no loads listed <span class="muted">· colors = Typical, ⚠️ = Peak over 100%</span></div>
   ${breakers.some((b) => sizeOf(b) === 'half') ? '<p class="tiny muted legend-note">Half-height blocks are tandems: 1 breaker, 2 switches, each its own circuit. Tall blue-edged blocks are double-pole 240V: 1 circuit.</p>' : ''}
@@ -3938,9 +3939,9 @@ function renderMore(homeId) {
     </div>
   </div>
   <div class="card access-entry">
-    <h3>Edit codes &amp; access</h3>
-    <p class="muted">Let a different electrician edit each time with a code you control (temporary or your own), see who changed what, undo, or hand this home off to its owner.</p>
-    <a class="btn primary" href="#/h/${homeId}/access">Edit codes, people &amp; history ›</a>
+    <h3>Who can edit</h3>
+    <p class="muted">Give an electrician a code to make changes, see what they changed, or hand this home to its owner.</p>
+    <a class="btn primary" href="#/h/${homeId}/access">Edit codes &amp; history ›</a>
   </div>
   <div id="sharedWithMe"></div>
   <div class="card" id="share">
@@ -4344,7 +4345,7 @@ async function renderShare(token) {
     ${guestEnded ? `<div class="alert warn no-print">${esc(guestEnded)}</div>` : ''}
     <p class="muted no-print">Read-only panel directory shared from AmpMap${doc.updatedAt ? ' · updated ' + new Date(doc.updatedAt).toLocaleDateString() : ''}.</p>
     <div class="row-actions no-print">${isGuest() ? `<a class="btn primary" href="#/h/${esc(store.guest.homeId)}/panel">✎ Back to editing</a>` : `<a class="btn primary" href="#/share/${esc(token)}/edit">✎ Edit</a>`}<button class="btn" id="doPrint">Print / Save as PDF</button><a class="btn ghost" href="#/get">Get AmpMap (free)</a></div>
-    ${isGuest() ? '' : '<p class="tiny muted no-print edit-hint">Electricians: tap Edit and enter the code from the homeowner.</p>'}
+    ${isGuest() ? '' : '<p class="tiny muted no-print edit-hint">Electricians: tap Edit and type the code from the homeowner.</p>'}
     ${sections.join('') || '<p>No panels in this share.</p>'}
   </main>`;
   document.getElementById('doPrint').onclick = () => window.print();
