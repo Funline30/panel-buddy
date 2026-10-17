@@ -3809,22 +3809,31 @@ async function renderPrint(homeId, kind, id, q) {
     const fuses = panel.fuses || [];
     const anyWire = breakers.some((b) => wireTag(b.wire));
     const showWire = anyWire && q.get('wire') !== '0';
+    const showQr = q.get('qr') !== '0';
+    const qs2 = (o) => { const p = new URLSearchParams({ size, ...(showWire ? {} : { wire: '0' }), ...(showQr ? {} : { qr: '0' }), ...o }); for (const [k, v] of [...p]) if (v === '' || (k !== 'size' && v === '1')) p.delete(k); return p.toString(); };
     const body = `
     <div class="print-controls no-print">
       <label>Size<select id="dirSize">${opt([{ value: 'half', label: 'Half page (fits most panel doors)' }, { value: 'full', label: 'Full page 8.5 x 11' }], size)}</select></label>
       ${anyWire ? `<label>Wire<select id="dirWire">${opt([{ value: '1', label: 'Show wire (like 12/2)' }, { value: '0', label: 'Hide wire' }], showWire ? '1' : '0')}</select></label>` : ''}
+      <label>QR code<select id="dirQr">${opt([{ value: '1', label: 'Show QR (scan to open this panel)' }, { value: '0', label: 'No QR' }], showQr ? '1' : '0')}</select></label>
+      ${showQr ? `<p class="tiny muted qr-hint">${home.shareToken ? 'Sharing is on: anyone who scans sees the read-only panel schedule. After changes, tap Update in <a href="#/h/' + homeId + '/more">More › Share</a>.' : 'The QR opens this panel in AmpMap for you. So a customer or the next electrician can see it too, turn on <a href="#/h/' + homeId + '/more">More › Share a read-only copy</a>.'}</p>` : ''}
       <button class="btn primary" id="doPrint">Print / Save as PDF</button>
     </div>
     <div class="sheet directory ${size}">
-      <div class="dir-head"><b>${esc(panel.name)}</b> · ${esc(homeLabel(home))}${panel.mainAmps ? ` · Main ${esc(mainAmpsText(panel))}A` : ''}${panel.type === 'rv' && panel.shorePower ? ` · ${esc(shoreText(panel))} shore` : ''}${sourceText(panel) ? ` · ${esc(sourceText(panel))}` : ''}</div>
+      <div class="dir-top">
+        <div class="dir-head"><div class="dir-title">PANEL SCHEDULE</div><b>${esc(panel.name)}</b> · ${esc(homeLabel(home))}${home.address ? `<br><span class="dir-addr">${esc(home.address)}</span>` : ''}<br><span class="dir-meta">${panel.mainAmps ? `Main ${esc(mainAmpsText(panel))}A` : ''}${panel.type === 'rv' && panel.shorePower ? ` · ${esc(shoreText(panel))} shore` : ''}${sourceText(panel) ? ` · ${esc(sourceText(panel))}` : ''}${panel.location ? ` · ${esc(panel.location)}` : ''} · ${breakers.length} circuits</span></div>
+        ${showQr ? '<div class="dir-qr"><div id="dirQrBox"></div><span>Scan for the full map</span></div>' : ''}
+      </div>
       <table class="dir-table ${one ? 'one' : ''}"><thead><tr><th>#</th><th>A</th><th>Circuit</th>${one ? '' : '<th>#</th><th>A</th><th>Circuit</th>'}</tr></thead><tbody>${dirRowsHtml(panel, breakers, { wire: showWire })}</tbody></table>
       ${fuses.length ? `<div class="dir-head" style="margin-top:8px"><b>12V DC fuses</b></div><table class="dir-table one"><thead><tr><th>#</th><th>A</th><th>Powers</th></tr></thead><tbody>${fuses.map((f) => `<tr><td class="n">${esc(f.num)}</td><td class="a">${esc(f.amps === 'other' ? f.ampsOther : f.amps)}A</td><td class="l">${esc(f.powers)}${f.notes ? ` <span class="rm">(${esc(f.notes)})</span>` : ''}</td></tr>`).join('')}</tbody></table>` : ''}
       <div class="dir-foot">Updated ${new Date().toLocaleDateString()} · AmpMap</div>
     </div>`;
-    app.innerHTML = shell(homeId, 'more', body, { title: 'Panel label', back: `#/h/${homeId}/panel/${panel.id}` });
+    app.innerHTML = shell(homeId, 'more', body, { title: 'Panel schedule', back: `#/h/${homeId}/panel/${panel.id}` });
+    if (showQr) qrSvg(deepLink(`/p/${panel.id}`)).then((svg) => { const el = document.getElementById('dirQrBox'); if (el) el.innerHTML = svg; });
     bindShell();
-    document.getElementById('dirSize').onchange = (e) => go(`#/h/${homeId}/print/directory/${panel.id}?size=${e.target.value}${showWire ? '' : '&wire=0'}`);
-    if (document.getElementById('dirWire')) document.getElementById('dirWire').onchange = (e) => go(`#/h/${homeId}/print/directory/${panel.id}?size=${size}${e.target.value === '0' ? '&wire=0' : ''}`);
+    document.getElementById('dirSize').onchange = (e) => go(`#/h/${homeId}/print/directory/${panel.id}?${qs2({ size: e.target.value })}`);
+    if (document.getElementById('dirWire')) document.getElementById('dirWire').onchange = (e) => go(`#/h/${homeId}/print/directory/${panel.id}?${qs2({ wire: e.target.value })}`);
+    document.getElementById('dirQr').onchange = (e) => go(`#/h/${homeId}/print/directory/${panel.id}?${qs2({ qr: e.target.value })}`);
     document.getElementById('doPrint').onclick = () => window.print();
     return;
   }

@@ -65,6 +65,7 @@ export function spacesUsed(panel, breakers) {
   const max = panelSpaces(panel) || 0;
   const used = new Set();
   for (const b of breakers || []) {
+    if (panel && panel.id && b.panelId && b.panelId !== panel.id) continue;
     const n = parseInt(b.slot, 10);
     if (!Number.isFinite(n)) continue;
     used.add(n);

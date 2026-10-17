@@ -931,3 +931,42 @@ select.full { margin-top: 0; }
 .check-line[hidden] { display: none !important; }
 .ow .wire-ic { margin-right: 2px; }
 .map-txt .ow.sm .wire-ic { margin-right: 4px; }
+
+/* panel schedule header with QR */
+.dir-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 6px; }
+.dir-title { font-size: 0.68rem; font-weight: 800; letter-spacing: 0.12em; color: #555; margin-bottom: 2px; }
+.dir-addr, .dir-meta { font-size: 0.8em; color: #333; }
+.dir-qr { flex: none; width: 84px; text-align: center; font-size: 0.58rem; color: #333; line-height: 1.2; }
+.dir-qr svg { display: block; width: 84px; height: 84px; }
+.qr-hint { margin: 2px 0 0; }
+@media print { .dir-qr { width: 0.95in; } .dir-qr svg { width: 0.95in; height: 0.95in; } }
+/* quick panel */
+.qk-head { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+.qk-head h2 { margin: 0; }
+.qk-head p { margin: 4px 0 0; font-size: 0.88rem; }
+.qk-meter { height: 6px; border-radius: 99px; background: var(--card-2); border: 1px solid var(--line); overflow: hidden; }
+.qk-meter span { display: block; height: 100%; background: var(--brand); border-radius: 99px; }
+.qk-card { border: 1.5px solid var(--accent); box-shadow: 0 6px 20px rgba(37, 99, 235, 0.08); }
+.qk-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.qk-top h3 { margin: 0; font-size: 1.05rem; }
+.form label.qk-slot { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 0.9rem; }
+.form .qk-slot input { width: 84px; margin: 0; text-align: center; font-weight: 800; font-size: 1.2rem; padding: 6px 8px; }
+.qk-covers { margin: 4px 0 0; min-height: 1.1em; }
+.qk-group { margin: 12px 0; }
+.qk-cap { display: block; font-weight: 600; font-size: 0.9rem; color: var(--ink-2); margin-bottom: 6px; }
+.chip-pick { display: flex; flex-wrap: wrap; gap: 6px; }
+.form label.chip-opt { margin: 0; position: relative; }
+.chip-opt input { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
+.chip-opt span { display: inline-flex; align-items: center; justify-content: center; min-width: 52px; min-height: 40px; padding: 0 12px; border: 1.5px solid var(--line-2); border-radius: 10px; font-size: 0.92rem; font-weight: 700; color: var(--ink-2); background: var(--card); font-variant-numeric: tabular-nums; }
+.chip-opt input:checked + span { border-color: var(--accent); background: var(--accent-soft); color: var(--ink); }
+.chip-opt input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.form label.qk-wtype { margin: 10px 0 0; font-size: 0.85rem; }
+.qk-save { width: 100%; min-height: 54px; font-size: 1.05rem; margin-top: 4px; }
+.qk-more { margin: 10px 0 0; text-align: center; }
+.qk-list .row { align-items: center; }
+.qk-n { flex: none; min-width: 44px; height: 36px; padding: 0 6px; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; background: var(--card-2); border: 1px solid var(--line); font-weight: 800; font-variant-numeric: tabular-nums; font-size: 0.9rem; }
+.qk-n.dbl { border-color: var(--accent); color: var(--accent); }
+.qk-warn { display: block; font-size: 0.78rem; color: var(--warn-ink); font-weight: 600; margin-top: 2px; }
+.qk-row.just .row { background: var(--accent-soft); border-radius: 12px; }
+.start-pick .pick-card { min-height: 68px; }
+.sp-ic { font-size: 1.4rem; flex: none; width: 30px; text-align: center; }
