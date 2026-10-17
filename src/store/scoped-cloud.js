@@ -43,6 +43,7 @@ export async function proveCode(db, uid, token, code, name) {
 // Reads/writes of one home in another account (rules: editor of that home).
 export function cloudBackend(db, { ownerUid, homeId }) {
   const col = (c) => collection(db, 'users', ownerUid, c);
+  const registered = new Set();
   return {
     subscribe(onData, onError) {
       const state = { home: null, panels: [], breakers: [], devices: [] };
@@ -70,8 +71,41 @@ export function cloudBackend(db, { ownerUid, homeId }) {
       b.set(doc(db, 'users', ownerUid, 'history', id), JSON.parse(JSON.stringify(e)));
       await b.commit();
     },
-    async getPhoto() {
-      return null; // photos stay with the homeowner
+    // photos: the editor can see/add/remove photos stamped with this home (older homeowner
+    // photos without that stamp just don't show for editors)
+    async getPhoto(id) {
+      try {
+        const s = await getDoc(doc(db, 'users', ownerUid, 'photos', id));
+        return s.exists() ? s.data().data : null;
+      } catch {
+        return null;
+      }
+    },
+    async putPhoto(id, dataUrl) {
+      await setDoc(doc(db, 'users', ownerUid, 'photos', id), { data: dataUrl, homeId, updatedAt: Date.now() });
+    },
+    async removePhoto(id) {
+      await deleteDoc(doc(db, 'users', ownerUid, 'photos', id));
+    },
+    // is the code / access still good? (tells "older rules refused this" apart from "access ended")
+    async stillHasAccess() {
+      try {
+        await getDoc(doc(db, 'users', ownerUid, 'homes', homeId));
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    // a panel the editor added gets its QR-sticker lookup (best effort; needs the Oct 17 rules)
+    async registerPanels(token, panelIds) {
+      for (const pid of panelIds) {
+        if (registered.has(pid)) continue;
+        try {
+          const s = await getDoc(doc(db, 'sharedPanels', pid));
+          if (!s.exists()) await setDoc(doc(db, 'sharedPanels', pid), { owner: ownerUid, token, homeId });
+          registered.add(pid);
+        } catch { /* older rules: the homeowner's next share update adds it */ }
+      }
     },
     async getShare(token) {
       const s = await getDoc(doc(db, 'shares', token));
@@ -145,7 +179,7 @@ export async function openCodeGuest(config, info, { describe, afterShare, onDeni
     editorUid: user.uid,
     name: info.name,
     describe,
-    afterCommit: afterShare ? (data) => backend.refreshShare(info.token, afterShare(data)) : null,
+    afterCommit: afterShare ? async (data) => { await backend.refreshShare(info.token, afterShare(data)); await backend.registerPanels(info.token, data.panels.map((p) => p.id)); } : null,
     onDenied,
     signOut: async () => {
       await deleteDoc(doc(db, 'codeSessions', user.uid)).catch(() => {});

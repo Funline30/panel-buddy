@@ -225,6 +225,18 @@ export function createLocalStore() {
         async getPhoto(id) {
           return localStorage.getItem(PHOTO + id) || null;
         },
+        async putPhoto(id, dataUrl) {
+          return self.putPhoto(id, dataUrl);
+        },
+        async removePhoto(id) {
+          return self.removePhoto(id);
+        },
+        async stillHasAccess() {
+          return true;
+        },
+        async registerPanels(token, panelIds) {
+          for (const pid of panelIds) if (!localStorage.getItem('panelbuddy:sharedPanel:' + pid)) localStorage.setItem('panelbuddy:sharedPanel:' + pid, token);
+        },
         async lookupPanelShare(panelId) {
           return localStorage.getItem('panelbuddy:sharedPanel:' + panelId);
         },

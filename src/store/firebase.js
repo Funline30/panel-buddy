@@ -328,7 +328,7 @@ export function createFirebaseStore(config) {
     // Open a home someone shared with this account (People with access) for editing.
     async openGrant(g, { name, describe, afterShare, onDenied }) {
       const backend = cloudBackend(db, { ownerUid: g.owner, homeId: g.homeId });
-      const afterCommit = afterShare ? async (d) => { const t = d.homes[0] && d.homes[0].shareToken; if (t) await backend.refreshShare(t, afterShare(d)); } : null;
+      const afterCommit = afterShare ? async (d) => { const t = d.homes[0] && d.homes[0].shareToken; if (t) { await backend.refreshShare(t, afterShare(d)); await backend.registerPanels(t, d.panels.map((p) => p.id)); } } : null;
       return createScopedStore(backend, { ownerUid: g.owner, homeId: g.homeId, editorUid: store.user.uid, name, describe, afterCommit, onDenied, signOut: () => {} });
     },
     get _db() {

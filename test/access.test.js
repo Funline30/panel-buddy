@@ -129,6 +129,7 @@ function fakeBackend(seed) {
     async commit(changes, entry) {
       commits.push({ changes, entry });
       for (const c of changes) {
+        if (c.col === 'homes') { state.home = c.after; continue; }
         const list = state[c.col];
         const i = list.findIndex((x) => x.id === c.id);
         if (c.after) { if (i >= 0) list[i] = c.after; else list.push(c.after); } else if (i >= 0) list.splice(i, 1);
@@ -159,18 +160,74 @@ test('scoped store: edits land in the real data with one history entry per save'
   assert.equal(be.state.breakers[0].label, 'Kitchen counter');
 });
 
-test('scoped store: the home itself, photos, other homes and new panels are refused', async () => {
-  const be = fakeBackend({ home: { name: 'Smith' }, panels: [{ id: 'p1', homeId: 'h1' }], breakers: [], devices: [] });
+test('scoped store: full access (panels add/remove, home edits, photos) but not other homes or deleting the home', async () => {
+  const be = fakeBackend({ home: { name: 'Smith', shareToken: 'T'.repeat(30), customerId: 'c9' }, panels: [{ id: 'p1', homeId: 'h1' }], breakers: [], devices: [] });
+  const photos = {};
+  be.putPhoto = async (id, data, homeId) => { photos[id] = { data, homeId }; };
+  be.removePhoto = async (id) => { delete photos[id]; };
   const s = createScopedStore(be, { ownerUid: 'o', homeId: 'h1', editorUid: 'anon', name: 'x', flushMs: 5 });
   await s.init();
-  await assert.rejects(s.put('homes', { id: 'h1', name: 'x' }), /homeowner/);
-  await assert.rejects(s.put('panels', { id: 'p2', homeId: 'h1' }), /homeowner/);
+  await s.put('panels', { id: 'p2', name: 'Garage sub' });
+  await s.put('breakers', { id: 'b1', panelId: 'p2', slot: '1', label: 'Garage' });
+  await s.put('homes', { id: 'h1', name: 'Smith House', floorplan: { rooms: [{ id: 'r1' }] }, shareToken: 'hijack', customerId: '' });
+  await s.remove('panels', 'p1');
+  await s.putPhoto('ph1', 'data:image/jpeg;base64,xx');
+  assert.equal(photos.ph1.homeId, 'h1');
   await assert.rejects(s.put('breakers', { id: 'b2', homeId: 'h2' }), /homeowner/);
-  await assert.rejects(s.remove('panels', 'p1'), /homeowner/);
-  await assert.rejects(s.putPhoto('x', 'data:'), /homeowner/);
-  await s.put('panels', { id: 'p1', homeId: 'h1', location: 'Garage' }); // editing a panel is fine
+  await assert.rejects(s.put('homes', { id: 'h2', name: 'x' }), /homeowner/);
+  await assert.rejects(s.remove('homes', 'h1'), /homeowner/);
   await s.settle();
   assert.equal(be.commits.length, 1);
+  assert.equal(be.state.panels.find((p) => p.id === 'p2').homeId, 'h1');
+  assert.ok(!be.state.panels.find((p) => p.id === 'p1'));
+  const home = be.commits[0].changes.find((c) => c.col === 'homes').after;
+  assert.equal(home.name, 'Smith House');
+  assert.equal(home.shareToken, 'T'.repeat(30)); // sharing link stays the homeowner's
+  assert.equal(home.customerId, 'c9');
+  assert.ok(!('homeId' in home));
+});
+
+test('scoped store: addMany adds a batch (scanned label) in one save', async () => {
+  const be = fakeBackend({ home: { name: 'S' }, panels: [{ id: 'p1', homeId: 'h1' }], breakers: [], devices: [] });
+  const s = createScopedStore(be, { ownerUid: 'o', homeId: 'h1', editorUid: 'a', name: 'x', flushMs: 5 });
+  await s.init();
+  await s.addMany({ breakers: [{ id: 'b1', panelId: 'p1', slot: '1' }, { id: 'b2', panelId: 'p1', slot: '2' }], homes: [{ id: 'h9' }] });
+  await s.settle();
+  assert.equal(be.commits.length, 1);
+  assert.equal(be.state.breakers.length, 2);
+});
+
+test('scoped store: older rules on the server refuse a new panel -> rolled back kindly, other edits still save', async () => {
+  const be = fakeBackend({ home: { name: 'S' }, panels: [{ id: 'p1', homeId: 'h1' }], breakers: [{ id: 'b1', homeId: 'h1', label: 'a' }], devices: [] });
+  const real = be.commit;
+  be.commit = async (changes, entry) => {
+    if (changes.some((c) => c.col === 'homes' || (c.col === 'panels' && (!c.before || !c.after)))) throw Object.assign(new Error('Missing or insufficient permissions.'), { code: 'permission-denied' });
+    return real(changes, entry);
+  };
+  be.stillHasAccess = async () => true;
+  let note = null;
+  const s = createScopedStore(be, { ownerUid: 'o', homeId: 'h1', editorUid: 'a', name: 'x', flushMs: 5, onDenied: (e) => (note = e) });
+  await s.init();
+  await s.put('panels', { id: 'p2', name: 'Sub' });
+  await s.put('breakers', { id: 'b1', homeId: 'h1', label: 'Kitchen' });
+  await s.settle();
+  assert.equal(note.code, 'ampmap/needs-owner');
+  assert.equal(note.saved, 1);
+  assert.ok(!s.data.panels.find((p) => p.id === 'p2'), 'new panel rolled back on screen');
+  assert.equal(be.state.breakers[0].label, 'Kitchen', 'the breaker edit still saved');
+  assert.ok(!be.state.panels.find((p) => p.id === 'p2'));
+});
+
+test('scoped store: denied + access gone -> session ends (not the friendly note)', async () => {
+  const be = fakeBackend({ home: { name: 'S' }, panels: [], breakers: [], devices: [] });
+  be.commit = async () => { throw Object.assign(new Error('denied'), { code: 'permission-denied' }); };
+  be.stillHasAccess = async () => false;
+  let ended = null;
+  const s = createScopedStore(be, { ownerUid: 'o', homeId: 'h1', editorUid: 'a', name: 'x', flushMs: 5, onDenied: (e) => (ended = e) });
+  await s.init();
+  await s.put('panels', { id: 'p2', name: 'Sub' });
+  await assert.rejects(s.settle());
+  assert.equal(ended.code, 'permission-denied');
 });
 
 test('scoped store: a refused save (code changed) ends the session', async () => {
@@ -196,4 +253,9 @@ test('rules file: codes hashed and owner-only, lockout, claims single-use, old s
   assert.match(r, /match \/shares\/\{token\} \{\s*allow get: if true;/);
   assert.match(r, /match \/sharedPanels\/\{panelId\} \{\s*allow get: if true;/);
   assert.doesNotMatch(r, /plain|codeText|code:/);
+  // full access for editors, but the home itself can never be deleted by them
+  assert.match(r, /allow create: if col in \['panels', 'breakers', 'devices'\] && editorOf/);
+  assert.match(r, /allow delete: if col in \['panels', 'breakers', 'devices'\] && editorOf/);
+  assert.match(r, /affectedKeys\(\)\.hasAny\(\['shareToken', 'customerId'\]\)/);
+  assert.doesNotMatch(r, /allow [a-z, ]*delete[a-z, ]*: if col == 'homes' && editorOf/);
 });

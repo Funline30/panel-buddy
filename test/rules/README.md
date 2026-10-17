@@ -1,6 +1,6 @@
 # Firestore rules test (emulator)
 
-Not part of `npm test` (it needs Java and the Firestore emulator). 84 checks: owner access, old
+Not part of `npm test` (it needs Java and the Firestore emulator). 120 checks: owner access, old
 sharing, edit codes (hash compare, wrong code, change/turn off/expiry kill sessions), the
 10-tries-per-hour lockout, homeowner hand-off (claim) and People with access.
 

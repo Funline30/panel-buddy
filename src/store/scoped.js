@@ -1,16 +1,25 @@
 // A store for someone editing ONE home that belongs to another account: an electrician
 // with an edit code, or a person the homeowner added under People with access.
 // It looks like the normal store to the app, but:
-//  * only that home's panels, breakers and outlets can change (the security rules enforce
-//    the same thing on the server),
+//  * full access to that one home's content: add/change/remove panels, breakers, outlets
+//    and other devices, change the home (name, rooms/map, wire runs live on panels), photos.
+//    Owner-only: deleting the home, its sharing link, customers, codes (rules enforce it too),
 //  * every save goes out in one batch together with an edit-history entry for the
 //    homeowner ("Changed by: name · date · what changed"), with before/after so the
 //    homeowner can undo it.
 // The backend does the real reads/writes (Firestore for real accounts, localStorage in the demo).
-import { mergeChanges, historyEntry } from '../lib/access.js';
+import { mergeChanges, historyEntry, OWNER_ONLY_HOME_FIELDS } from '../lib/access.js';
 
-export const EDITABLE = ['panels', 'breakers', 'devices'];
-const CAN_CREATE = ['breakers', 'devices'];
+export const EDITABLE = ['homes', 'panels', 'breakers', 'devices'];
+export const CAN_CREATE = ['panels', 'breakers', 'devices'];
+
+// Changes the older security rules (before Oct 17, 2026) refused for editors. If the server
+// still has those rules, these are rolled back with a friendly note and the rest still saves.
+export function needsNewRules(c) {
+  if (c.col === 'homes') return true;
+  if (c.col === 'panels') return !c.before || !c.after;
+  return false;
+}
 
 export function createScopedStore(backend, { ownerUid, homeId, editorUid, name, describe = () => '', afterCommit = null, onDenied = () => {}, signOut = () => {}, flushMs = 350 }) {
   let data = { homes: [], panels: [], breakers: [], devices: [], customers: [] };
@@ -35,15 +44,45 @@ export function createScopedStore(backend, { ownerUid, homeId, editorUid, name, 
     const changes = mergeChanges(queue);
     queue = [];
     if (!changes.length) return;
-    const lines = changes.map((c) => describe(c, data)).filter(Boolean);
-    const entry = historyEntry({ id: 'e' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7), homeId, by: name, uid: editorUid, at: Date.now(), changes, lines });
     try {
-      await backend.commit(changes, entry);
-      if (afterCommit) await Promise.resolve(afterCommit(data)).catch(() => {});
+      await commitAll(changes);
     } catch (e) {
+      // Older rules on the server? Then panel add/remove and home edits are refused, but the
+      // code itself still works: roll those back, save the rest, and say so kindly.
+      const extra = changes.filter(needsNewRules);
+      if (extra.length && isDenied(e) && backend.stillHasAccess && (await backend.stillHasAccess().catch(() => false))) {
+        rollBack(extra);
+        const rest = changes.filter((c) => !needsNewRules(c));
+        try {
+          if (rest.length) await commitAll(rest);
+        } catch (e2) {
+          onDenied(e2);
+          throw e2;
+        }
+        const n = Object.assign(new Error('needs-owner'), { code: 'ampmap/needs-owner', saved: rest.length });
+        onDenied(n);
+        return;
+      }
       onDenied(e);
       throw e;
     }
+  }
+  async function commitAll(changes) {
+    const lines = changes.map((c) => describe(c, data)).filter(Boolean);
+    const entry = historyEntry({ id: 'e' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7), homeId, by: name, uid: editorUid, at: Date.now(), changes, lines });
+    await backend.commit(changes, entry);
+    if (afterCommit) await Promise.resolve(afterCommit(data)).catch(() => {});
+  }
+  function isDenied(e) {
+    return !!e && (e.code === 'permission-denied' || String(e.code || '').endsWith('permission-denied') || /permission/i.test(String(e.message || '')));
+  }
+  function rollBack(list) {
+    for (const c of list) {
+      const arr = (data[c.col] || []).filter((x) => x.id !== c.id);
+      if (c.before) arr.push(c.before);
+      data = { ...data, [c.col]: arr };
+    }
+    emit();
   }
   function schedule() {
     if (timer) clearTimeout(timer);
@@ -83,11 +122,18 @@ export function createScopedStore(backend, { ownerUid, homeId, editorUid, name, 
       return () => listeners.delete(cb);
     },
     async put(col, obj) {
-      if (!EDITABLE.includes(col)) refuse(col === 'homes' ? 'the home itself (name, map, photos)' : 'that');
+      if (!EDITABLE.includes(col)) refuse('that');
+      if (col === 'homes' && obj.id !== homeId) refuse('another home');
       const before = clone(find(col, obj.id));
-      if (!before && !CAN_CREATE.includes(col)) refuse('panels (adding or removing them)');
-      const after = clone({ ...obj, homeId: obj.homeId || homeId, updatedAt: Date.now() });
-      if (after.homeId !== homeId) refuse('another home');
+      if (!before && !CAN_CREATE.includes(col)) refuse('that');
+      let after = clone({ ...obj, ...(col === 'homes' ? {} : { homeId: obj.homeId || homeId }), updatedAt: Date.now() });
+      if (col === 'homes') {
+        // the sharing link and customer stay exactly as the homeowner set them
+        for (const k of OWNER_ONLY_HOME_FIELDS) {
+          if (before && before[k] !== undefined) after[k] = before[k];
+          else delete after[k];
+        }
+      } else if (after.homeId !== homeId) refuse('another home');
       const list = data[col];
       const i = list.findIndex((x) => x.id === obj.id);
       if (i >= 0) list[i] = after;
@@ -99,7 +145,8 @@ export function createScopedStore(backend, { ownerUid, homeId, editorUid, name, 
       return after;
     },
     async remove(col, id) {
-      if (!CAN_CREATE.includes(col)) refuse(col === 'panels' ? 'panels (adding or removing them)' : 'that');
+      if (col === 'homes') refuse('the whole home (only the homeowner can delete it)');
+      if (!CAN_CREATE.includes(col)) refuse('that');
       const before = clone(find(col, id));
       if (!before) return;
       data = { ...data, [col]: data[col].filter((x) => x.id !== id) };
@@ -115,12 +162,16 @@ export function createScopedStore(backend, { ownerUid, homeId, editorUid, name, 
     async getPhoto(id) {
       return backend.getPhoto ? backend.getPhoto(id) : null;
     },
-    async putPhoto() {
-      refuse('photos');
+    async putPhoto(id, dataUrl) {
+      if (!backend.putPhoto) refuse('photos');
+      return backend.putPhoto(id, dataUrl, homeId);
     },
-    async removePhoto() {},
-    async addMany() {
-      refuse('that');
+    async removePhoto(id) {
+      if (backend.removePhoto) await backend.removePhoto(id).catch(() => {});
+    },
+    // add several panels/breakers/devices at once (e.g. a scanned panel label)
+    async addMany(extra) {
+      for (const c of CAN_CREATE) for (const it of (extra && extra[c]) || []) if (!find(c, it.id)) await store.put(c, it);
     },
     async replaceAll() {
       refuse('that');

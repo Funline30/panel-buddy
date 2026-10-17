@@ -133,10 +133,14 @@ export function triesLeft(guard, now = Date.now()) {
   return GUARD_MAX - g.n;
 }
 
+// Home fields only the homeowner can change (the security rules refuse them for editors).
+export const OWNER_ONLY_HOME_FIELDS = ['shareToken', 'customerId'];
+
 // ---------------------------------------------------------------- edit history
 const FIELD_NAMES = {
   breakers: { label: 'label', amps: 'amps', ampsOther: 'amps', slot: 'spot', poles: 'poles', size: 'size', half: 'half', btype: 'type', rooms: 'rooms', kind: 'kind', notes: 'notes', wire: 'wire', panelId: 'panel', on: 'on/off', loads: 'items', groupId: 'tandem', phase: 'phase' },
   devices: { name: 'name', type: 'type', room: 'room', breakerId: 'breaker', wire: 'wire', notes: 'notes', style: 'style', qty: 'qty', box: 'box', replace: 'needs replacing', pos: 'map spot', loads: 'plugged in', wall: 'wall', gfci: 'GFCI', photoId: 'photo' },
+  homes: { name: 'name', address: 'address', floorplan: 'rooms / map', portables: 'portable items', installedBy: 'installed by', notes: 'notes', photoId: 'photo' },
   panels: { name: 'name', location: 'location', mainAmps: 'main amps', mainAmpsOther: 'main amps', spaces: 'spaces', type: 'type', numbering: 'numbering', layout: 'layout', fuses: 'fuses', notes: 'notes', service: 'service type', fedFrom: 'fed from', fedBreaker: 'feeder breaker', feeder: 'feeder wire', feederOther: 'feeder wire', genHookup: 'generator hookup', genSize: 'generator size', genSizeOther: 'generator size', genInlet: 'generator inlet', spd: 'surge protector', groundRod: 'ground rod', waterBond: 'water bond', groundNotes: 'grounding notes', runs: 'wire runs', powerSource: 'power source', sourceAmps: 'pole amps' },
 };
 const SKIP = new Set(['id', 'updatedAt', 'createdAt', 'homeId']);
@@ -190,7 +194,7 @@ export function describeChange({ col, before, after }, opts = {}) {
   const fields = changedFields(col, before, after);
   if (!fields.length) return `${cap} ${nameOf(after)}: no visible change`.trim();
   const parts = [];
-  const plain = ['label', 'name', 'amps', 'room', 'location', 'notes', 'main amps', 'poles', 'type', 'kind', 'qty', 'style', 'box'];
+  const plain = ['label', 'name', 'address', 'amps', 'room', 'location', 'notes', 'main amps', 'poles', 'type', 'kind', 'qty', 'style', 'box'];
   for (const f of fields) {
     const key = Object.keys(FIELD_NAMES[col] || {}).find((k) => (FIELD_NAMES[col] || {})[k] === f) || f;
     if (f === 'wire' && opts.wireText) parts.push(`wire ${short(opts.wireText(before.wire))} → ${short(opts.wireText(after.wire))}`);

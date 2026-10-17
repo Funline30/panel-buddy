@@ -6,8 +6,11 @@ rules_version = '2';
 //  * shares/{token} - a read-only panel directory snapshot the owner chose to share. Anyone
 //    holding the (random, 24+ character) link can open that one document; nobody can list
 //    or search shares, and only the owner (or an editor, below) can change it.
-//  * Edit codes - the homeowner can let an electrician edit ONE home's panels, breakers and
-//    outlets with a code. The code itself is never stored: editCodes/{token} keeps only a
+//  * Edit codes - with an edit code, the homeowner can give an electrician full access to ONE
+//    home: add, change and remove panels, breakers, outlets/devices, rooms and the map, wire
+//    runs and photos. Owner-only, always: deleting the home, edit codes, hand-off codes,
+//    People with access, the sharing link itself, customers and the owner's settings. The code
+//    itself is never stored: editCodes/{token} keeps only a
 //    SHA-256 hash and nobody but the owner can read that document. An electrician proves
 //    the code by writing their own hash into codeSessions/{their uid}; every attempt also
 //    bumps codeGuards/{token}, which allows at most 10 tries per hour per link (lockout).
@@ -82,14 +85,27 @@ service cloud.firestore {
             || (request.resource.data.data is string
                 && request.resource.data.data.size() < 900000));
 
-      // editors (edit code or People with access): one home's panels, breakers, outlets
+      // editors (edit code or People with access): FULL access to one home's content.
+      // The home itself: read it and change it (name, address, rooms/map, portables...), but
+      // never delete it, never create a new home, and never touch its sharing link or customer.
       allow get: if col == 'homes' && editorOf(uid, docId);
+      allow update: if col == 'homes'
+        && editorOf(uid, docId)
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['shareToken', 'customerId']);
+      // panels, breakers, devices (outlets, switches, lights, equipment...): add, change, remove
       allow read: if col in ['panels', 'breakers', 'devices'] && editorOf(uid, resource.data.homeId);
-      allow create: if col in ['breakers', 'devices'] && editorOf(uid, request.resource.data.homeId);
+      allow create: if col in ['panels', 'breakers', 'devices'] && editorOf(uid, request.resource.data.homeId);
       allow update: if col in ['panels', 'breakers', 'devices']
         && editorOf(uid, resource.data.homeId)
         && request.resource.data.homeId == resource.data.homeId;
-      allow delete: if col in ['breakers', 'devices'] && editorOf(uid, resource.data.homeId);
+      allow delete: if col in ['panels', 'breakers', 'devices'] && editorOf(uid, resource.data.homeId);
+      // photos the editor adds to this home (stamped with homeId, same size limit as the owner's)
+      allow get, delete: if col == 'photos' && editorOf(uid, resource.data.homeId);
+      allow create, update: if col == 'photos'
+        && editorOf(uid, request.resource.data.homeId)
+        && (resource == null || resource.data.get('homeId', '') == request.resource.data.homeId)
+        && request.resource.data.data is string
+        && request.resource.data.data.size() < 900000;
       // every editor change is logged for the homeowner (create only; only the owner can change history)
       allow create: if col == 'history'
         && editorOf(uid, request.resource.data.homeId)
@@ -132,6 +148,13 @@ service cloud.firestore {
         && resource.data.owner == request.auth.uid
         && request.resource.data.owner == request.auth.uid;
       allow delete: if signedIn() && resource.data.owner == request.auth.uid;
+      // an editor who adds a panel to a shared home registers its QR sticker (and removes it
+      // with the panel); it can only point at that home's own share link
+      allow create: if editorOf(request.resource.data.owner, request.resource.data.homeId)
+        && request.resource.data.keys().hasOnly(['owner', 'token', 'homeId'])
+        && shareDoc(request.resource.data.token).owner == request.resource.data.owner
+        && shareDoc(request.resource.data.token).homeId == request.resource.data.homeId;
+      allow delete: if editorOf(resource.data.owner, resource.data.homeId);
       // hand-off: the new owner takes it over
       allow update: if claimer(resource.data.owner, resource.data.homeId)
         && request.resource.data.owner == request.auth.uid

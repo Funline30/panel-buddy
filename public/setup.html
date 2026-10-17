@@ -25,8 +25,11 @@
 //  * shares/{token} - a read-only panel directory snapshot the owner chose to share. Anyone
 //    holding the (random, 24+ character) link can open that one document; nobody can list
 //    or search shares, and only the owner (or an editor, below) can change it.
-//  * Edit codes - the homeowner can let an electrician edit ONE home&#x27;s panels, breakers and
-//    outlets with a code. The code itself is never stored: editCodes/{token} keeps only a
+//  * Edit codes - with an edit code, the homeowner can give an electrician full access to ONE
+//    home: add, change and remove panels, breakers, outlets/devices, rooms and the map, wire
+//    runs and photos. Owner-only, always: deleting the home, edit codes, hand-off codes,
+//    People with access, the sharing link itself, customers and the owner&#x27;s settings. The code
+//    itself is never stored: editCodes/{token} keeps only a
 //    SHA-256 hash and nobody but the owner can read that document. An electrician proves
 //    the code by writing their own hash into codeSessions/{their uid}; every attempt also
 //    bumps codeGuards/{token}, which allows at most 10 tries per hour per link (lockout).
@@ -101,14 +104,27 @@ service cloud.firestore {
             || (request.resource.data.data is string
                 &amp;&amp; request.resource.data.data.size() &lt; 900000));
 
-      // editors (edit code or People with access): one home&#x27;s panels, breakers, outlets
+      // editors (edit code or People with access): FULL access to one home&#x27;s content.
+      // The home itself: read it and change it (name, address, rooms/map, portables...), but
+      // never delete it, never create a new home, and never touch its sharing link or customer.
       allow get: if col == &#x27;homes&#x27; &amp;&amp; editorOf(uid, docId);
+      allow update: if col == &#x27;homes&#x27;
+        &amp;&amp; editorOf(uid, docId)
+        &amp;&amp; !request.resource.data.diff(resource.data).affectedKeys().hasAny([&#x27;shareToken&#x27;, &#x27;customerId&#x27;]);
+      // panels, breakers, devices (outlets, switches, lights, equipment...): add, change, remove
       allow read: if col in [&#x27;panels&#x27;, &#x27;breakers&#x27;, &#x27;devices&#x27;] &amp;&amp; editorOf(uid, resource.data.homeId);
-      allow create: if col in [&#x27;breakers&#x27;, &#x27;devices&#x27;] &amp;&amp; editorOf(uid, request.resource.data.homeId);
+      allow create: if col in [&#x27;panels&#x27;, &#x27;breakers&#x27;, &#x27;devices&#x27;] &amp;&amp; editorOf(uid, request.resource.data.homeId);
       allow update: if col in [&#x27;panels&#x27;, &#x27;breakers&#x27;, &#x27;devices&#x27;]
         &amp;&amp; editorOf(uid, resource.data.homeId)
         &amp;&amp; request.resource.data.homeId == resource.data.homeId;
-      allow delete: if col in [&#x27;breakers&#x27;, &#x27;devices&#x27;] &amp;&amp; editorOf(uid, resource.data.homeId);
+      allow delete: if col in [&#x27;panels&#x27;, &#x27;breakers&#x27;, &#x27;devices&#x27;] &amp;&amp; editorOf(uid, resource.data.homeId);
+      // photos the editor adds to this home (stamped with homeId, same size limit as the owner&#x27;s)
+      allow get, delete: if col == &#x27;photos&#x27; &amp;&amp; editorOf(uid, resource.data.homeId);
+      allow create, update: if col == &#x27;photos&#x27;
+        &amp;&amp; editorOf(uid, request.resource.data.homeId)
+        &amp;&amp; (resource == null || resource.data.get(&#x27;homeId&#x27;, &#x27;&#x27;) == request.resource.data.homeId)
+        &amp;&amp; request.resource.data.data is string
+        &amp;&amp; request.resource.data.data.size() &lt; 900000;
       // every editor change is logged for the homeowner (create only; only the owner can change history)
       allow create: if col == &#x27;history&#x27;
         &amp;&amp; editorOf(uid, request.resource.data.homeId)
@@ -151,6 +167,13 @@ service cloud.firestore {
         &amp;&amp; resource.data.owner == request.auth.uid
         &amp;&amp; request.resource.data.owner == request.auth.uid;
       allow delete: if signedIn() &amp;&amp; resource.data.owner == request.auth.uid;
+      // an editor who adds a panel to a shared home registers its QR sticker (and removes it
+      // with the panel); it can only point at that home&#x27;s own share link
+      allow create: if editorOf(request.resource.data.owner, request.resource.data.homeId)
+        &amp;&amp; request.resource.data.keys().hasOnly([&#x27;owner&#x27;, &#x27;token&#x27;, &#x27;homeId&#x27;])
+        &amp;&amp; shareDoc(request.resource.data.token).owner == request.resource.data.owner
+        &amp;&amp; shareDoc(request.resource.data.token).homeId == request.resource.data.homeId;
+      allow delete: if editorOf(resource.data.owner, resource.data.homeId);
       // hand-off: the new owner takes it over
       allow update: if claimer(resource.data.owner, resource.data.homeId)
         &amp;&amp; request.resource.data.owner == request.auth.uid
