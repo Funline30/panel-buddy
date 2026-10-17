@@ -1,6 +1,6 @@
 import './styles.css';
 import QRCode from 'qrcode';
-import { GET_URL, detectPlatform, getTarget, storeRows, stickerQrTarget, cleanInstalledBy, installedByText, installedByDefault, STICKER_SIZES, stickerSize, stickerCopy } from './lib/sticker.js';
+import { GET_URL, detectPlatform, getTarget, storeRows, stickerQrTarget, cleanInstalledBy, installedByText, installedByDefault, STICKER_SIZES, stickerSize, stickerCopy, PRINT_METHODS, TAPE_SIZES, tapeSize, printChoice, WEATHERPROOF_SHEETS, LABEL_MAKERS, TAPE_TIP } from './lib/sticker.js';
 import './sticker.css';
 import { firebaseConfig, isFirebaseConfigured } from './firebase-config.js';
 import { createLocalStore } from './store/local.js';
@@ -495,17 +495,32 @@ function renderGet() {
 function renderSticker(homeId, q) {
   const home = byId('homes', homeId);
   const size = stickerSize(q.get('size') || '4x6');
-  const paper = q.get('paper') === 'letter' ? 'letter' : 'label';
+  const pc = printChoice(q.get('paper'));
+  const paper = pc.paper;
+  const tape = tapeSize(q.get('tape'));
   const prefer = q.get('qr') === 'get' ? 'get' : '';
   const target = stickerQrTarget(home, { shareUrl: (t) => deepLink('/share/' + t), getUrl: GET_URL, prefer });
   const copy = stickerCopy(target.kind);
   const ib = installedByDefault(home, store.settings, isPro()) || {};
-  const qs = (o) => { const p = new URLSearchParams({ size: size.value, paper, qr: prefer, ...o }); for (const [k, v] of [...p]) if (!v || (k === 'paper' && v === 'label')) p.delete(k); return p.toString(); };
+  const qs = (o) => { const p = new URLSearchParams({ size: size.value, paper, qr: prefer, tape: paper === 'tape' ? tape.value : '', ...o }); for (const [k, v] of [...p]) if (!v || (k === 'paper' && v === 'label')) p.delete(k); return p.toString(); };
   const panel = inHome('panels', homeId)[0];
   const back = panel ? `#/h/${homeId}/panel/${panel.id}` : `#/h/${homeId}/panel`;
   const body = `
-  <div class="no-print st-row st-sizes" role="group" aria-label="Sticker size"><span class="st-lbl">Size</span>${STICKER_SIZES.map((s) => `<a class="st-chip ${s.value === size.value ? 'on' : ''}" aria-pressed="${s.value === size.value}" href="#/h/${homeId}/sticker?${qs({ size: s.value })}">${esc(s.label)}</a>`).join('')}</div>
-  <div class="amp-sign-wrap paper-${paper}">
+  <div class="no-print pm-pick" role="group" aria-label="How will you print it?">${PRINT_METHODS.map((m) => `<a class="pm-card ${m.value === pc.method ? 'on' : ''}" aria-pressed="${m.value === pc.method}" href="#/h/${homeId}/sticker?${qs({ paper: m.value === 'maker' ? 'tape' : 'label' })}"><span class="pm-ic" aria-hidden="true">${m.icon}</span><b>${esc(m.label)}</b><small>${esc(m.sub)}</small></a>`).join('')}</div>
+  ${paper === 'tape'
+    ? `<div class="no-print st-row st-sizes" role="group" aria-label="Tape length"><span class="st-lbl">Size</span>${TAPE_SIZES.map((t) => `<a class="st-chip ${t.value === tape.value ? 'on' : ''}" aria-pressed="${t.value === tape.value}" href="#/h/${homeId}/sticker?${qs({ tape: t.value })}">${esc(t.label)}</a>`).join('')}</div>
+  <div class="amp-tape-wrap paper-tape"><div class="amp-tape t-${tape.value}" id="ampTape" style="--tw:${tape.w}in;--th:${tape.h}in">
+    <div class="at-qr" id="atQr" aria-label="QR code"></div>
+    <div class="at-text"><b>Mapped with AmpMap</b><span>${esc(copy.scan)}</span>${tape.w >= 3.5 && installedByText(ib) ? `<small>${esc(ibDisplay(installedByText(ib)))}</small>` : ''}</div>
+  </div></div>
+  <p class="no-print tiny muted st-tip">${esc(TAPE_TIP)}</p>
+  <details class="no-print more-details st-makers"><summary><b>Which printer should I get?</b><span class="muted tiny">3 picks, prices approx.</span></summary>
+    <ul class="list maker-list">${LABEL_MAKERS.map((m) => `<li><a class="row" href="${esc(m.url)}" target="_blank" rel="noopener"><span class="row-main"><b>${esc(m.name)}</b><span class="muted">${esc(m.tier)} · ${esc(m.price)}</span></span><span class="chev" aria-hidden="true">↗</span></a></li>`).join('')}</ul>
+    <p class="tiny muted">Any label maker that takes 1 in (24 mm) tape works.</p>
+  </details>`
+    : `<div class="no-print st-row st-sizes" role="group" aria-label="Sticker size"><span class="st-lbl">Size</span>${STICKER_SIZES.map((s) => `<a class="st-chip ${s.value === size.value ? 'on' : ''}" aria-pressed="${s.value === size.value}" href="#/h/${homeId}/sticker?${qs({ size: s.value })}">${esc(s.label)}</a>`).join('')}</div>
+  <p class="no-print tiny muted st-tip">For outdoor or long-lasting labels, print on weatherproof label sheets, like <a href="${esc(WEATHERPROOF_SHEETS.url)}" target="_blank" rel="noopener">${esc(WEATHERPROOF_SHEETS.name)}</a>. ${esc(WEATHERPROOF_SHEETS.note)}</p>`}
+  <div class="amp-sign-wrap paper-${paper}" ${paper === 'tape' ? 'hidden' : ''}>
     <div class="amp-sign s-${size.value}" id="ampSign">
       <div class="as-top"><img class="as-badge" src="./brand/badge.png" alt="AmpMap"><div class="as-brand"><b>AmpMap</b><span>Panel &amp; circuit map</span></div></div>
       <div class="as-head">This panel is mapped with <b>AmpMap</b></div>
@@ -524,13 +539,13 @@ function renderSticker(homeId, q) {
     ${home.shareToken
       ? `<label>Scanning opens<select id="stQr">${opt([{ value: '', label: 'This panel (view only)' }, { value: 'get', label: 'The app download' }], prefer)}</select></label>`
       : `<p class="tiny muted st-hint">Scanning opens the AmpMap download page. To show this panel instead, turn on <a href="#/h/${homeId}/more#share">Settings › Share</a>.</p>`}
-    <label>Paper<select id="stPaper">${opt([{ value: 'label', label: `${size.label} (label printer / sticker sheet)` }, { value: 'letter', label: 'Regular 8.5 x 11 paper (cut it out)' }], paper)}</select></label>
+    ${paper === 'tape' ? '' : `<label>Paper<select id="stPaper">${opt([{ value: 'label', label: `${size.label} (label printer / sticker sheet)` }, { value: 'letter', label: 'Regular 8.5 x 11 paper (cut it out)' }], paper)}</select></label>`}
     <button class="btn primary" id="doPrint">Print / Save as PDF</button>
   </div>
-  <style>@media print { @page { size: ${paper === 'letter' ? 'letter' : `${size.w}in ${size.h}in`}; margin: 0; } }</style>`;
+  <style>@media print { @page { size: ${paper === 'letter' ? 'letter' : paper === 'tape' ? `${tape.w}in ${tape.h}in` : `${size.w}in ${size.h}in`}; margin: 0; } }</style>`;
   app.innerHTML = shell(homeId, 'more', body, { title: 'Panel sticker', back });
   bindShell();
-  qrSvg(target.url).then((svg) => { const el = document.getElementById('asQr'); if (el) el.innerHTML = svg; });
+  qrSvg(target.url).then((svg) => { for (const id of ['asQr', 'atQr']) { const el = document.getElementById(id); if (el) el.innerHTML = svg; } });
   const $c = document.getElementById('ibCompany');
   const $p = document.getElementById('ibPhone');
   const $save = document.getElementById('ibSave');
@@ -553,7 +568,7 @@ function renderSticker(homeId, q) {
     if (isPro()) await store.saveSettings({ installedBy: v });
   };
   $save.onclick = async () => { await save(); toast('Saved'); };
-  document.getElementById('stPaper').onchange = (e) => go(`#/h/${homeId}/sticker?${qs({ paper: e.target.value })}`);
+  if (document.getElementById('stPaper')) document.getElementById('stPaper').onchange = (e) => go(`#/h/${homeId}/sticker?${qs({ paper: e.target.value })}`);
   if (document.getElementById('stQr')) document.getElementById('stQr').onchange = (e) => go(`#/h/${homeId}/sticker?${qs({ qr: e.target.value })}`);
   document.getElementById('doPrint').onclick = async () => {
     try { await save(true); } catch (e) { console.error(e); }

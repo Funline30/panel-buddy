@@ -236,3 +236,16 @@ test('welcome tour: 3 steps, once, never for guests', () => {
   assert.equal(shouldShowTour({ hasHome: true, view: 'rooms' }), false);
   assert.equal(shouldShowTour({ seen: true, force: true }), true);
 });
+
+import { PRINT_METHODS, TAPE_SIZES, tapeSize, printChoice, LABEL_MAKERS, WEATHERPROOF_SHEETS } from '../src/lib/sticker.js';
+test('sticker print choice: label maker (24 mm tape) or regular printer; product links in one constant', () => {
+  assert.deepEqual(PRINT_METHODS.map((m) => m.label), ['Label maker', 'Regular printer']);
+  assert.deepEqual(printChoice('tape'), { method: 'maker', paper: 'tape' });
+  assert.deepEqual(printChoice('letter'), { method: 'printer', paper: 'letter' });
+  assert.deepEqual(printChoice(undefined), { method: 'printer', paper: 'label' }); // old links keep working
+  assert.equal(tapeSize('nope').value, 'tape25');
+  assert.ok(TAPE_SIZES.every((t) => t.h < 1 && t.w >= 2.5));
+  assert.equal(LABEL_MAKERS.length, 3);
+  assert.ok(LABEL_MAKERS.every((m) => m.url.startsWith('https://') && m.price.startsWith('approx.')));
+  assert.ok(WEATHERPROOF_SHEETS.url.startsWith('https://www.avery.com/'));
+});

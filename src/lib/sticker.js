@@ -79,3 +79,30 @@ export function stickerCopy(kind) {
     ? { scan: 'Scan to see this panel', sub: 'and get the free AmpMap app' }
     : { scan: 'Scan to get the app', sub: 'Free for iPhone, Android & web' };
 }
+
+// ---- How you print it: a label maker (1 in / 24 mm tape) or a regular printer.
+export const PRINT_METHODS = [
+  { value: 'maker', label: 'Label maker', icon: '🏷️', sub: '1 in (24 mm) tape' },
+  { value: 'printer', label: 'Regular printer', icon: '🖨️', sub: 'Paper or label sheets' },
+];
+// 24 mm tape (Brother TZe, Brady). h = tape width; the printable part is a bit narrower.
+export const TAPE_SIZES = [
+  { value: 'tape25', label: '1 x 2.5 in', w: 2.5, h: 0.94 },
+  { value: 'tape35', label: '1 x 3.5 in', w: 3.5, h: 0.94 },
+];
+export const tapeSize = (v) => TAPE_SIZES.find((s) => s.value === v) || TAPE_SIZES[0];
+// paper: 'tape' = label maker, 'label' = exact sticker size, 'letter' = letter page to cut out
+export function printChoice(paper) {
+  if (paper === 'tape') return { method: 'maker', paper: 'tape' };
+  return { method: 'printer', paper: paper === 'letter' ? 'letter' : 'label' };
+}
+
+// ---- Product links: ONE place, so they can be swapped for partner / affiliate links later.
+// Prices are approximate (checked Oct 17, 2026).
+export const WEATHERPROOF_SHEETS = { name: 'Avery Waterproof Labels (2 x 4 in, #5523)', url: 'https://www.avery.com/products/labels/5523', note: 'Pick the 2 x 3 in size: it fits on these labels.' };
+export const LABEL_MAKERS = [
+  { tier: 'Budget / homeowner', name: 'Brother P-touch CUBE Plus (PT-P710BT)', price: 'approx. $90–115', url: 'https://www.brother-usa.com/p/thermal-printers-labelers/PTP710BT' },
+  { tier: 'Pro', name: 'Brady M211', price: 'approx. $180', url: 'https://www.tequipment.net/Brady/M211/Printers-and-Printing-Supplies/' },
+  { tier: 'Pro (with keyboard)', name: 'Brother PT-E560BT', price: 'approx. $319', url: 'https://www.ptouchdirect.com/ptouch/pte560btvp-new.html' },
+];
+export const TAPE_TIP = 'Use 1 in (24 mm) laminated tape: Brother TZe or Brady. Laminated tape holds up to heat, oil and moisture.';
