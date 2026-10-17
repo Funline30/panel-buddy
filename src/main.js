@@ -4,6 +4,9 @@ import { GET_URL, detectPlatform, getTarget, storeRows, stickerQrTarget, cleanIn
 import './sticker.css';
 import { firebaseConfig, isFirebaseConfigured } from './firebase-config.js';
 import { createLocalStore } from './store/local.js';
+import { createScopedStore } from './store/scoped.js';
+import { codeStatus, guardNext, EXPIRY_CHOICES, expiryFor, makeTempCode, makeClaimCode, prettyClaimCode, customCodeProblem, describeChange, undoable, undoOps, toMillis, claimStatus } from './lib/access.js';
+import './access.css';
 import {
   AMP_OPTIONS, POLE_OPTIONS, BREAKER_KINDS, DEVICE_TYPES, GFCI_OPTIONS, AFCI_OPTIONS, STATUS_OPTIONS,
   PANEL_TYPES, SPACE_OPTIONS, MAIN_AMP_OPTIONS, RV_MAIN_AMP_OPTIONS, SHORE_POWER_OPTIONS, LEG_OPTIONS, POWER_SOURCE_OPTIONS,
@@ -60,6 +63,34 @@ function dirRowsHtml(panel, breakers, { wire = false } = {}) {
 // ---------------------------------------------------------------- startup
 async function start() {
   applyTheme();
+  guestEnded = sessionStorage.getItem('ampmap:guestEnded') || '';
+  sessionStorage.removeItem('ampmap:guestEnded');
+  window.addEventListener('unhandledrejection', (e) => {
+    if (e.reason && e.reason.code === 'ampmap/not-allowed') { e.preventDefault(); toast(e.reason.message); }
+  });
+  const gi = guestInfo();
+  if (gi) {
+    app.innerHTML = `<div class="center-msg">Opening the panel...</div>`;
+    try {
+      store = await startGuest(gi);
+      store.onChange(() => {
+        if (parseRoute().parts[0] === 'edit' && document.getElementById('editForm')) return;
+        if (parseRoute().parts[2] === 'quick' && document.getElementById('quickForm') && quickUI.typing()) return;
+        render();
+      });
+      await store.init();
+      bindLoadActions();
+      window.addEventListener('hashchange', render);
+      render();
+      return;
+    } catch (e) {
+      console.warn('guest session ended', e);
+      sessionStorage.removeItem(GUEST_KEY);
+      guestEnded = gi.mode === 'grant' ? "You don't have edit access to that home anymore." : 'Your edit access ended: the homeowner changed or turned off the code.';
+      store = null;
+      if (gi.token) location.hash = `#/share/${gi.token}`;
+    }
+  }
   const wantDemo = localStorage.getItem(MODE_KEY) === 'demo' || /[?&]demo=1/.test(location.search);
   if (isFirebaseConfigured() && !wantDemo) {
     app.innerHTML = `<div class="center-msg">Loading AmpMap...</div>`;
@@ -282,15 +313,15 @@ function shell(homeId, active, body, { title = '', back = '' } = {}) {
     ['rooms', '⌂', 'Rooms', `#/h/${homeId}/rooms`],
     ['search', '⌕', 'Search', `#/h/${homeId}/search`],
     ['load', '⚡', 'Load', `#/h/${homeId}/load`],
-    ['more', '⚙︎', 'Settings', `#/h/${homeId}/more`],
+    isGuest() ? ['more', '✓', 'Done', `#/h/${homeId}/more`] : ['more', '⚙︎', 'Settings', `#/h/${homeId}/more`],
   ];
   return `
-  ${store.mode === 'demo' ? `<div class="demo-banner">Demo mode: saved on this device only${isFirebaseConfigured() ? ' · <a href="#/login">Sign in to sync</a>' : ''}</div>` : ''}
+  ${isGuest() ? guestBanner() : store.mode === 'demo' ? `<div class="demo-banner">Demo mode: saved on this device only${isFirebaseConfigured() ? ' · <a href="#/login">Sign in to sync</a>' : ''}</div>` : ''}
   <header class="topbar">
     ${back ? `<a class="icon-btn" href="${back}" aria-label="Back">‹</a>` : `<img class="logo" src="./brand/house-108.png" alt="" aria-hidden="true" width="34" height="34">`}
     <div class="topbar-title">
       ${title ? `<h1>${esc(title)}</h1>` : `<label class="sr-only" for="homePick">Home</label>
-      <select id="homePick" class="home-pick">${homeOptions(homes, homeId)}<option value="__new">+ Add a home...</option></select>`}
+      <select id="homePick" class="home-pick">${homeOptions(homes, homeId)}${isGuest() ? '' : '<option value="__new">+ Add a home...</option>'}</select>`}
     </div>
     <a class="scan-btn" href="#/scan" aria-label="Scan a QR sticker"><span aria-hidden="true">⌗</span>Scan</a>
   </header>
@@ -339,12 +370,24 @@ async function render() {
   }
 
   if (parts[0] === 'get' || isGetPath()) return renderGet();
+  if (parts[0] === 'share' && parts[1] && parts[2] === 'edit') return renderCodeEntry(parts[1]);
   if (parts[0] === 'share' && parts[1]) return renderShare(parts[1]);
   if (['p', 'd', 'b'].includes(parts[0]) && parts[1]) return resolveShort(parts[0], parts[1]);
   if (parts[0] === 'scan') return renderScan();
   if (store.mode === 'cloud' && !store.user) {
-    if (parts[0] === 'h' || parts[0] === 'customers') pendingRoute = location.hash;
+    if (parts[0] === 'h' || parts[0] === 'customers' || parts[0] === 'claim') pendingRoute = location.hash;
     return renderLogin();
+  }
+  if (parts[0] === 'claim' && parts[1]) {
+    if (isGuest()) return leaveGuest();
+    return renderClaim(parts[1]);
+  }
+  if (isGuest()) {
+    const gh = store.guest.homeId;
+    if (parts[0] === 'edit' && !['panels', 'breakers', 'devices'].includes(parts[1])) { toast('Only the homeowner can change that.'); return go(`#/h/${gh}/panel`); }
+    if (parts[0] === 'customers' || parts[0] === 'login' || (parts[0] === 'h' && parts[1] !== gh)) return go(`#/h/${gh}/panel`);
+    if (parts[0] === 'h' && ['more', 'access'].includes(parts[2])) return renderGuestMore(gh);
+    if (parts[0] === 'h' && parts[2] === 'print' && parts[3] === 'setup') return go(`#/h/${gh}/panel`);
   }
   if (parts[0] === 'login') {
     if (store.mode === 'demo') return renderLogin();
@@ -390,6 +433,7 @@ async function render() {
     if (view === 'item') return renderItem(homeId, q);
     if (view === 'portable') return renderPortables(homeId);
     if (view === 'more') return renderMore(homeId);
+    if (view === 'access') return renderAccess(homeId, q);
     if (view === 'shop') return renderShop(homeId, q.get('scope'));
     if (view === 'print') return renderPrint(homeId, parts[3], parts[4], q);
   } catch (e) {
@@ -498,6 +542,453 @@ function renderSticker(homeId, q) {
   };
 }
 
+// ---------------------------------------------------------------- edit codes, history, hand-off
+// The homeowner controls who can edit: a code they set or a temporary one (24 h / 7 days /
+// until turned off), a hand-off code an installer leaves for a brand-new homeowner, and a
+// "People with access" list. Electricians edit the homeowner's REAL data (no copy), every
+// change is logged with their name, and the homeowner can undo the last change.
+const GUEST_KEY = 'ampmap:guest';
+const GUEST_NAME_KEY = 'ampmap:guestName';
+let guestEnded = '';
+function guestInfo() {
+  try {
+    return JSON.parse(sessionStorage.getItem(GUEST_KEY) || 'null');
+  } catch {
+    return null;
+  }
+}
+const isGuest = () => store && store.mode === 'guest';
+function leaveGuest(msg = '') {
+  const gi = guestInfo();
+  sessionStorage.removeItem(GUEST_KEY);
+  if (msg) sessionStorage.setItem('ampmap:guestEnded', msg);
+  location.hash = gi && gi.token ? `#/share/${gi.token}` : '#/';
+  location.reload();
+}
+function guestDenied() {
+  leaveGuest('Your edit access ended: the homeowner changed or turned off the code. Your last change may not have saved.');
+}
+
+// One line per change for the homeowner's history.
+function historyLine(change, data) {
+  const panels = (data && data.panels) || D().panels;
+  const breakers = (data && data.breakers) || D().breakers;
+  const name = (col, o) => {
+    if (!o) return '';
+    if (col === 'breakers') {
+      const p = panels.find((x) => x.id === o.panelId);
+      return `#${slotLabel(o, p || 'two')}${o.label ? ' ' + o.label : ''}`;
+    }
+    if (col === 'devices') return `"${o.name || labelOf(DEVICE_TYPES, o.type) || 'item'}"${o.room ? ' (' + o.room + ')' : ''}`;
+    return o.name ? `"${o.name}"` : '';
+  };
+  const breakerName = (id) => { const b = breakers.find((x) => x.id === id); return b ? name('breakers', b) : '(none)'; };
+  return describeChange(change, { name, wireText: (w) => wireTag(w) || '', breakerName });
+}
+
+async function startGuest(gi) {
+  const common = { describe: historyLine, onDenied: guestDenied };
+  if (gi.mode === 'demo') {
+    const local = createLocalStore();
+    await local.init();
+    if (!local.demoCodeStillValid(gi.token, gi.hash)) throw new Error('ended');
+    const backend = local.localBackend(gi.homeId);
+    const commit = backend.commit;
+    backend.commit = async (changes, entry) => {
+      if (!local.demoCodeStillValid(gi.token, gi.hash)) throw new Error('ended');
+      return commit(changes, entry);
+    };
+    return createScopedStore(backend, { ownerUid: 'demo', homeId: gi.homeId, editorUid: 'demo-guest', name: gi.name, afterCommit: () => backend.refreshShare(gi.token, sharePayload(gi.homeId)), ...common });
+  }
+  if (!isFirebaseConfigured()) throw new Error('no cloud');
+  if (gi.mode === 'code') {
+    const { openCodeGuest } = await import('./store/scoped-cloud.js');
+    return openCodeGuest(firebaseConfig, gi, { afterShare: () => sharePayload(gi.homeId), ...common });
+  }
+  if (gi.mode === 'grant') {
+    const { createFirebaseStore } = await import('./store/firebase.js');
+    const main = createFirebaseStore(firebaseConfig);
+    await main.init();
+    if (!main.user) throw new Error('signed out');
+    const s = await main.openGrant({ owner: gi.ownerUid, homeId: gi.homeId }, { name: gi.name, afterShare: () => sharePayload(gi.homeId), ...common });
+    s.signOut = async () => { await s.settle().catch(() => {}); };
+    return s;
+  }
+  throw new Error('unknown');
+}
+
+function guestBanner() {
+  const g = store.guest;
+  return `<div class="guest-banner" role="status">✎ Editing for the homeowner as <b>${esc(g.name)}</b> · saved to their AmpMap, with your name · <a href="#/h/${esc(g.homeId)}/more">Done</a></div>`;
+}
+
+function renderGuestMore(homeId) {
+  const home = byId('homes', homeId);
+  const gi = guestInfo() || {};
+  const body = `
+  <div class="card">
+    <h3>You're editing ${esc(home ? home.name : 'this home')}</h3>
+    <p class="muted">As <b>${esc(store.guest.name)}</b>. Every change goes straight into the homeowner's AmpMap with your name and the date, and they can undo it.</p>
+    <p class="muted">You can change breakers, outlets, wire, labels and rooms. The homeowner keeps the home itself, photos and sharing.</p>
+    <button class="btn primary" id="guestDone">Done editing</button>
+    ${gi.token ? `<a class="btn ghost" href="#/share/${esc(gi.token)}">See the read-only view</a>` : ''}
+  </div>
+  <div class="card">
+    <h3>Appearance</h3>
+    <label>Theme<select id="themePick">${opt(THEME_OPTIONS, getThemePref())}</select></label>
+  </div>`;
+  app.innerHTML = shell(homeId, 'more', body);
+  bindShell();
+  document.getElementById('themePick').onchange = (e) => setThemePref(e.target.value);
+  document.getElementById('guestDone').onclick = async (e) => {
+    e.target.disabled = true;
+    e.target.textContent = 'Saving...';
+    await store.signOut().catch(() => {});
+    leaveGuest();
+  };
+}
+
+// The electrician: shared view › Edit › name + code.
+async function renderCodeEntry(token) {
+  app.innerHTML = `<div class="center-msg">Loading...</div>`;
+  let doc = null;
+  try { doc = await store.getShare(token); } catch { doc = null; }
+  if (!doc) return renderShare(token);
+  const lastName = localStorage.getItem(GUEST_NAME_KEY) || '';
+  app.innerHTML = `
+  <header class="topbar"><a class="icon-btn" href="#/share/${esc(token)}" aria-label="Back">‹</a><div class="topbar-title"><h1>Edit this panel</h1></div></header>
+  <main class="main share-main">
+    <div class="card code-card">
+      <div class="code-home"><img src="./brand/house-108.png" alt="" width="40" height="40"><div><b>${esc(doc.home.name)}</b>${doc.home.address ? `<br><span class="muted tiny">${esc(doc.home.address)}</span>` : ''}</div></div>
+      <p class="muted">Ask the homeowner for their AmpMap edit code. No account needed.</p>
+      <form id="codeForm" class="form" autocomplete="off">
+        <label>Your name and company<input name="who" required maxlength="60" value="${esc(lastName)}" placeholder="Mike · Bright Line Electric" autocomplete="name"></label>
+        <label>Edit code<input name="code" required class="code-input" inputmode="text" autocapitalize="characters" autocomplete="one-time-code" spellcheck="false" maxlength="40" placeholder="6-digit code"></label>
+        <button class="btn primary" type="submit">Start editing</button>
+        <p class="err" id="codeErr" role="alert"></p>
+      </form>
+      <p class="tiny muted">The homeowner sees your name, the date and what you changed, and can undo it.</p>
+    </div>
+  </main>`;
+  const f = document.getElementById('codeForm');
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const errEl = document.getElementById('codeErr');
+    const btn = f.querySelector('button');
+    errEl.textContent = '';
+    const who = f.elements.who.value.trim();
+    const code = f.elements.code.value;
+    if (!who) return;
+    btn.disabled = true;
+    btn.textContent = 'Checking...';
+    try {
+      let res;
+      let mode;
+      if (store.mode === 'demo') {
+        res = await store.demoEnter(token, code);
+        mode = 'demo';
+      } else {
+        const { enterWithCode } = await import('./store/scoped-cloud.js');
+        res = await enterWithCode(firebaseConfig, token, code, who);
+        mode = 'code';
+      }
+      localStorage.setItem(GUEST_NAME_KEY, who);
+      sessionStorage.setItem(GUEST_KEY, JSON.stringify({ mode, token, ownerUid: res.ownerUid, homeId: res.homeId, name: who, hash: res.hash || '' }));
+      location.hash = `#/h/${res.homeId}/panel`;
+      location.reload();
+    } catch (ex) {
+      btn.disabled = false;
+      btn.textContent = 'Start editing';
+      errEl.textContent = codeErrorText(ex);
+    }
+  };
+}
+
+function codeErrorText(ex) {
+  const c = ex && ex.code;
+  if (c === 'ampmap/wrong') return `That code didn't work. Check it with the homeowner.${ex.left != null ? ` ${ex.left} ${ex.left === 1 ? 'try' : 'tries'} left this hour.` : ''}`;
+  if (c === 'ampmap/locked') return `Too many wrong tries. Try again after ${new Date(ex.until).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}, or ask the homeowner to make a new code.`;
+  if (c === 'ampmap/expired') return 'That code has expired. Ask for a new one.';
+  if (c === 'ampmap/gone') return 'This link was turned off.';
+  if (c === 'ampmap/self') return 'You made this setup code. The homeowner enters it from their own account.';
+  if (c === 'ampmap/anon-off' || c === 'ampmap/rules') return "Editing with a code isn't switched on for this AmpMap yet. The owner needs to finish a one-time setup.";
+  return "Couldn't check the code: " + ((ex && ex.message) || 'try again');
+}
+
+// Homeowner: Settings › Edit codes & access.
+let historyCache = { homeId: '', at: 0, list: null };
+async function loadHistory(homeId, fresh = false) {
+  if (!store.listHistory) return null;
+  if (!fresh && historyCache.homeId === homeId && Date.now() - historyCache.at < 60000) return historyCache.list;
+  const list = await store.listHistory(homeId);
+  historyCache = { homeId, at: Date.now(), list };
+  return list;
+}
+
+function fmtWhen(ms) {
+  const d = new Date(ms);
+  return `${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}, ${d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
+}
+const spaced = (code) => (/^\d{6}$/.test(code) ? `${code.slice(0, 3)} ${code.slice(3)}` : code);
+
+async function renderAccess(homeId, q) {
+  const home = byId('homes', homeId);
+  app.innerHTML = shell(homeId, 'more', `<div class="center-msg">Loading...</div>`, { title: 'Edit codes & access', back: `#/h/${homeId}/more` });
+  const token = home.shareToken;
+  let code = null;
+  let rulesMissing = false;
+  if (token) {
+    try { code = await store.getEditCode(token); } catch (e) { if (e.code === 'ampmap/rules') rulesMissing = true; }
+  }
+  const priv = await store.getPrivate('edit_' + homeId);
+  const guard = token ? await store.getGuard(token) : null;
+  const grants = await store.listGrants(homeId);
+  const hist = await loadHistory(homeId, true);
+  const claims = await store.listClaims(homeId);
+  const claimPriv = await store.getPrivate('claim_' + homeId);
+  const claim = claimPriv && claims.find((c) => c.id === claimPriv.claimId);
+  const st = codeStatus(code);
+  const showCode = st.on && code.kind === 'temp' && priv && priv.token === token ? priv.code : '';
+  const locked = guard && guardNext(guard).locked;
+  const pick = q.get('exp') || '24h';
+  const welcome = q.get('welcome');
+  const lastUndo = hist ? undoable(hist) : null;
+  const shareLink = token ? deepLink('/share/' + token) : '';
+  const body = `
+  ${welcome ? `<div class="alert ok-alert">🎉 ${esc(home.name)} is yours now. Make a temporary code below whenever an electrician comes.</div>` : ''}
+  ${rulesMissing ? `<div class="alert warn">Edit codes need a one-time security update on the AmpMap database before they work.</div>` : ''}
+  <div class="card access-card" id="codes">
+    <h3>Let an electrician edit</h3>
+    <p class="muted">They scan the panel QR, tap <b>Edit</b> and type your code. No account needed. Everything they change lands in your AmpMap with their name on it.</p>
+    <div class="code-status ${st.on ? 'on' : ''}"><span class="dot-st"></span>${esc(st.text)}</div>
+    ${showCode ? `<div class="big-code" aria-label="Edit code">${esc(spaced(showCode))}</div><div class="stack"><button class="btn primary" id="codeShare">Send the code</button></div>` : ''}
+    ${st.on && !showCode ? `<p class="tiny muted">For safety, AmpMap never shows a code you chose. If you forgot it, set a new one.</p>` : ''}
+    ${locked ? `<div class="alert warn">Too many wrong tries. Editing with a code is paused until ${esc(new Date(guardNext(guard).until).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }))}. <button class="btn small" id="unlock">Unpause now</button></div>` : ''}
+    <div class="access-block">
+      <h4>Make a temporary code</h4>
+      <div class="chips" role="group" aria-label="Works for">${EXPIRY_CHOICES.map((c) => `<button type="button" class="chip ${pick === c.value ? 'on' : ''}" data-exp="${c.value}" aria-pressed="${pick === c.value}">${esc(c.label)}</button>`).join('')}</div>
+      <button class="btn primary" id="makeTemp">${st.on ? 'Make a new 6-digit code' : 'Make a 6-digit code'}</button>
+    </div>
+    <div class="access-block">
+      <h4>Or set your own code</h4>
+      <form id="ownForm" class="inline-form"><input name="own" placeholder="At least 6 letters or numbers" maxlength="32" autocomplete="off" aria-label="Your own code"><button class="btn" type="submit">Save</button></form>
+      <p class="err" id="ownErr" role="alert"></p>
+    </div>
+    ${st.on ? `<button class="btn danger" id="codeOff">Turn off editing</button>` : ''}
+    <p class="tiny muted">A new code or turning it off ends access for everyone using the old one, right away. 10 wrong tries in an hour pauses the code.</p>
+  </div>
+
+  <div class="card access-card" id="people">
+    <h3>People with access</h3>
+    <ul class="list people">
+      <li><span><b>You</b> · owner</span></li>
+      ${st.on ? `<li><span>Anyone with the code · can edit</span><span class="muted tiny">${code.kind === 'temp' ? 'temporary' : 'your code'}</span></li>` : ''}
+      ${grants.map((g) => `<li><span><b>${esc(g.editorName || 'Installer')}</b> · can edit</span><button class="btn small danger" data-ungrant="${esc(g.id)}">Remove</button></li>`).join('')}
+      ${token ? `<li><span>Anyone with the link or QR · can view</span><a class="btn small" href="#/h/${homeId}/more#share">Manage</a></li>` : ''}
+    </ul>
+  </div>
+
+  <div class="card access-card" id="history">
+    <h3>Edit history</h3>
+    ${hist == null ? `<p class="muted">The history shows up here after the security update.</p>` : !hist.length ? `<p class="muted">No edits by others yet. When an electrician changes something, you'll see who, when and what here.</p>` : `<ul class="history">${hist.slice(0, 40).map((e) => `
+      <li class="${e.undoneAt ? 'undone' : ''}">
+        <div class="h-head"><b>Changed by: ${esc(e.by)}</b> · ${esc(fmtWhen(e.at))}${e.undoneAt ? ' · <span class="muted">undone</span>' : ''}</div>
+        <ul class="h-lines">${(e.summary || []).map((l) => `<li>${esc(l)}</li>`).join('')}</ul>
+        ${lastUndo && lastUndo.id === e.id ? `<button class="btn small" data-undo="${esc(e.id)}">↶ Undo this change</button>` : ''}
+      </li>`).join('')}</ul>`}
+  </div>
+
+  <div class="card access-card" id="handoff">
+    <h3>Hand off to the homeowner</h3>
+    ${claim ? `<p class="muted">${esc(claimStatus(claim).text)}</p>
+      <div class="big-code claim">${esc(prettyClaimCode(claimPriv.code))}</div>
+      <div class="stack"><a class="btn primary" href="#/h/${homeId}/print/setup">Print the setup page</a><button class="btn danger" id="claimCancel">Cancel the hand-off</button></div>`
+      : `<p class="muted">Set this up for someone else (a new build or a customer)? Make a one-time setup code and leave the printed page at the panel. They scan it, make their free account, enter the code, and the home becomes theirs. Then they control edit codes.</p>
+      <label>Your name or company (shows on the page)<input id="claimFrom" maxlength="60" value="${esc((home.installedBy && home.installedBy.company) || localStorage.getItem('ampmap:installer') || '')}" placeholder="Bright Line Electric"></label>
+      <button class="btn" id="claimMake">Make a setup code</button>`}
+    <p class="tiny muted">The code works once, for 30 days. After the hand-off this home leaves your account; the homeowner can let you keep editing.</p>
+  </div>`;
+  app.innerHTML = shell(homeId, 'more', body, { title: 'Edit codes & access', back: `#/h/${homeId}/more` });
+  bindShell();
+  const $ = (id) => document.getElementById(id);
+  const fail = (ex) => alert(ex && ex.code === 'ampmap/rules' ? 'This needs the one-time security update first (the AmpMap owner deploys it).' : "Couldn't save: " + ((ex && ex.message) || ex));
+  // a code needs the share link (that's what the QR opens); make it if needed, with homeId
+  const ensureShare = async () => {
+    const panelIds = inHome('panels', homeId).map((p) => p.id);
+    const t = home.shareToken || shareToken();
+    await store.createShare(t, sharePayload(homeId), panelIds);
+    if (!home.shareToken) await store.put('homes', { ...home, shareToken: t });
+    return t;
+  };
+  document.querySelectorAll('[data-exp]').forEach((b) => (b.onclick = () => go(`#/h/${homeId}/access?exp=${b.dataset.exp}`)));
+  $('makeTemp').onclick = async () => {
+    try {
+      const t = await ensureShare();
+      await store.saveEditCode(t, { homeId, code: makeTempCode(), kind: 'temp', exp: expiryFor(pick) });
+      toast('New code ready');
+      renderAccess(homeId, q);
+    } catch (ex) { fail(ex); }
+  };
+  $('ownForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const v = e.target.elements.own.value;
+    const problem = customCodeProblem(v);
+    $('ownErr').textContent = problem;
+    if (problem) return;
+    try {
+      const t = await ensureShare();
+      await store.saveEditCode(t, { homeId, code: v, kind: 'custom', exp: null });
+      toast('Your code is on');
+      renderAccess(homeId, q);
+    } catch (ex) { fail(ex); }
+  };
+  if ($('codeOff')) $('codeOff').onclick = async () => {
+    if (!confirm('Turn off editing? The code stops working right away.')) return;
+    await store.deleteEditCode(token, homeId);
+    toast('Editing is off');
+    renderAccess(homeId, q);
+  };
+  if ($('unlock')) $('unlock').onclick = async () => { await store.clearGuard(token); renderAccess(homeId, q); };
+  if ($('codeShare')) $('codeShare').onclick = async () => {
+    const exp = toMillis(code.exp);
+    const text = `AmpMap edit code for ${home.name}: ${showCode}\nScan the QR on the panel (or open ${shareLink}), tap Edit, and enter the code.${exp ? ` Works until ${fmtWhen(exp)}.` : ''}`;
+    try {
+      if (navigator.share) await navigator.share({ title: 'AmpMap edit code', text });
+      else { await navigator.clipboard.writeText(text); toast('Copied'); }
+    } catch { /* closed */ }
+  };
+  document.querySelectorAll('[data-ungrant]').forEach((b) => (b.onclick = async () => {
+    if (!confirm('Remove their edit access?')) return;
+    await store.removeGrant(b.dataset.ungrant);
+    toast('Removed');
+    renderAccess(homeId, q);
+  }));
+  document.querySelectorAll('[data-undo]').forEach((b) => (b.onclick = async () => {
+    const e = hist.find((x) => x.id === b.dataset.undo);
+    if (!e || !confirm(`Undo the change by ${e.by}?`)) return;
+    for (const o of undoOps(e)) {
+      if (o.op === 'put') await store.put(o.col, o.obj);
+      else await store.remove(o.col, o.id);
+    }
+    await store.markUndone(e.id);
+    toast('Undone');
+    renderAccess(homeId, q);
+  }));
+  if ($('claimMake')) $('claimMake').onclick = async () => {
+    const from = $('claimFrom').value.trim();
+    if (from) localStorage.setItem('ampmap:installer', from);
+    try {
+      if (home.shareToken) await ensureShare(); // stamp the share with this home so it moves too
+      await store.createClaim(homeId, makeClaimCode(), { homeName: home.name, fromName: from });
+      go(`#/h/${homeId}/print/setup`);
+    } catch (ex) { fail(ex); }
+  };
+  if ($('claimCancel')) $('claimCancel').onclick = async () => {
+    if (!confirm('Cancel the hand-off? The printed setup code stops working.')) return;
+    await store.cancelClaim(claim.id, homeId);
+    renderAccess(homeId, q);
+  };
+}
+
+// Printable "Homeowner setup" page (half page) with the claim QR + code.
+async function renderSetupPrint(homeId) {
+  const home = byId('homes', homeId);
+  const priv = await store.getPrivate('claim_' + homeId);
+  if (!priv) return go(`#/h/${homeId}/access#handoff`);
+  const claims = await store.listClaims(homeId);
+  const claim = claims.find((c) => c.id === priv.claimId) || { exp: priv.exp, fromName: '' };
+  const link = deepLink('/claim/' + priv.claimId);
+  const panel = inHome('panels', homeId)[0];
+  const body = `
+  <div class="print-controls no-print">
+    <p class="muted">Tape it inside the panel door or leave it on the counter. The code works once.</p>
+    <button class="btn primary" id="doPrint">Print / Save as PDF</button>
+  </div>
+  <div class="sheet setup-sheet">
+    <div class="setup-top">
+      <div class="setup-brand"><img src="./brand/house-108.png" alt="" width="44" height="44"><div><div class="setup-kicker">AmpMap</div><div class="setup-title">Homeowner setup</div></div></div>
+      <div class="setup-home"><b>${esc(home.name)}</b>${home.address ? `<br>${esc(home.address)}` : ''}${panel ? `<br><span class="muted">${esc(panel.name)}${panel.location ? ' · ' + esc(panel.location) : ''}</span>` : ''}</div>
+    </div>
+    <p class="setup-lede">Your electrical panel is mapped: every breaker, outlet and wire. Make it yours in 3 steps:</p>
+    <div class="setup-body">
+      <div class="setup-qr"><div id="setupQr"></div><span>Scan me</span></div>
+      <ol class="setup-steps">
+        <li><b>Scan</b> the QR code with your phone camera.</li>
+        <li><b>Create</b> your free AmpMap account (or sign in).</li>
+        <li><b>Enter</b> this setup code:<div class="setup-code">${esc(prettyClaimCode(priv.code))}</div></li>
+      </ol>
+    </div>
+    <div class="setup-foot">Works once, until ${esc(new Date(toMillis(claim.exp)).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }))}.${claim.fromName ? ` Set up by ${esc(claim.fromName)}.` : ''} Then you control who can edit, with codes you make.</div>
+  </div>`;
+  app.innerHTML = shell(homeId, 'more', body, { title: 'Homeowner setup page', back: `#/h/${homeId}/access#handoff` });
+  bindShell();
+  document.getElementById('setupQr').innerHTML = await qrSvg(link);
+  document.getElementById('doPrint').onclick = () => window.print();
+}
+
+// The homeowner: scan › account › enter the setup code.
+function renderClaim(claimId) {
+  const demo = store.mode === 'demo';
+  app.innerHTML = `
+  <header class="topbar"><img class="logo" src="./brand/house-108.png" alt="" aria-hidden="true" width="34" height="34"><div class="topbar-title"><h1>Set up your home</h1></div></header>
+  <main class="main share-main">
+    <div class="card code-card">
+      <h3>Make this home yours</h3>
+      <p class="muted">Your electrician mapped this home's panel in AmpMap. Enter the 8-character setup code from the page they left you.</p>
+      ${store.user && store.user.email ? `<p class="tiny muted">Signed in as ${esc(store.user.email)}.</p>` : ''}
+      <form id="claimForm" class="form" autocomplete="off">
+        <label>Setup code<input name="code" required class="code-input" autocapitalize="characters" spellcheck="false" maxlength="12" placeholder="ABCD-2345"></label>
+        <label class="check"><input type="checkbox" name="keep" checked> Let the installer keep edit access (you can remove them any time)</label>
+        <button class="btn primary" type="submit">Make it my home</button>
+        <p class="err" id="claimErr" role="alert"></p>
+        <p class="muted tiny" id="claimStep"></p>
+      </form>
+      ${demo ? '<p class="tiny muted">Demo: everything stays on this device.</p>' : ''}
+    </div>
+  </main>`;
+  const f = document.getElementById('claimForm');
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const btn = f.querySelector('button');
+    const errEl = document.getElementById('claimErr');
+    errEl.textContent = '';
+    btn.disabled = true;
+    btn.textContent = 'Checking...';
+    try {
+      const res = await store.claimHome(claimId, f.elements.code.value, { keepInstaller: f.elements.keep.checked, onStep: (t) => (document.getElementById('claimStep').textContent = t) });
+      setHome(res.homeId);
+      toast(`${res.homeName || 'The home'} is yours now`);
+      setTimeout(() => go(`#/h/${res.homeId}/access?welcome=1`), 600);
+    } catch (ex) {
+      btn.disabled = false;
+      btn.textContent = 'Make it my home';
+      errEl.textContent = codeErrorText(ex);
+    }
+  };
+}
+
+// Owner's panel page: a quiet note when someone else changed things.
+async function historyNote(homeId) {
+  if (isGuest() || !store.listHistory) return;
+  const list = await loadHistory(homeId).catch(() => null);
+  const el = document.getElementById('histNote');
+  if (!el || !list || !list.length) return;
+  const seen = Number(localStorage.getItem('ampmap:histSeen:' + homeId) || 0);
+  const fresh = list.filter((e) => e.at > seen && !e.undoneAt);
+  if (!fresh.length) return;
+  const by = [...new Set(fresh.map((e) => e.by))].slice(0, 2).join(', ');
+  el.innerHTML = `<a class="alert info-alert" href="#/h/${homeId}/access#history" id="histLink">✎ ${esc(by)} made ${fresh.length} ${fresh.length === 1 ? 'change' : 'changes'}. See what changed ›</a>`;
+  document.getElementById('histLink').onclick = () => localStorage.setItem('ampmap:histSeen:' + homeId, String(Date.now()));
+}
+
+// Homes other people let this account edit.
+async function sharedWithMeHtml() {
+  if (store.mode !== 'cloud' || !store.listMyGrants) return '';
+  const gs = await store.listMyGrants();
+  if (!gs.length) return '';
+  return `<div class="card"><h3>Homes shared with you</h3><ul class="list">${gs.map((g, i) => `<li><span><b>${esc(g.homeName || 'Home')}</b> · you can edit</span><button class="btn small" data-opengrant="${i}">Open</button></li>`).join('')}</ul></div>`;
+}
+
 function renderNotFound() {
   const homeId = currentHomeId();
   app.innerHTML = shell(homeId, '', `<div class="card empty"><h2>Not found</h2><p>That item isn't in this account. It may have been deleted, or it belongs to someone else's AmpMap.</p><a class="btn" href="#/">Go to my panel</a></div>`, { title: 'Not found', back: '#/' });
@@ -513,6 +1004,7 @@ function renderLogin() {
     <h1>AmpMap</h1>
     <p class="muted">Map your breaker panel, every outlet and light, QR stickers and load checks. Free, no ads.</p>
     ${pendingRoute && /^#\/(p|d|b)\//.test(pendingRoute) ? `<div class="alert warn" id="scanBanner">You scanned an AmpMap sticker. Sign in to open it.</div>` : ''}
+    ${pendingRoute && /^#\/claim\//.test(pendingRoute) ? `<div class="alert ok-alert" id="claimBanner">Setting up your home: create your free account (choose "Create a free account" below) or sign in. Then enter your setup code.</div>` : ''}
     ${isFirebaseConfigured() ? `
     <form id="authForm" class="card form">
       <label>Email<input type="email" name="email" autocomplete="email" required inputmode="email"></label>
@@ -657,7 +1149,7 @@ function renderPanel(homeId, panelId) {
   const warn = breakers.filter((b) => sumOf(b).level === 'warn').length;
   const peakOver = breakers.filter((b) => { const s = sumOf(b); return s.level !== 'over' && s.allLevel === 'over'; }).length;
   const clashes = panelClashes(panel, breakers);
-  const body = `
+  const body = `<div id="histNote"></div>
   ${searchBarHtml(homeId)}
   <section class="panel-head">
     <div>
@@ -684,6 +1176,7 @@ function renderPanel(homeId, panelId) {
     <a class="btn" href="#/edit/panels/new?home=${homeId}">+ Panel</a>
     <a class="btn" href="#/h/${homeId}/print/directory/${panel.id}">Print schedule</a>
     <a class="btn" href="#/h/${homeId}/sticker">Print panel sticker</a>
+    ${isGuest() ? '' : `<a class="btn" href="#/h/${homeId}/access">🔑 Edit codes</a>`}
   </div>
   <div class="legend"><span class="dot lvl-ok"></span>under 80% <span class="dot lvl-warn"></span>80%+ <span class="dot lvl-over"></span>over 100% <span class="dot lvl-none"></span>no loads listed <span class="muted">· colors = Typical, ⚠️ = Peak over 100%</span></div>
   ${breakers.some((b) => sizeOf(b) === 'half') ? '<p class="tiny muted legend-note">Half-height blocks are tandems: 1 breaker, 2 switches, each its own circuit. Tall blue-edged blocks are double-pole 240V: 1 circuit.</p>' : ''}
@@ -693,6 +1186,7 @@ function renderPanel(homeId, panelId) {
   app.innerHTML = shell(homeId, 'panel', body);
   bindShell();
   bindSearchBar(homeId);
+  historyNote(homeId);
   const pp = document.getElementById('panelPick');
   if (pp) pp.onchange = () => go(`#/h/${homeId}/panel/${pp.value}`);
   bindFuses(panel);
@@ -3443,6 +3937,12 @@ function renderMore(homeId) {
       <a class="btn" href="#/edit/panels/new?home=${homeId}">+ Add a panel / sub-panel</a>
     </div>
   </div>
+  <div class="card access-entry">
+    <h3>Edit codes &amp; access</h3>
+    <p class="muted">Let a different electrician edit each time with a code you control (temporary or your own), see who changed what, undo, or hand this home off to its owner.</p>
+    <a class="btn primary" href="#/h/${homeId}/access">Edit codes, people &amp; history ›</a>
+  </div>
+  <div id="sharedWithMe"></div>
   <div class="card" id="share">
     <h3>Share a read-only copy</h3>
     ${home.shareToken
@@ -3525,7 +4025,8 @@ function renderMore(homeId) {
   };
   if ($('shareUpdate')) $('shareUpdate').onclick = async () => { await store.createShare(home.shareToken, sharePayload(homeId), panelIds); toast('Shared copy updated'); };
   if ($('shareStop')) $('shareStop').onclick = async () => {
-    if (!confirm('Turn off this link? Anyone who has it will lose access.')) return;
+    if (!confirm('Turn off this link? Anyone who has it will lose access, and any edit code stops working.')) return;
+    if (store.deleteEditCode) await store.deleteEditCode(home.shareToken, homeId).catch(() => {});
     await store.deleteShare(home.shareToken, panelIds);
     const { shareToken: _t, ...rest } = home;
     void _t;
@@ -3557,6 +4058,18 @@ function renderMore(homeId) {
     };
   if ($('signOut')) $('signOut').onclick = () => store.signOut();
   if ($('goCloud')) $('goCloud').onclick = () => { localStorage.removeItem(MODE_KEY); location.hash = '#/'; location.reload(); };
+  sharedWithMeHtml().then((html) => {
+    const el = document.getElementById('sharedWithMe');
+    if (!el || !html) return;
+    el.innerHTML = html;
+    store.listMyGrants().then((gs) => el.querySelectorAll('[data-opengrant]').forEach((b) => (b.onclick = () => {
+      const g = gs[Number(b.dataset.opengrant)];
+      if (!g) return;
+      sessionStorage.setItem(GUEST_KEY, JSON.stringify({ mode: 'grant', ownerUid: g.owner, homeId: g.homeId, name: store.user.email || 'Installer', token: '' }));
+      location.hash = `#/h/${g.homeId}/panel`;
+      location.reload();
+    })));
+  }).catch(() => {});
   if ($('resetDemo')) $('resetDemo').onclick = async () => { if (confirm('Erase demo data on this device and reload the sample home?')) { await store.resetDemo(); go('#/'); } };
 }
 
@@ -3794,6 +4307,7 @@ function sharePayload(homeId) {
   const home = byId('homes', homeId);
   return {
     v: 1,
+    homeId,
     home: { name: home.name, type: home.type || '', address: home.address || '' },
     panels: inHome('panels', homeId).map((p) => ({
       id: p.id, name: p.name, type: p.type, numbering: p.numbering || 'space', layout: p.layout || 'auto', mainAmps: p.mainAmps || '', mainAmpsOther: p.mainAmpsOther || '',
@@ -3827,8 +4341,10 @@ async function renderShare(token) {
   app.innerHTML = `
   <header class="topbar"><img class="logo" src="./brand/house-108.png" alt="" aria-hidden="true" width="34" height="34"><div class="topbar-title"><h1>${esc(doc.home.name)}</h1></div></header>
   <main class="main share-main">
+    ${guestEnded ? `<div class="alert warn no-print">${esc(guestEnded)}</div>` : ''}
     <p class="muted no-print">Read-only panel directory shared from AmpMap${doc.updatedAt ? ' · updated ' + new Date(doc.updatedAt).toLocaleDateString() : ''}.</p>
-    <div class="row-actions no-print"><button class="btn" id="doPrint">Print / Save as PDF</button><a class="btn ghost" href="#/">Get AmpMap (free)</a></div>
+    <div class="row-actions no-print">${isGuest() ? `<a class="btn primary" href="#/h/${esc(store.guest.homeId)}/panel">✎ Back to editing</a>` : `<a class="btn primary" href="#/share/${esc(token)}/edit">✎ Edit</a>`}<button class="btn" id="doPrint">Print / Save as PDF</button><a class="btn ghost" href="#/get">Get AmpMap (free)</a></div>
+    ${isGuest() ? '' : '<p class="tiny muted no-print edit-hint">Electricians: tap Edit and enter the code from the homeowner.</p>'}
     ${sections.join('') || '<p>No panels in this share.</p>'}
   </main>`;
   document.getElementById('doPrint').onclick = () => window.print();
@@ -3886,6 +4402,7 @@ function renderShop(homeId, scopeQ) {
 
 async function renderPrint(homeId, kind, id, q) {
   const home = byId('homes', homeId);
+  if (kind === 'setup') return renderSetupPrint(homeId);
   if (kind === 'shop') {
     const scope = shopScope(homeId, q.get('scope'));
     const sl = shoppingList(inHome('devices', homeId), scope);

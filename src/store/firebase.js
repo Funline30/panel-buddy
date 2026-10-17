@@ -22,7 +22,14 @@ import {
   onSnapshot,
   writeBatch,
   getDocs,
+  query,
+  where,
+  orderBy,
+  limit,
+  Timestamp,
 } from 'firebase/firestore';
+import { codeHash, toMillis, grantId, homePhotoIds, claimCopy, randomToken, CLAIM_DAYS } from '../lib/access.js';
+import { proveCode, createScopedStore, cloudBackend } from './scoped-cloud.js';
 
 const COLS = ['homes', 'panels', 'breakers', 'devices', 'customers'];
 
@@ -116,7 +123,7 @@ export function createFirebaseStore(config) {
     async createShare(token, payload, panelIds = []) {
       await setDoc(doc(db, 'shares', token), { ...JSON.parse(JSON.stringify(payload)), owner: store.user.uid, updatedAt: Date.now() });
       // sharedPanels/{panelId} lets someone who scans a panel sticker find its share.
-      for (const pid of panelIds) await setDoc(doc(db, 'sharedPanels', pid), { token, owner: store.user.uid }).catch(() => {});
+      for (const pid of panelIds) await setDoc(doc(db, 'sharedPanels', pid), { token, owner: store.user.uid, ...(payload.homeId ? { homeId: payload.homeId } : {}) }).catch(() => {});
     },
     async lookupPanelShare(panelId) {
       try {
@@ -133,6 +140,199 @@ export function createFirebaseStore(config) {
     async deleteShare(token, panelIds = []) {
       for (const pid of panelIds) await deleteDoc(doc(db, 'sharedPanels', pid)).catch(() => {});
       await deleteDoc(doc(db, 'shares', token));
+    },
+
+    // ------------------------------------------------ edit codes (owner side)
+    // editCodes/{token} holds only a hash; a private copy of a TEMPORARY code is kept in the
+    // owner's own settings (owner-only) so they can show it again.
+    async getEditCode(token) {
+      try {
+        const s = await getDoc(doc(db, 'editCodes', token));
+        return s.exists() ? s.data() : null;
+      } catch (e) {
+        if (e.code === 'permission-denied') { const x = new Error('rules'); x.code = 'ampmap/rules'; throw x; }
+        throw e;
+      }
+    },
+    async saveEditCode(token, { homeId, code, kind, exp }) {
+      const hash = await codeHash(token, code);
+      try {
+        await setDoc(doc(db, 'editCodes', token), { owner: store.user.uid, homeId, codeHash: hash, on: true, kind, exp: exp == null ? null : Timestamp.fromMillis(exp), setAt: Date.now() });
+      } catch (e) {
+        if (e.code === 'permission-denied') { const x = new Error('rules'); x.code = 'ampmap/rules'; throw x; }
+        throw e;
+      }
+      await deleteDoc(doc(db, 'codeGuards', token)).catch(() => {});
+      if (kind === 'temp') await setDoc(store._ref('settings', 'edit_' + homeId), { code, token, exp: exp == null ? null : exp });
+      else await deleteDoc(store._ref('settings', 'edit_' + homeId)).catch(() => {});
+    },
+    async deleteEditCode(token, homeId) {
+      await deleteDoc(doc(db, 'editCodes', token)).catch(() => {});
+      await deleteDoc(doc(db, 'codeGuards', token)).catch(() => {});
+      if (homeId) await deleteDoc(store._ref('settings', 'edit_' + homeId)).catch(() => {});
+    },
+    async getPrivate(key) {
+      try {
+        const s = await getDoc(store._ref('settings', key));
+        return s.exists() ? s.data() : null;
+      } catch {
+        return null;
+      }
+    },
+    async getGuard(token) {
+      try {
+        const s = await getDoc(doc(db, 'codeGuards', token));
+        return s.exists() ? s.data() : null;
+      } catch {
+        return null;
+      }
+    },
+    async clearGuard(token) {
+      await deleteDoc(doc(db, 'codeGuards', token)).catch(() => {});
+    },
+    async listHistory(homeId) {
+      try {
+        const snap = await getDocs(query(collection(db, 'users', store.user.uid, 'history'), orderBy('at', 'desc'), limit(150)));
+        return snap.docs.map((d) => ({ ...d.data(), id: d.id })).filter((e) => e.homeId === homeId);
+      } catch {
+        return null; // rules not deployed yet
+      }
+    },
+    async markUndone(id) {
+      await setDoc(store._ref('history', id), { undoneAt: Date.now() }, { merge: true });
+    },
+    // People with access (grants/{owner}_{home}_{editor})
+    async listGrants(homeId) {
+      try {
+        const snap = await getDocs(query(collection(db, 'grants'), where('owner', '==', store.user.uid)));
+        return snap.docs.map((d) => ({ ...d.data(), id: d.id })).filter((g) => g.homeId === homeId);
+      } catch {
+        return [];
+      }
+    },
+    async listMyGrants() {
+      try {
+        const snap = await getDocs(query(collection(db, 'grants'), where('editor', '==', store.user.uid)));
+        return snap.docs.map((d) => ({ ...d.data(), id: d.id }));
+      } catch {
+        return [];
+      }
+    },
+    async removeGrant(id) {
+      await deleteDoc(doc(db, 'grants', id));
+    },
+    // ------------------------------------------------ hand-off to homeowner (installer side)
+    async createClaim(homeId, code, { homeName = '', fromName = '' } = {}) {
+      const claimId = randomToken();
+      const exp = Date.now() + CLAIM_DAYS * 86400000;
+      // the new owner may copy this home's photos: stamp them with the home id
+      const home = data.homes.find((h) => h.id === homeId);
+      const ids = homePhotoIds(home, data.panels.filter((p) => p.homeId === homeId), data.devices.filter((d) => d.homeId === homeId));
+      for (const pid of ids) {
+        try {
+          const s = await getDoc(store._ref('photos', pid));
+          if (s.exists() && s.data().homeId !== homeId) await setDoc(store._ref('photos', pid), { ...s.data(), homeId });
+        } catch { /* photo missing: skip */ }
+      }
+      try {
+        await setDoc(doc(db, 'claims', claimId), { from: store.user.uid, homeId, codeHash: await codeHash(claimId, code), exp: Timestamp.fromMillis(exp), homeName, fromName, at: Date.now() });
+      } catch (e) {
+        if (e.code === 'permission-denied') { const x = new Error('rules'); x.code = 'ampmap/rules'; throw x; }
+        throw e;
+      }
+      await setDoc(store._ref('settings', 'claim_' + homeId), { code, claimId, exp });
+      return { claimId, exp };
+    },
+    async listClaims(homeId) {
+      try {
+        const snap = await getDocs(query(collection(db, 'claims'), where('from', '==', store.user.uid)));
+        return snap.docs.map((d) => ({ ...d.data(), id: d.id })).filter((c) => c.homeId === homeId);
+      } catch {
+        return [];
+      }
+    },
+    async cancelClaim(claimId, homeId) {
+      await deleteDoc(doc(db, 'claims', claimId)).catch(() => {});
+      await deleteDoc(doc(db, 'codeGuards', claimId)).catch(() => {});
+      await deleteDoc(store._ref('settings', 'claim_' + homeId)).catch(() => {});
+    },
+    // ------------------------------------------------ hand-off (homeowner side)
+    // Prove the setup code, copy the home (same ids) into this account, move the share link
+    // over, optionally keep the installer as an editor, then remove it from the installer's
+    // account and delete the one-time code.
+    async claimHome(claimId, code, { keepInstaller = true, onStep = () => {} } = {}) {
+      const me = store.user.uid;
+      await proveCode(db, me, claimId, code, store.user.email || '');
+      let claim;
+      try {
+        const s = await getDoc(doc(db, 'claims', claimId));
+        claim = s.exists() ? s.data() : null;
+      } catch {
+        claim = null;
+      }
+      if (!claim) { const x = new Error('wrong'); x.code = 'ampmap/wrong'; throw x; }
+      if (toMillis(claim.exp) <= Date.now()) { const x = new Error('expired'); x.code = 'ampmap/expired'; throw x; }
+      if (claim.from === me) { const x = new Error('self'); x.code = 'ampmap/self'; throw x; }
+      const from = claim.from;
+      const homeId = claim.homeId;
+      onStep('Copying the home into your account...');
+      const hs = await getDoc(doc(db, 'users', from, 'homes', homeId));
+      if (!hs.exists()) { const x = new Error('gone'); x.code = 'ampmap/gone'; throw x; }
+      const grab = async (col) => (await getDocs(query(collection(db, 'users', from, col), where('homeId', '==', homeId)))).docs.map((d) => ({ ...d.data(), id: d.id }));
+      const src = { home: { ...hs.data(), id: homeId }, panels: await grab('panels'), breakers: await grab('breakers'), devices: await grab('devices'), photos: await grab('photos').catch(() => []) };
+      const copy = claimCopy(src);
+      const writes = [];
+      writes.push(['homes', copy.home]);
+      for (const c of ['panels', 'breakers', 'devices', 'photos']) for (const it of copy[c]) writes.push([c, it]);
+      for (let i = 0; i < writes.length; i += 400) {
+        const b = writeBatch(db);
+        for (const [c, it] of writes.slice(i, i + 400)) {
+          const { id, ...rest } = it;
+          b.set(doc(db, 'users', me, c, id), JSON.parse(JSON.stringify(rest)));
+        }
+        await b.commit();
+      }
+      onStep('Moving the share link...');
+      const token = copy.home.shareToken;
+      if (token) {
+        for (const p of copy.panels) {
+          try {
+            const sp = await getDoc(doc(db, 'sharedPanels', p.id));
+            if (sp.exists() && sp.data().owner === from) await setDoc(doc(db, 'sharedPanels', p.id), { ...sp.data(), owner: me, homeId });
+          } catch { /* not shared */ }
+        }
+        try {
+          const sh = await getDoc(doc(db, 'shares', token));
+          if (sh.exists() && sh.data().owner === from) await setDoc(doc(db, 'shares', token), { ...sh.data(), owner: me, homeId, updatedAt: Date.now() });
+        } catch { /* keep going */ }
+        // the installer's old edit code (if any) is void now; clear it so the status reads Off
+        await deleteDoc(doc(db, 'editCodes', token)).catch(() => {});
+        await deleteDoc(doc(db, 'codeGuards', token)).catch(() => {});
+      }
+      if (keepInstaller) {
+        await setDoc(doc(db, 'grants', grantId(me, homeId, from)), { owner: me, homeId, editor: from, homeName: copy.home.name || '', editorName: claim.fromName || 'Installer', at: Date.now() }).catch(() => {});
+      }
+      onStep('Finishing up...');
+      const dels = [];
+      for (const c of ['breakers', 'devices', 'panels', 'photos']) for (const it of src[c]) dels.push(doc(db, 'users', from, c, it.id));
+      dels.push(doc(db, 'users', from, 'homes', homeId));
+      for (let i = 0; i < dels.length; i += 400) {
+        const b = writeBatch(db);
+        for (const r of dels.slice(i, i + 400)) b.delete(r);
+        await b.commit().catch(() => {});
+      }
+      await deleteDoc(doc(db, 'claims', claimId)).catch(() => {});
+      await deleteDoc(doc(db, 'codeSessions', me)).catch(() => {});
+      return { homeId, fromName: claim.fromName || '', homeName: copy.home.name || '' };
+    },
+    // Open a home someone shared with this account (People with access) for editing.
+    async openGrant(g, { name, describe, afterShare, onDenied }) {
+      const backend = cloudBackend(db, { ownerUid: g.owner, homeId: g.homeId });
+      const afterCommit = afterShare ? async (d) => { const t = d.homes[0] && d.homes[0].shareToken; if (t) await backend.refreshShare(t, afterShare(d)); } : null;
+      return createScopedStore(backend, { ownerUid: g.owner, homeId: g.homeId, editorUid: store.user.uid, name, describe, afterCommit, onDenied, signOut: () => {} });
+    },
+    get _db() {
+      return db;
     },
     onChange(cb) {
       listeners.add(cb);

@@ -1,10 +1,15 @@
 // Demo / local mode: everything lives in this browser's localStorage.
 import { seedData, houseExample } from '../lib/seed.js';
+import { codeHash, guardNext, toMillis, randomToken, CLAIM_DAYS, grantId } from '../lib/access.js';
 
 const KEY = 'panelbuddy:data:v1';
 const PHOTO = 'panelbuddy:photo:';
 const COLS = ['homes', 'panels', 'breakers', 'devices', 'customers'];
 const SHARE = 'panelbuddy:share:';
+const HIST = 'panelbuddy:history';
+const GRANTS = 'panelbuddy:grants';
+const jget = (k) => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch { return null; } };
+const jset = (k, v) => localStorage.setItem(k, JSON.stringify(v));
 
 export function createLocalStore() {
   let data = null;
@@ -88,6 +93,139 @@ export function createLocalStore() {
     async createShare(token, payload, panelIds = []) {
       localStorage.setItem(SHARE + token, JSON.stringify({ ...payload, updatedAt: Date.now() }));
       for (const pid of panelIds) localStorage.setItem('panelbuddy:sharedPanel:' + pid, token);
+    },
+    // ---- edit codes, history, hand-off: the demo keeps them in this browser, same shapes as the cloud
+    async getEditCode(token) {
+      return jget('panelbuddy:editcode:' + token);
+    },
+    async saveEditCode(token, { homeId, code, kind, exp }) {
+      jset('panelbuddy:editcode:' + token, { owner: 'demo', homeId, codeHash: await codeHash(token, code), on: true, kind, exp: exp == null ? null : exp, setAt: Date.now() });
+      localStorage.removeItem('panelbuddy:guard:' + token);
+      if (kind === 'temp') jset('panelbuddy:private:edit_' + homeId, { code, token, exp });
+      else localStorage.removeItem('panelbuddy:private:edit_' + homeId);
+    },
+    async deleteEditCode(token, homeId) {
+      localStorage.removeItem('panelbuddy:editcode:' + token);
+      localStorage.removeItem('panelbuddy:guard:' + token);
+      if (homeId) localStorage.removeItem('panelbuddy:private:edit_' + homeId);
+    },
+    async getPrivate(key) {
+      return jget('panelbuddy:private:' + key);
+    },
+    async getGuard(token) {
+      return jget('panelbuddy:guard:' + token);
+    },
+    async clearGuard(token) {
+      localStorage.removeItem('panelbuddy:guard:' + token);
+    },
+    // one code attempt, counted like the cloud lockout; resolves the hash or throws ampmap/locked
+    async demoTry(token, code) {
+      const g = jget('panelbuddy:guard:' + token);
+      const plan = guardNext(g);
+      if (plan.locked) throw Object.assign(new Error('locked'), { code: 'ampmap/locked', until: plan.until });
+      jset('panelbuddy:guard:' + token, { n: plan.n, since: plan.newWindow ? Date.now() : g.since, last: Date.now() });
+      return codeHash(token, code);
+    },
+    async demoEnter(token, code) {
+      const share = jget(SHARE + token);
+      if (!share) throw Object.assign(new Error('gone'), { code: 'ampmap/gone' });
+      const hash = await this.demoTry(token, code);
+      const left = Math.max(0, 10 - ((jget('panelbuddy:guard:' + token) || {}).n || 0));
+      const c = jget('panelbuddy:editcode:' + token);
+      const exp = c && toMillis(c.exp);
+      if (!c || !c.on || (exp != null && exp <= Date.now()) || c.codeHash !== hash || c.homeId !== share.homeId) throw Object.assign(new Error('wrong'), { code: 'ampmap/wrong', left });
+      return { ownerUid: 'demo', homeId: c.homeId, editorUid: 'demo-guest', hash };
+    },
+    demoCodeStillValid(token, hash) {
+      const c = jget('panelbuddy:editcode:' + token);
+      const exp = c && toMillis(c.exp);
+      return !!c && c.on && (exp == null || exp > Date.now()) && c.codeHash === hash;
+    },
+    async listHistory(homeId) {
+      return (jget(HIST) || []).filter((e) => e.homeId === homeId).sort((a, b) => b.at - a.at);
+    },
+    async markUndone(id) {
+      jset(HIST, (jget(HIST) || []).map((e) => (e.id === id ? { ...e, undoneAt: Date.now() } : e)));
+    },
+    addHistory(entry) {
+      jset(HIST, [entry, ...(jget(HIST) || [])].slice(0, 300));
+    },
+    async listGrants(homeId) {
+      return (jget(GRANTS) || []).filter((g) => g.homeId === homeId);
+    },
+    async listMyGrants() {
+      return [];
+    },
+    async removeGrant(id) {
+      jset(GRANTS, (jget(GRANTS) || []).filter((g) => g.id !== id));
+    },
+    async createClaim(homeId, code, { homeName = '', fromName = '' } = {}) {
+      const claimId = randomToken();
+      const exp = Date.now() + CLAIM_DAYS * 86400000;
+      jset('panelbuddy:claim:' + claimId, { from: 'demo', homeId, codeHash: await codeHash(claimId, code), exp, homeName, fromName, at: Date.now() });
+      jset('panelbuddy:private:claim_' + homeId, { code, claimId, exp });
+      return { claimId, exp };
+    },
+    async listClaims(homeId) {
+      return Object.keys(localStorage).filter((k) => k.startsWith('panelbuddy:claim:')).map((k) => ({ ...jget(k), id: k.slice('panelbuddy:claim:'.length) })).filter((c) => c.homeId === homeId);
+    },
+    async cancelClaim(claimId, homeId) {
+      localStorage.removeItem('panelbuddy:claim:' + claimId);
+      localStorage.removeItem('panelbuddy:guard:' + claimId);
+      localStorage.removeItem('panelbuddy:private:claim_' + homeId);
+    },
+    // Demo hand-off: there's only this browser, so the home stays here; it just stops
+    // being the installer's customer job, and the code is used up.
+    async claimHome(claimId, code, { keepInstaller = true } = {}) {
+      const claim = jget('panelbuddy:claim:' + claimId);
+      const hash = await this.demoTry(claimId, code);
+      if (!claim || claim.codeHash !== hash) throw Object.assign(new Error('wrong'), { code: 'ampmap/wrong' });
+      if (toMillis(claim.exp) <= Date.now()) throw Object.assign(new Error('expired'), { code: 'ampmap/expired' });
+      const home = data.homes.find((h) => h.id === claim.homeId);
+      if (!home) throw Object.assign(new Error('gone'), { code: 'ampmap/gone' });
+      const { customerId: _c, ...rest } = home;
+      void _c;
+      await this.put('homes', { ...rest, claimedAt: Date.now() });
+      if (home.shareToken) await this.deleteEditCode(home.shareToken, claim.homeId);
+      if (keepInstaller) jset(GRANTS, [...(jget(GRANTS) || []).filter((g) => g.homeId !== claim.homeId), { id: grantId('demo-owner', claim.homeId, 'installer'), owner: 'demo-owner', homeId: claim.homeId, editor: 'installer', editorName: claim.fromName || 'Installer', homeName: home.name, at: Date.now() }]);
+      await this.cancelClaim(claimId, claim.homeId);
+      return { homeId: claim.homeId, fromName: claim.fromName || '', homeName: home.name };
+    },
+    // the demo guest editor reads/writes this browser's data, one home only
+    localBackend(homeId) {
+      const self = this;
+      return {
+        subscribe(onData) {
+          const send = () => onData({
+            home: data.homes.find((h) => h.id === homeId) || null,
+            panels: data.panels.filter((x) => x.homeId === homeId),
+            breakers: data.breakers.filter((x) => x.homeId === homeId),
+            devices: data.devices.filter((x) => x.homeId === homeId),
+          });
+          setTimeout(send, 0);
+          listeners.add(send);
+          return () => listeners.delete(send);
+        },
+        async commit(changes, entry) {
+          for (const c of changes) {
+            if (c.after) await self.put(c.col, c.after);
+            else await self.remove(c.col, c.id);
+          }
+          self.addHistory(entry);
+        },
+        async getPhoto(id) {
+          return localStorage.getItem(PHOTO + id) || null;
+        },
+        async lookupPanelShare(panelId) {
+          return localStorage.getItem('panelbuddy:sharedPanel:' + panelId);
+        },
+        async getShare(token) {
+          return jget(SHARE + token);
+        },
+        async refreshShare(token, payload) {
+          localStorage.setItem(SHARE + token, JSON.stringify({ ...payload, updatedAt: Date.now() }));
+        },
+      };
     },
     async lookupPanelShare(panelId) {
       return localStorage.getItem('panelbuddy:sharedPanel:' + panelId);

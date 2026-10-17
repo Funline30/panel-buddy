@@ -21,10 +21,22 @@
 
 // AmpMap - Firestore security rules.
 // Each signed-in user can read and write ONLY their own data under users/{their uid}/.
-// Nobody (signed in or not) can read anyone else&#x27;s data.
-// Exception: shares/{token} - a read-only panel directory snapshot the owner chose to
-// share. Anyone holding the (random, 24+ character) link can open that one document;
-// nobody can list or search shares, and only the owner can change or delete it.
+// Nobody (signed in or not) can read anyone else&#x27;s data, with these exceptions:
+//  * shares/{token} - a read-only panel directory snapshot the owner chose to share. Anyone
+//    holding the (random, 24+ character) link can open that one document; nobody can list
+//    or search shares, and only the owner (or an editor, below) can change it.
+//  * Edit codes - the homeowner can let an electrician edit ONE home&#x27;s panels, breakers and
+//    outlets with a code. The code itself is never stored: editCodes/{token} keeps only a
+//    SHA-256 hash and nobody but the owner can read that document. An electrician proves
+//    the code by writing their own hash into codeSessions/{their uid}; every attempt also
+//    bumps codeGuards/{token}, which allows at most 10 tries per hour per link (lockout).
+//    Rules compare the two hashes on every read/write, so changing or turning off the
+//    code ends every electrician&#x27;s access at once.
+//  * Homeowner hand-off - an installer can hand a home to its owner with a one-time setup
+//    code (claims/{id}, hashed the same way, same lockout). The person who proves it can
+//    copy that home into their own account and remove it from the installer&#x27;s.
+//  * grants/{owner_home_editor} - the homeowner can let a signed-in person (e.g. the
+//    installer) keep editing that home until the homeowner removes them.
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -37,16 +49,76 @@ service cloud.firestore {
     }
 
     function knownCollection(col) {
-      return col in [&#x27;homes&#x27;, &#x27;panels&#x27;, &#x27;breakers&#x27;, &#x27;devices&#x27;, &#x27;photos&#x27;, &#x27;customers&#x27;, &#x27;settings&#x27;];
+      return col in [&#x27;homes&#x27;, &#x27;panels&#x27;, &#x27;breakers&#x27;, &#x27;devices&#x27;, &#x27;photos&#x27;, &#x27;customers&#x27;, &#x27;settings&#x27;, &#x27;history&#x27;];
+    }
+
+    function hash64(v) {
+      return v is string &amp;&amp; v.size() == 64;
+    }
+
+    // ---- edit codes / hand-off helpers
+    // An editor with a valid edit code for this owner&#x27;s home.
+    function codeEditor(uid, homeId) {
+      let s = get(/databases/$(database)/documents/codeSessions/$(request.auth.uid)).data;
+      let c = get(/databases/$(database)/documents/editCodes/$(s.token)).data;
+      return c.owner == uid &amp;&amp; c.homeId == homeId &amp;&amp; c.on == true
+        &amp;&amp; (c.exp == null || request.time &lt; c.exp)
+        &amp;&amp; s.codeHash == c.codeHash;
+    }
+
+    // A signed-in person the homeowner gave edit access to (People with access).
+    function grantEditor(uid, homeId) {
+      return exists(/databases/$(database)/documents/grants/$(uid + &#x27;_&#x27; + homeId + &#x27;_&#x27; + request.auth.uid));
+    }
+
+    function editorOf(uid, homeId) {
+      return signedIn() &amp;&amp; homeId is string
+        &amp;&amp; (grantEditor(uid, homeId) || codeEditor(uid, homeId));
+    }
+
+    // A signed-in (not anonymous) person who proved this home&#x27;s hand-off code.
+    function claimer(fromUid, homeId) {
+      let s = get(/databases/$(database)/documents/codeSessions/$(request.auth.uid)).data;
+      let c = get(/databases/$(database)/documents/claims/$(s.token)).data;
+      return signedIn()
+        &amp;&amp; request.auth.token.firebase.sign_in_provider != &#x27;anonymous&#x27;
+        &amp;&amp; homeId is string
+        &amp;&amp; c.from == fromUid &amp;&amp; c.homeId == homeId
+        &amp;&amp; request.time &lt; c.exp
+        &amp;&amp; s.codeHash == c.codeHash;
+    }
+
+    function shareDoc(token) {
+      return get(/databases/$(database)/documents/shares/$(token)).data;
     }
 
     match /users/{uid}/{col}/{docId} {
+      // the owner
       allow read, delete: if isOwner(uid) &amp;&amp; knownCollection(col);
       allow create, update: if isOwner(uid)
         &amp;&amp; knownCollection(col)
         &amp;&amp; (col != &#x27;photos&#x27;
             || (request.resource.data.data is string
                 &amp;&amp; request.resource.data.data.size() &lt; 900000));
+
+      // editors (edit code or People with access): one home&#x27;s panels, breakers, outlets
+      allow get: if col == &#x27;homes&#x27; &amp;&amp; editorOf(uid, docId);
+      allow read: if col in [&#x27;panels&#x27;, &#x27;breakers&#x27;, &#x27;devices&#x27;] &amp;&amp; editorOf(uid, resource.data.homeId);
+      allow create: if col in [&#x27;breakers&#x27;, &#x27;devices&#x27;] &amp;&amp; editorOf(uid, request.resource.data.homeId);
+      allow update: if col in [&#x27;panels&#x27;, &#x27;breakers&#x27;, &#x27;devices&#x27;]
+        &amp;&amp; editorOf(uid, resource.data.homeId)
+        &amp;&amp; request.resource.data.homeId == resource.data.homeId;
+      allow delete: if col in [&#x27;breakers&#x27;, &#x27;devices&#x27;] &amp;&amp; editorOf(uid, resource.data.homeId);
+      // every editor change is logged for the homeowner (create only; only the owner can change history)
+      allow create: if col == &#x27;history&#x27;
+        &amp;&amp; editorOf(uid, request.resource.data.homeId)
+        &amp;&amp; request.resource.data.uid == request.auth.uid
+        &amp;&amp; request.resource.data.by is string
+        &amp;&amp; request.resource.data.by.size() &lt;= 80;
+
+      // hand-off: the new owner copies this home into their account, then removes it here
+      allow get, delete: if col == &#x27;homes&#x27; &amp;&amp; claimer(uid, docId);
+      allow read, delete: if col in [&#x27;panels&#x27;, &#x27;breakers&#x27;, &#x27;devices&#x27;, &#x27;photos&#x27;] &amp;&amp; claimer(uid, resource.data.homeId);
     }
 
     match /shares/{token} {
@@ -59,6 +131,14 @@ service cloud.firestore {
         &amp;&amp; resource.data.owner == request.auth.uid
         &amp;&amp; request.resource.data.owner == request.auth.uid;
       allow delete: if signedIn() &amp;&amp; resource.data.owner == request.auth.uid;
+      // an editor refreshes the read-only copy after their changes
+      allow update: if editorOf(resource.data.owner, resource.data.homeId)
+        &amp;&amp; request.resource.data.owner == resource.data.owner
+        &amp;&amp; request.resource.data.homeId == resource.data.homeId;
+      // hand-off: the new owner takes the share link over (same link, same QR stickers)
+      allow update: if claimer(resource.data.owner, resource.data.homeId)
+        &amp;&amp; request.resource.data.owner == request.auth.uid
+        &amp;&amp; request.resource.data.homeId == resource.data.homeId;
     }
 
     // Lets someone who scans a panel&#x27;s QR sticker find that panel&#x27;s share link
@@ -71,6 +151,131 @@ service cloud.firestore {
         &amp;&amp; resource.data.owner == request.auth.uid
         &amp;&amp; request.resource.data.owner == request.auth.uid;
       allow delete: if signedIn() &amp;&amp; resource.data.owner == request.auth.uid;
+      // hand-off: the new owner takes it over
+      allow update: if claimer(resource.data.owner, resource.data.homeId)
+        &amp;&amp; request.resource.data.owner == request.auth.uid
+        &amp;&amp; request.resource.data.token == resource.data.token
+        &amp;&amp; request.resource.data.homeId == resource.data.homeId;
+    }
+
+    // Edit code for one shared home: owner-only. Holds a SHA-256 hash, never the code.
+    // Whoever owns the share link owns its edit code (so it follows a hand-off).
+    match /editCodes/{token} {
+      allow get: if signedIn()
+        &amp;&amp; (resource == null
+            || resource.data.owner == request.auth.uid
+            || shareDoc(token).owner == request.auth.uid);
+      allow list: if false;
+      allow create, update: if signedIn()
+        &amp;&amp; shareDoc(token).owner == request.auth.uid
+        &amp;&amp; request.resource.data.owner == request.auth.uid
+        &amp;&amp; request.resource.data.homeId == shareDoc(token).homeId
+        &amp;&amp; hash64(request.resource.data.codeHash)
+        &amp;&amp; request.resource.data.on is bool
+        &amp;&amp; (request.resource.data.get(&#x27;exp&#x27;, null) == null || request.resource.data.exp is timestamp);
+      allow delete: if signedIn()
+        &amp;&amp; (resource.data.owner == request.auth.uid || shareDoc(token).owner == request.auth.uid);
+    }
+
+    // One code attempt per write: {token, codeHash, name, at}. Only its own user can see it.
+    // Each write must bump codeGuards/{token} in the same batch (see below).
+    match /codeSessions/{uid} {
+      allow get, delete: if isOwner(uid);
+      allow create, update: if isOwner(uid)
+        &amp;&amp; request.resource.data.keys().hasOnly([&#x27;token&#x27;, &#x27;codeHash&#x27;, &#x27;name&#x27;, &#x27;at&#x27;])
+        &amp;&amp; request.resource.data.token is string
+        &amp;&amp; request.resource.data.token.size() &gt;= 24
+        &amp;&amp; request.resource.data.token.size() &lt;= 64
+        &amp;&amp; hash64(request.resource.data.codeHash)
+        &amp;&amp; request.resource.data.name is string
+        &amp;&amp; request.resource.data.name.size() &lt;= 80
+        &amp;&amp; request.resource.data.at == request.time
+        &amp;&amp; getAfter(/databases/$(database)/documents/codeGuards/$(request.resource.data.token)).data.last == request.time;
+    }
+
+    // Wrong-code lockout: at most 10 attempts per link per hour, for everyone together.
+    function pairedTry(token) {
+      let s = getAfter(/databases/$(database)/documents/codeSessions/$(request.auth.uid)).data;
+      return s.token == token &amp;&amp; s.at == request.time;
+    }
+    match /codeGuards/{token} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if signedIn()
+        &amp;&amp; request.resource.data.keys().hasOnly([&#x27;n&#x27;, &#x27;since&#x27;, &#x27;last&#x27;])
+        &amp;&amp; request.resource.data.n == 1
+        &amp;&amp; request.resource.data.since == request.time
+        &amp;&amp; request.resource.data.last == request.time
+        &amp;&amp; pairedTry(token);
+      allow update: if signedIn()
+        &amp;&amp; request.resource.data.keys().hasOnly([&#x27;n&#x27;, &#x27;since&#x27;, &#x27;last&#x27;])
+        &amp;&amp; request.resource.data.last == request.time
+        &amp;&amp; pairedTry(token)
+        &amp;&amp; ((request.time &lt; resource.data.since + duration.value(1, &#x27;h&#x27;)
+             &amp;&amp; resource.data.n &lt; 10
+             &amp;&amp; request.resource.data.n == resource.data.n + 1
+             &amp;&amp; request.resource.data.since == resource.data.since)
+            || (request.time &gt;= resource.data.since + duration.value(1, &#x27;h&#x27;)
+             &amp;&amp; request.resource.data.n == 1
+             &amp;&amp; request.resource.data.since == request.time));
+      // the owner of the code (or hand-off) can clear a lockout
+      allow delete: if signedIn()
+        &amp;&amp; ((exists(/databases/$(database)/documents/editCodes/$(token))
+             &amp;&amp; get(/databases/$(database)/documents/editCodes/$(token)).data.owner == request.auth.uid)
+            || (exists(/databases/$(database)/documents/claims/$(token))
+             &amp;&amp; get(/databases/$(database)/documents/claims/$(token)).data.from == request.auth.uid));
+    }
+
+    // Homeowner hand-off: one-time setup code (hashed), made by the installer, 31 days max.
+    match /claims/{claimId} {
+      allow get: if signedIn()
+        &amp;&amp; (resource == null
+            || resource.data.from == request.auth.uid
+            || claimer(resource.data.from, resource.data.homeId));
+      allow list: if signedIn() &amp;&amp; resource.data.from == request.auth.uid;
+      allow create: if signedIn()
+        &amp;&amp; claimId.size() &gt;= 24
+        &amp;&amp; request.resource.data.from == request.auth.uid
+        &amp;&amp; request.resource.data.homeId is string
+        &amp;&amp; exists(/databases/$(database)/documents/users/$(request.auth.uid)/homes/$(request.resource.data.homeId))
+        &amp;&amp; hash64(request.resource.data.codeHash)
+        &amp;&amp; request.resource.data.exp is timestamp
+        &amp;&amp; request.resource.data.exp &lt; request.time + duration.value(31, &#x27;d&#x27;);
+      allow update: if signedIn()
+        &amp;&amp; resource.data.from == request.auth.uid
+        &amp;&amp; request.resource.data.from == request.auth.uid
+        &amp;&amp; request.resource.data.homeId == resource.data.homeId
+        &amp;&amp; hash64(request.resource.data.codeHash)
+        &amp;&amp; request.resource.data.exp is timestamp
+        &amp;&amp; request.resource.data.exp &lt; request.time + duration.value(31, &#x27;d&#x27;);
+      // single use: the installer can cancel it; the new owner deletes it when the hand-off is done
+      allow delete: if signedIn()
+        &amp;&amp; (resource.data.from == request.auth.uid
+            || claimer(resource.data.from, resource.data.homeId));
+    }
+
+    // People with access: id is {owner}_{homeId}_{editor}.
+    match /grants/{grantId} {
+      allow get: if signedIn()
+        &amp;&amp; (resource == null
+            || resource.data.owner == request.auth.uid
+            || resource.data.editor == request.auth.uid);
+      allow list: if signedIn()
+        &amp;&amp; (resource.data.owner == request.auth.uid || resource.data.editor == request.auth.uid);
+      allow create: if signedIn()
+        &amp;&amp; request.resource.data.owner == request.auth.uid
+        &amp;&amp; request.resource.data.homeId is string
+        &amp;&amp; request.resource.data.editor is string
+        &amp;&amp; request.resource.data.editor != request.auth.uid
+        &amp;&amp; grantId == request.resource.data.owner + &#x27;_&#x27; + request.resource.data.homeId + &#x27;_&#x27; + request.resource.data.editor
+        &amp;&amp; existsAfter(/databases/$(database)/documents/users/$(request.auth.uid)/homes/$(request.resource.data.homeId));
+      allow update: if signedIn()
+        &amp;&amp; resource.data.owner == request.auth.uid
+        &amp;&amp; request.resource.data.owner == resource.data.owner
+        &amp;&amp; request.resource.data.homeId == resource.data.homeId
+        &amp;&amp; request.resource.data.editor == resource.data.editor;
+      allow delete: if signedIn()
+        &amp;&amp; (resource.data.owner == request.auth.uid || resource.data.editor == request.auth.uid);
     }
 
     // Everything else is closed.
