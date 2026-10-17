@@ -95,6 +95,7 @@ jobs:
       - name: Simulator screenshots
         if: github.event_name == 'push' || inputs.screenshots
         continue-on-error: true
+        timeout-minutes: 8
         run: |
           APP=build/Build/Products/Debug-iphonesimulator/App.app
           DEVICE=$(xcrun simctl list devices available -j | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; c=[x for r,v in d.items() if 'iOS' in r for x in v if x['name'].startswith('iPhone') and 'Pro' in x['name'] and 'Max' not in x['name']]; c=c or [x for r,v in d.items() if 'iOS' in r for x in v if x['name'].startswith('iPhone')]; print(c[-1]['udid'])")

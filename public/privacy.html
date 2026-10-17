@@ -25,15 +25,15 @@
 <main>
   <a class="back" href="/">&larr; Back to AmpMap</a>
   <h1>&#9889; AmpMap Privacy Policy</h1>
-  <p class="muted">Effective date: October 13, 2026</p>
+  <p class="muted">Effective date: October 17, 2026</p>
 
   <section>
-    <p>AmpMap is a free app for mapping breaker panels, outlets, lights and circuit loads. It has no ads and no tracking or analytics. This page explains what the app stores, where it is stored, and what you can do about it.</p>
+    <p>AmpMap is a free app for mapping breaker panels, outlets, lights and circuit loads. It has no ads and no tracking or analytics. This policy covers the AmpMap website (panel-buddy.vercel.app) and the AmpMap iPhone app, which work the same way and use the same account. This page explains what the app stores, where it is stored, and what you can do about it.</p>
   </section>
 
   <section>
     <h2>Demo mode (no account)</h2>
-    <p>If you use AmpMap without signing in, everything you enter (homes, panels, breakers, outlets, photos and settings) is saved only in your own browser's local storage on that device. It is not sent to us. Clearing your browser data or tapping "Reset demo" deletes it.</p>
+    <p>If you use AmpMap without signing in, everything you enter (homes, panels, breakers, outlets, photos and settings) is saved only on that device (your browser's local storage, or the iPhone app's own storage). It is not sent to us. Clearing your browser data, deleting the app, or tapping "Reset demo" deletes it.</p>
   </section>
 
   <section>
@@ -42,7 +42,7 @@
       <li><b>Sign-in:</b> accounts use email and password through Google Firebase Authentication. We see your email address; your password is handled by Firebase and is never visible to us. Firebase may send you emails we trigger, such as password resets.</li>
       <li><b>Your records:</b> homes, panels, breakers, outlets/devices, loads, notes, optional addresses, optional photos (shrunk to a small image on your device before upload) and app settings are stored in Google Cloud Firestore under your account.</li>
       <li><b>Tech / Pro mode:</b> if you add customers, their name, phone, email, notes and service history are stored the same way, under your account. You are responsible for having permission to store your customers' information.</li>
-      <li><b>Who can see it:</b> only you, when signed in. Our database rules block every other account from reading your data.</li>
+      <li><b>Who can see it:</b> only you, when signed in, plus anyone you choose to let in. Our database rules block every other account from reading your data. If you give someone an edit code, or add them under People with access, they can see and edit that one home until you turn the code off or remove them; their changes are logged for you.</li>
     </ul>
   </section>
 
@@ -53,14 +53,16 @@
   </section>
 
   <section>
-    <h2>Camera</h2>
-    <p>The camera is used only when you tap Scan or add a photo. QR codes are decoded on your device. Video from the scanner is not uploaded or saved.</p>
+    <h2>Camera and photos</h2>
+    <p>The camera and your photo library are used only when you tap Scan, add a photo, or scan a panel label, and on iPhone only after you allow it. QR codes are decoded on your device; video from the scanner is not uploaded or saved.</p>
+    <p><b>Scan the panel label:</b> the text on your label photo is read on your device. The free reading engine is downloaded from a public code server (jsDelivr) the first time you use it, which is why it needs internet; your photo is not sent there. If you save the result, the label photo is kept with that panel like any other photo you add.</p>
   </section>
 
   <section>
     <h2>Services we use</h2>
     <ul>
       <li><b>Google Firebase</b> (Authentication and Cloud Firestore) to run accounts and sync your data. Google processes this data under its own terms and privacy policy.</li>
+      <li><b>Apple</b>, if you use the iPhone app: downloads, updates and any crash reports you choose to share with developers are handled by Apple under its own privacy policy. The app itself has no analytics.</li>
       <li><b>Vercel</b> to host the website. Like any web host, it may keep standard server logs (such as IP address, browser type and pages requested) for security and operations.</li>
     </ul>
     <p>We do not sell your data, share it with advertisers, or use it for anything other than running the app.</p>
@@ -70,8 +72,8 @@
     <h2>Your choices</h2>
     <ul>
       <li>Edit or delete any home, panel, breaker, device, photo or customer in the app at any time.</li>
-      <li>Download a copy of your data from <b>More &rarr; Download backup</b> (JSON) or the CSV exports.</li>
-      <li>To delete your account and all of its data, email us at the address below from the email on your account. We will delete it and confirm.</li>
+      <li>Download a copy of your data from <b>More &rarr; Download backup</b> (JSON) or the CSV exports (on iPhone these open the share sheet so you can save or send the file).</li>
+      <li><b>Delete your account</b> in the app: <b>More &rarr; Delete my account</b> (website or iPhone app). It permanently deletes your account and all of its data: homes, panels, breakers, devices, photos, customers, history, share links, edit codes and access you gave or received. You can also email us at the address below from the email on your account, and we will delete it and confirm.</li>
     </ul>
   </section>
 
