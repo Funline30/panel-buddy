@@ -892,3 +892,29 @@ select.full { margin-top: 0; }
 .ow-side.open, .ow-side.part { border-color: var(--accent); color: var(--accent); border-style: dashed; }
 .ow-side.open small, .ow-side.part small { color: var(--accent); }
 .ow-exact .dr-lbl { min-width: 78px; }
+
+/* ---- wire (optional): what feeds each circuit / outlet ---- */
+.wire-box { border: 1px solid var(--line); border-radius: 14px; padding: 4px 14px 10px; margin: 16px 0 12px; min-width: 0; background: var(--card-2); }
+.wire-box legend { font-weight: 700; font-size: 0.95rem; color: var(--ink); padding: 0 6px; margin-left: -6px; }
+.opt-tag { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 2px 7px; vertical-align: 2px; margin-left: 4px; }
+.wire-hint { margin: 6px 0 2px; }
+.seg-pick { display: flex; gap: 6px; margin: 10px 0 4px; }
+.wire-inherit { margin: 10px 0 4px; font-size: 0.9rem; color: var(--ink-2); line-height: 1.4; }
+.wire-sum { margin: 4px 0 0; font-weight: 700; font-size: 0.92rem; color: var(--ink); }
+.wire-ic { color: var(--accent); font-weight: 800; }
+.wire-check { background: var(--warn-bg); color: var(--warn-ink); border-radius: 12px; padding: 10px 12px; margin: 10px 0 0; font-size: 0.9rem; font-weight: 600; }
+.wire-check p { margin: 0; }
+.wire-check p + p { margin-top: 4px; }
+.wire-check .muted { color: inherit; opacity: 0.8; font-weight: 500; }
+.wire-check.small { padding: 8px 10px; font-size: 0.82rem; margin: 6px 0 8px; }
+.wire-line { display: flex; align-items: center; gap: 12px; }
+.wire-line .row-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.wire-line .row-main .muted { font-size: 0.86rem; }
+.wire-chip { flex: none; min-width: 52px; height: 40px; padding: 0 8px; display: inline-flex; align-items: center; justify-content: center; border-radius: 10px; background: var(--accent-soft); color: var(--accent); font-weight: 800; font-size: 0.95rem; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.wire-chip.sm { min-width: 44px; height: 32px; font-size: 0.82rem; border-radius: 8px; }
+.wire-note { margin: 10px 0 0; padding: 8px 10px; border-left: 3px solid var(--line-2); color: var(--ink-2); font-size: 0.9rem; }
+.wire-own { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 8px; }
+.wire-own .list { margin: 4px 0 0; }
+.wire-inh-note { margin: 10px 0 0; }
+.pill.wire { background: var(--accent-soft); color: var(--accent); }
+.dir-table .wt { font-size: 0.85em; font-weight: 700; color: #1d4ed8; white-space: nowrap; }

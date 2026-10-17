@@ -12,7 +12,7 @@ import { shoppingList, shoppingCsv, lineText } from './lib/shopping.js';
 import { layoutOf, panelSpaces, slotsFor, slotLabel, numberingOf, overlaps, occupancy, halfRows, positionLabel, positionSlot, groupPlan, directoryRows, breakerType, sizeOf, keysFor, planFor, snapSlot, coversText, findClash, clashText, stickerText, isTwoPole } from './lib/panel.js';
 import { seedPro } from './lib/seed.js';
 import { LOAD_PRESETS, PRESET_NOTE } from './lib/presets.js';
-import { loadSummary, levelText, fmtAmps, shoreSummary, deviceWatts, voltsFor, isOn, readings, loadReading, deviceReading, projectLoad, NOW_HOURS } from './lib/load.js';
+import { loadSummary, levelText, fmtAmps, shoreSummary, deviceWatts, voltsFor, breakerAmps, isOn, readings, loadReading, deviceReading, projectLoad, NOW_HOURS } from './lib/load.js';
 import { USE_OPTIONS, habitOf, useLabel, HABIT_NOTE, guessHabit } from './lib/habits.js';
 import { loadRef, parseRef, loadAt, toggleLoad, setAllOn, moveLoad, setPortable, portablesOf, loadWatts, PORTABLE_SUGGESTIONS, setNow, clearNow, nowState, updateLoad } from './lib/onoff.js';
 import { THEME_OPTIONS, getThemePref, setThemePref, applyTheme } from './lib/theme.js';
@@ -22,6 +22,7 @@ import { searchHome, searchCatalog, lookupUrl, projectedPct, wattsFromAmps } fro
 import { uid, esc, ampsText, sortBreakers, download } from './lib/util.js';
 import { breakersCsv, devicesCsv, fusesCsv } from './lib/csv.js';
 import { compressPhoto } from './lib/photo.js';
+import { WIRE_SIZES, WIRE_TYPES, WIRE_CONDUCTORS, WIRE_COLORS, JACKET_SIZE, WIRE_GUIDANCE, cleanWire, wireFromForm, wireText, wireTag, effectiveWire, wireChecks, sizeText, typeText, condText, colorText, cableText } from './lib/wire.js';
 import { buildHouseMap, outletsOnBreaker, NO_ROOM, roomSort } from './lib/housemap.js';
 import { planBulk, BULK_TYPES, partsOf } from './lib/bulk.js';
 import { planOf, planToSave, clampRoom, moveRoom, resizeRoom, resizePlan, roomAt, snapPin, inBounds, pinKind, PIN_KINDS, kindFields, splitPlaced, pinsByBreaker, roomsOnBreaker, newRoomSpot, TEMPLATES, applyTemplate, floorOfPos, swapRooms, movePins, resizeCorner, rotateRoom, overlapping, shapeOf, bboxOf, cleanPts, validShape, moveCorner, addCorner, removeCorner, moveEdge, presetShape, roomsOutside, fitRoomsToShape, normalizeShape, polyArea, outlineFromRooms, withAutoOutline, growArea, clearPlan, planHasDrawing, fmtFtIn, ftInParts, setRoomSize, snapToRooms, rectPts, pointInPoly } from './lib/floorplan.js';
@@ -35,11 +36,12 @@ let store;
 let pendingRoute = null;
 
 // Printed / shared directory rows. Each circuit number (or tandem half) gets its own entry.
-function dirRowsHtml(panel, breakers) {
+function dirRowsHtml(panel, breakers, { wire = false } = {}) {
   const one = layoutOf(panel) === 'one';
   const half = numberingOf(panel) === 'half';
   const amps = (b) => esc(ampsText(b));
-  const rm = (b) => ((b.rooms || []).length && !(b.label || '').toLowerCase().includes(String(b.rooms[0]).toLowerCase()) ? ` <span class="rm">(${esc(b.rooms.join(', '))})</span>` : '');
+  const rm0 = (b) => ((b.rooms || []).length && !(b.label || '').toLowerCase().includes(String(b.rooms[0]).toLowerCase()) ? ` <span class="rm">(${esc(b.rooms.join(', '))})</span>` : '');
+  const rm = (b) => rm0(b) + (wire && wireTag(b.wire) ? ` <span class="wt">${esc(wireTag(b.wire))}</span>` : '');
   const cell = (c) => {
     if (!c.items.length) return `<td class="n">${esc(c.num)}</td><td class="a"></td><td class="l"></td>`;
     if (c.items.length === 1) {
@@ -106,6 +108,96 @@ const opt = (list, value) =>
       return `<option value="${esc(v)}" ${String(v) === String(value) ? 'selected' : ''}>${esc(l)}</option>`;
     })
     .join('');
+// ---------------------------------------------------------------- wire (optional)
+// breaker.wire = the circuit's wire; device.wire = a different wire at one outlet.
+// Missing = not recorded. Checks are gentle, informational, never block saving.
+function wireChecksHtml(w, amps, cls = '') {
+  const list = wireChecks(w, amps);
+  if (!list.length) return '';
+  return `<div class="wire-check ${cls}" role="note">${list.map((c) => `<p>⚠️ ${esc(c.text)}</p>`).join('')}<p class="muted tiny">${esc(WIRE_GUIDANCE)}</p></div>`;
+}
+// The facts grid for one wire (size, type, conductors, jacket, note).
+function wireFactsHtml(w) {
+  w = cleanWire(w);
+  if (!w) return '';
+  const rows = [
+    ['Cable', cableText(w)],
+    ['Size', sizeText(w)],
+    ['Type', typeText(w)],
+    ['Conductors', condText(w)],
+    ['Jacket', colorText(w)],
+    ['Note', w.note || ''],
+  ].filter(([, v]) => v);
+  return `<dl class="facts wire-facts">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`;
+}
+function wireFieldsHtml(w, { legend = 'Wire', hint = '', top = '', hide = false } = {}) {
+  w = cleanWire(w) || {};
+  const oth = (k) => (w[k] === 'other' ? '' : 'hidden');
+  return `<fieldset class="wire-box" id="wireBox"><legend>${legend} <span class="opt-tag">optional</span></legend>
+    ${hint ? `<p class="muted tiny wire-hint">${hint}</p>` : ''}${top}
+    <div class="wire-fields" id="wireFields" ${hide ? 'hidden' : ''}>
+    <div class="two">
+      <label>Wire size<select name="wsize" data-other="wsizeOther">${opt(WIRE_SIZES, w.size || '')}</select></label>
+      <label>Type<select name="wtype" data-other="wtypeOther">${opt(WIRE_TYPES, w.type || '')}</select></label>
+    </div>
+    <label class="other-field" ${oth('size')}>Wire size (type it)<input name="wsizeOther" value="${esc(w.sizeOther || '')}" placeholder="e.g. 4 AWG, 2/0 AL"></label>
+    <label class="other-field" ${oth('type')}>Wire type (type it)<input name="wtypeOther" value="${esc(w.typeOther || '')}" placeholder="e.g. SER, knob &amp; tube"></label>
+    <div class="two">
+      <label>Conductors<select name="wcond" data-other="wcondOther">${opt(WIRE_CONDUCTORS, w.cond || '')}</select></label>
+      <label>Jacket color<select name="wcolor">${opt(WIRE_COLORS, w.color || '')}</select></label>
+    </div>
+    <label class="other-field" ${oth('cond')}>Conductors (type it)<input name="wcondOther" value="${esc(w.condOther || '')}" placeholder="e.g. 4 wires + ground"></label>
+    <label>Wire note<input name="wnote" value="${esc(w.note || '')}" placeholder="e.g. Shared neutral with #7, ran 2019"></label>
+    <p class="wire-sum" id="wireSum" hidden></p>
+    <div id="wireLive"></div>
+    </div>
+  </fieldset>`;
+}
+// Live summary + gentle check under the wire fields; ampsFn() = the breaker amps to check against.
+function bindWireFields(f, ampsFn) {
+  const sum = f.querySelector('#wireSum');
+  const live = f.querySelector('#wireLive');
+  if (!sum || !live) return () => {};
+  const upd = () => {
+    const w = wireFromForm(Object.fromEntries(new FormData(f).entries()));
+    const txt = wireText(w);
+    sum.hidden = !txt;
+    sum.innerHTML = txt ? `<span class="wire-ic" aria-hidden="true">〰</span> ${esc(txt)}` : '';
+    live.innerHTML = wireChecksHtml(w, ampsFn());
+  };
+  // Romex color code: picking a jacket color fills in a blank size (white 14, yellow 12, orange 10).
+  f.elements.wcolor.addEventListener('change', () => {
+    const s = JACKET_SIZE[f.elements.wcolor.value];
+    if (s && !f.elements.wsize.value && ['', 'nm'].includes(f.elements.wtype.value)) {
+      f.elements.wsize.value = s;
+      toast(`${f.elements.wcolor.value[0].toUpperCase() + f.elements.wcolor.value.slice(1)} Romex is usually ${s} AWG - filled in the size`);
+    }
+  });
+  f.querySelectorAll('[name=wsize],[name=wsizeOther],[name=wtype],[name=wtypeOther],[name=wcond],[name=wcondOther],[name=wcolor],[name=wnote]').forEach((el) => { el.addEventListener('change', upd); el.addEventListener('input', upd); });
+  upd();
+  return upd;
+}
+
+// Wire summary block: "12/2 w/ground" big + "12 AWG · NM-B (Romex) · yellow jacket".
+function wireLineHtml(w) {
+  w = cleanWire(w);
+  if (!w) return '';
+  const head = cableText(w) || sizeText(w) || typeText(w) || condText(w) || 'Wire noted';
+  const rest = [cableText(w) ? sizeText(w) : '', head === typeText(w) ? '' : typeText(w), cableText(w) || head === condText(w) ? '' : condText(w), w.color ? colorText(w) + ' jacket' : ''].filter((x) => x && x !== head);
+  return `<div class="wire-line"><span class="wire-chip" aria-hidden="true">${esc(wireTag(w) || '〰')}</span><span class="row-main"><b>${esc(head)}</b>${rest.length ? `<span class="muted">${esc(rest.join(' · '))}</span>` : ''}</span></div>${w.note ? `<p class="wire-note">${esc(w.note)}</p>` : ''}`;
+}
+function breakerWireCard(homeId, b, devices) {
+  const bw = cleanWire(b.wire);
+  const amps = breakerAmps(b);
+  const own = devices.filter((d) => cleanWire(d.wire));
+  const ownHtml = own.length ? `<div class="wire-own"><p class="muted tiny">${own.length === 1 ? '1 outlet has' : own.length + ' outlets have'} different wire:</p><ul class="list">${own.map((d) => `<li><a class="row" href="#/h/${homeId}/device/${d.id}"><span class="wire-chip sm" aria-hidden="true">${esc(wireTag(d.wire) || '〰')}</span><span class="row-main"><b>${esc(d.name || labelOf(DEVICE_TYPES, d.type))}</b><span class="muted">${esc(wireText(d.wire, { short: true }))}</span></span><span class="chev" aria-hidden="true">›</span></a>${wireChecksHtml(d.wire, amps, 'small')}</li>`).join('')}</ul></div>` : '';
+  return `<div class="card wire-card" id="wire">
+    <div class="card-head"><h3>Wire</h3><a class="btn small" href="#/edit/breakers/${b.id}?home=${homeId}&focus=wire">${bw ? 'Edit' : '+ Add wire'}</a></div>
+    ${bw ? `${wireLineHtml(bw)}${wireChecksHtml(bw, amps)}${devices.length ? `<p class="muted tiny wire-inh-note">Outlets on this breaker use this wire unless one is set differently.</p>` : ''}` : `<p class="muted">Not recorded yet. Add the size and type (like 12/2 Romex) so whoever opens this wall next knows what's in it.</p>`}
+    ${ownHtml}
+  </div>`;
+}
+
 const go = (h) => {
   if (location.hash === h) render();
   else location.hash = h;
@@ -865,13 +957,15 @@ function renderBreaker(homeId, id) {
     <div class="big-slot">${esc(slotText(b))}</div>
     <div class="detail-title">
       <h2>${esc(b.label || 'Unlabeled breaker')}</h2>
-      <p class="muted">${esc(ampsText(b))} · ${esc(breakerTypeText(b))}${b.leg ? ` · Leg ${esc(b.leg)}` : ''}${b.kind && b.kind !== 'standard' ? ` · ${esc(labelOf(BREAKER_KINDS, b.kind))}` : ''}${panel ? ` · ${esc(panel.name)}` : ''}</p>
+      <p class="muted">${esc(ampsText(b))} · ${esc(breakerTypeText(b))}${b.leg ? ` · Leg ${esc(b.leg)}` : ''}${b.kind && b.kind !== 'standard' ? ` · ${esc(labelOf(BREAKER_KINDS, b.kind))}` : ''}${cleanWire(b.wire) && wireTag(b.wire) ? ` · ${esc(wireTag(b.wire))}` : ''}${panel ? ` · ${esc(panel.name)}` : ''}</p>
       ${(b.rooms || []).length ? `<div class="chips">${b.rooms.map((r) => `<a class="chip" href="#/h/${homeId}/rooms?room=${encodeURIComponent(r)}">${esc(r)}</a>`).join('')}</div>` : ''}
       <p class="sticker-line"><span class="muted tiny">Label it</span> <span class="sticker">${esc(stickerText(b, panel || 'two'))}</span></p>
     </div>
   </section>
   ${b.notes ? `<p class="note-text pre">${esc(b.notes)}</p>` : ''}
   ${groupMatesHtml(homeId, b)}
+
+  ${breakerWireCard(homeId, b, devices)}
 
   <div class="card">
     <div class="card-head"><h3>Outlets &amp; lights <span class="count">${devices.length}</span></h3><a class="btn small" href="#/edit/devices/new?home=${homeId}&breaker=${b.id}">+ Add</a></div>
@@ -913,7 +1007,7 @@ function deviceRow(homeId, d, showBreaker = false) {
   return `<li><a class="row" href="#/h/${homeId}/device/${d.id}">
     <span class="row-icon" aria-hidden="true">${deviceIcon(d.type)}</span>
     <span class="row-main"><b>${esc(d.name || labelOf(DEVICE_TYPES, d.type))}</b><span class="muted">${esc([styleOf(d) ? styleOf(d).label : '', d.room, d.location].filter(Boolean).join(' · ') || (d.loads || []).map((l) => l.name).join(', '))}</span></span>
-    <span class="row-side">${qtyOf(d) > 1 ? `<span class="pill gray">×${qtyOf(d)}</span>` : ''}${d.replace === 'yes' ? '<span class="pill amber">Replace</span>' : ''}${deviceWatts(d) ? `<span class="pill amber">${wattsText(deviceWatts(d))}</span>` : ''}${showBreaker ? (b ? `<span class="pill">#${esc(slotText(b))}</span>` : '<span class="pill gray">?</span>') : ''}${bad ? `<span class="pill red">${esc(labelOf(STATUS_OPTIONS, d.status).split(' ')[0])}</span>` : ''}${d.gfci && !['no', 'unknown'].includes(d.gfci) ? '<span class="pill blue">GFCI</span>' : ''}</span><span class="chev" aria-hidden="true">›</span>
+    <span class="row-side">${qtyOf(d) > 1 ? `<span class="pill gray">×${qtyOf(d)}</span>` : ''}${cleanWire(d.wire) ? `<span class="pill wire" title="Different wire here">${esc(wireTag(d.wire) || 'Wire')}</span>` : ''}${d.replace === 'yes' ? '<span class="pill amber">Replace</span>' : ''}${deviceWatts(d) ? `<span class="pill amber">${wattsText(deviceWatts(d))}</span>` : ''}${showBreaker ? (b ? `<span class="pill">#${esc(slotText(b))}</span>` : '<span class="pill gray">?</span>') : ''}${bad ? `<span class="pill red">${esc(labelOf(STATUS_OPTIONS, d.status).split(' ')[0])}</span>` : ''}${d.gfci && !['no', 'unknown'].includes(d.gfci) ? '<span class="pill blue">GFCI</span>' : ''}</span><span class="chev" aria-hidden="true">›</span>
   </a></li>`;
 }
 
@@ -932,6 +1026,14 @@ function renderDevice(homeId, id) {
     </div>
   </section>
   ${b ? `<a class="breaker-link" href="#/h/${homeId}/breaker/${b.id}"><span class="big-slot sm">${esc(slotText(b))}</span><span><b>Breaker ${esc(slotText(b))} · ${esc(ampsText(b))}</b><span class="muted">${esc(b.label || '')}${panel ? ` · ${esc(panel.name)}` : ''}</span></span><span aria-hidden="true">›</span></a>` : `<div class="alert warn">Breaker not mapped yet. <a href="#/edit/devices/${d.id}?home=${homeId}">Pick one</a></div>`}
+  ${(() => {
+    const e = effectiveWire(d, b);
+    const label = d.type === 'outlet' || !d.type ? 'outlet' : 'item';
+    return `<div class="card wire-card" id="wire">
+      <div class="card-head"><h3>Wire</h3>${e.from === 'outlet' ? '<span class="pill wire">Set on this ' + label + '</span>' : e.from === 'circuit' ? `<span class="pill gray">From breaker #${esc(slotText(b))}</span>` : ''}</div>
+      ${e.wire ? `${wireLineHtml(e.wire)}${wireChecksHtml(e.wire, breakerAmps(b))}${e.from === 'circuit' ? `<p class="muted tiny">Same wire as the rest of the circuit. <a href="#/edit/devices/${d.id}?home=${homeId}&focus=wire">Different here?</a></p>` : b && cleanWire(b.wire) ? `<p class="muted tiny">The circuit is ${esc(wireText(b.wire, { short: true }))}.</p>` : ''}` : `<p class="muted">Not recorded yet.${b ? ` Add it on <a href="#/edit/breakers/${b.id}?home=${homeId}&focus=wire">breaker #${esc(slotText(b))}</a> and every outlet on it shows it, or set a <a href="#/edit/devices/${d.id}?home=${homeId}&focus=wire">different wire here</a>.` : ''}</p>`}
+    </div>`;
+  })()}
   ${(() => {
     const items = d.loads || [];
     const w = deviceReading(d, 'main');
@@ -959,6 +1061,7 @@ function renderDevice(homeId, id) {
       <dt>AFCI</dt><dd>${esc(labelOf(AFCI_OPTIONS, d.afci))}</dd>
     </dl>
   </div>
+
   ${d.notes ? `<div class="card"><h3>Notes</h3><p class="pre">${esc(d.notes)}</p></div>` : ''}
   <div class="card">
     <h3>Meter readings</h3>
@@ -3451,7 +3554,7 @@ function sharePayload(homeId) {
       id: p.id, name: p.name, type: p.type, numbering: p.numbering || 'space', layout: p.layout || 'auto', mainAmps: p.mainAmps || '', mainAmpsOther: p.mainAmpsOther || '',
       spaces: p.spaces || '', spacesOther: p.spacesOther || '', shorePower: p.shorePower || '', shorePowerOther: p.shorePowerOther || '', powerSource: p.powerSource || '', sourceAmps: p.sourceAmps || '', sourceAmpsOther: p.sourceAmpsOther || '', location: p.location || '',
       fuses: (p.fuses || []).map((f) => ({ num: f.num, amps: f.amps, ampsOther: f.ampsOther || '', powers: f.powers, notes: f.notes || '' })),
-      breakers: inHome('breakers', homeId).filter((b) => b.panelId === p.id).map((b) => ({ slot: b.slot, poles: b.poles, size: b.size || 'full', half: b.half || '', btype: b.btype || '', amps: b.amps, ampsOther: b.ampsOther || '', label: b.label || '', rooms: b.rooms || [], kind: b.kind || '' })),
+      breakers: inHome('breakers', homeId).filter((b) => b.panelId === p.id).map((b) => ({ slot: b.slot, poles: b.poles, size: b.size || 'full', half: b.half || '', btype: b.btype || '', amps: b.amps, ampsOther: b.ampsOther || '', label: b.label || '', rooms: b.rooms || [], kind: b.kind || '', ...(cleanWire(b.wire) ? { wire: cleanWire(b.wire) } : {}) })),
     })),
   };
 }
@@ -3472,7 +3575,7 @@ async function renderShare(token) {
     const one = layoutOf(p) === 'one';
     return `<div class="sheet directory full share-sheet">
       <div class="dir-head"><b>${esc(p.name)}</b>${p.mainAmps ? ` · Main ${esc(p.mainAmps === 'other' ? p.mainAmpsOther : p.mainAmps)}A` : ''}${p.type === 'rv' && p.shorePower ? ` · ${esc(shoreText(p))} shore` : ''}${sourceText(p) ? ` · ${esc(sourceText(p))}` : ''}${p.location ? ` · ${esc(p.location)}` : ''}</div>
-      <table class="dir-table ${one ? 'one' : ''}"><thead><tr><th>#</th><th>A</th><th>Circuit</th>${one ? '' : '<th>#</th><th>A</th><th>Circuit</th>'}</tr></thead><tbody>${dirRowsHtml(p, p.breakers)}</tbody></table>
+      <table class="dir-table ${one ? 'one' : ''}"><thead><tr><th>#</th><th>A</th><th>Circuit</th>${one ? '' : '<th>#</th><th>A</th><th>Circuit</th>'}</tr></thead><tbody>${dirRowsHtml(p, p.breakers, { wire: true })}</tbody></table>
       ${p.fuses.length ? `<div class="dir-head" style="margin-top:8px"><b>12V DC fuses</b></div><table class="dir-table one"><thead><tr><th>#</th><th>A</th><th>Powers</th></tr></thead><tbody>${p.fuses.map((f) => `<tr><td class="n">${esc(f.num)}</td><td class="a">${esc(f.amps === 'other' ? f.ampsOther : f.amps)}A</td><td class="l">${esc(f.powers)}${f.notes ? ` <span class="rm">(${esc(f.notes)})</span>` : ''}</td></tr>`).join('')}</tbody></table>` : ''}
     </div>`;
   });
@@ -3564,20 +3667,24 @@ async function renderPrint(homeId, kind, id, q) {
     const breakers = inHome('breakers', homeId).filter((b) => b.panelId === panel.id);
     const one = layoutOf(panel) === 'one';
     const fuses = panel.fuses || [];
+    const anyWire = breakers.some((b) => wireTag(b.wire));
+    const showWire = anyWire && q.get('wire') !== '0';
     const body = `
     <div class="print-controls no-print">
       <label>Size<select id="dirSize">${opt([{ value: 'half', label: 'Half page (fits most panel doors)' }, { value: 'full', label: 'Full page 8.5 x 11' }], size)}</select></label>
+      ${anyWire ? `<label>Wire<select id="dirWire">${opt([{ value: '1', label: 'Show wire (like 12/2)' }, { value: '0', label: 'Hide wire' }], showWire ? '1' : '0')}</select></label>` : ''}
       <button class="btn primary" id="doPrint">Print / Save as PDF</button>
     </div>
     <div class="sheet directory ${size}">
       <div class="dir-head"><b>${esc(panel.name)}</b> · ${esc(homeLabel(home))}${panel.mainAmps ? ` · Main ${esc(mainAmpsText(panel))}A` : ''}${panel.type === 'rv' && panel.shorePower ? ` · ${esc(shoreText(panel))} shore` : ''}${sourceText(panel) ? ` · ${esc(sourceText(panel))}` : ''}</div>
-      <table class="dir-table ${one ? 'one' : ''}"><thead><tr><th>#</th><th>A</th><th>Circuit</th>${one ? '' : '<th>#</th><th>A</th><th>Circuit</th>'}</tr></thead><tbody>${dirRowsHtml(panel, breakers)}</tbody></table>
+      <table class="dir-table ${one ? 'one' : ''}"><thead><tr><th>#</th><th>A</th><th>Circuit</th>${one ? '' : '<th>#</th><th>A</th><th>Circuit</th>'}</tr></thead><tbody>${dirRowsHtml(panel, breakers, { wire: showWire })}</tbody></table>
       ${fuses.length ? `<div class="dir-head" style="margin-top:8px"><b>12V DC fuses</b></div><table class="dir-table one"><thead><tr><th>#</th><th>A</th><th>Powers</th></tr></thead><tbody>${fuses.map((f) => `<tr><td class="n">${esc(f.num)}</td><td class="a">${esc(f.amps === 'other' ? f.ampsOther : f.amps)}A</td><td class="l">${esc(f.powers)}${f.notes ? ` <span class="rm">(${esc(f.notes)})</span>` : ''}</td></tr>`).join('')}</tbody></table>` : ''}
       <div class="dir-foot">Updated ${new Date().toLocaleDateString()} · AmpMap</div>
     </div>`;
     app.innerHTML = shell(homeId, 'more', body, { title: 'Panel label', back: `#/h/${homeId}/panel/${panel.id}` });
     bindShell();
-    document.getElementById('dirSize').onchange = (e) => go(`#/h/${homeId}/print/directory/${panel.id}?size=${e.target.value}`);
+    document.getElementById('dirSize').onchange = (e) => go(`#/h/${homeId}/print/directory/${panel.id}?size=${e.target.value}${showWire ? '' : '&wire=0'}`);
+    if (document.getElementById('dirWire')) document.getElementById('dirWire').onchange = (e) => go(`#/h/${homeId}/print/directory/${panel.id}?size=${size}${e.target.value === '0' ? '&wire=0' : ''}`);
     document.getElementById('doPrint').onclick = () => window.print();
     return;
   }
@@ -3589,7 +3696,7 @@ async function renderPrint(homeId, kind, id, q) {
     const panels = inHome('panels', homeId), breakers = sortBreakers(inHome('breakers', homeId)), devices = inHome('devices', homeId);
     const add = (type, it) => {
       if (type === 'panel') items.push({ path: `/p/${it.id}`, title: it.name, sub: `${homeLabel(home)}${it.mainAmps ? ' · ' + mainAmpsText(it) + 'A main' : ''}` });
-      if (type === 'breaker') items.push({ path: `/b/${it.id}`, title: `Breaker ${slotText(it)} · ${ampsText(it)}`, sub: it.label || '' });
+      if (type === 'breaker') items.push({ path: `/b/${it.id}`, title: `Breaker ${slotText(it)} · ${ampsText(it)}${wireTag(it.wire) ? ' · ' + wireTag(it.wire) : ''}`, sub: it.label || '' });
       if (type === 'device') {
         const b = byId('breakers', it.breakerId);
         items.push({ path: `/d/${it.id}`, title: `${it.room || ''} ${it.name ? '- ' + it.name : ''}`.trim(), sub: b ? `Breaker ${slotText(b)} · ${ampsText(b)}` : 'Breaker: ?' });
@@ -3730,6 +3837,7 @@ function renderEdit(col, id, q) {
         ${[1, 2].map((k) => `<div class="mate" data-k="${k}"><div class="mate-title"></div><div class="two"><label>Label<input name="m${k}label" placeholder="e.g. Bedroom 2"></label><label>Amps<select name="m${k}amps">${opt(mateAmps, k === 2 ? '15' : '20')}</select></label></div></div>`).join('')}
       </div>
       <label>Protection<select name="kind">${opt(BREAKER_KINDS, b.kind)}</select></label>
+      ${wireFieldsHtml(b.wire, { legend: 'Wire on this circuit', hint: 'What feeds this breaker. Outlets on it use this wire unless you set a different one on the outlet.' })}
       <label>Notes<textarea name="notes" rows="3">${esc(b.notes)}</textarea></label>`;
   } else if (col === 'devices') {
     const brks = sortBreakers(inHome('breakers', homeId));
@@ -3749,6 +3857,15 @@ function renderEdit(col, id, q) {
       <label>Breaker<select name="breakerId"><option value="">Not mapped yet</option>${brks.map((b) => `<option value="${b.id}" ${b.id === d.breakerId ? 'selected' : ''}>#${esc(slotText(b))} · ${esc(ampsText(b))} · ${esc(b.label || '')}</option>`).join('')}</select></label>
       <label>GFCI protection<select name="gfci">${opt(GFCI_OPTIONS, d.gfci)}</select></label>
       <label>AFCI protection<select name="afci">${opt(AFCI_OPTIONS, d.afci)}</select></label>
+      ${(() => {
+        const own = !!cleanWire(d.wire);
+        const top = `<div class="seg-pick" role="radiogroup" aria-label="Wire to this ${d.type === 'outlet' ? 'outlet' : 'item'}">
+          <label class="seg-opt"><input type="radio" name="wmode" value="same" ${own ? '' : 'checked'}><span>Same as breaker</span></label>
+          <label class="seg-opt"><input type="radio" name="wmode" value="own" ${own ? 'checked' : ''}><span>Different wire here</span></label>
+        </div>
+        <p class="wire-inherit" id="wireInherit" ${own ? 'hidden' : ''}></p>`;
+        return wireFieldsHtml(d.wire, { legend: 'Wire to this ' + (d.type === 'outlet' || !d.type ? 'outlet' : 'item'), top, hide: !own });
+      })()}
       <label>Status<select name="status">${opt(STATUS_OPTIONS, d.status)}</select></label>
       <label>Notes<textarea name="notes" rows="4" placeholder="Anything useful: wiring, what it controls, fixes...">${esc(d.notes)}</textarea></label>`;
   } else if (col === 'customers') {
@@ -3857,6 +3974,38 @@ function renderEdit(col, id, q) {
     if (f.elements.panelId.tagName === 'SELECT') f.elements.panelId.addEventListener('change', sync);
     sync();
   }
+  if (col === 'breakers') {
+    const ampsNow = () => breakerAmps({ amps: f.elements.amps.value, ampsOther: f.elements.ampsOther ? f.elements.ampsOther.value : '' });
+    const upd = bindWireFields(f, ampsNow);
+    f.elements.amps.addEventListener('change', upd);
+    if (f.elements.ampsOther) f.elements.ampsOther.addEventListener('input', upd);
+    
+  }
+  if (col === 'devices') {
+    const brkNow = () => byId('breakers', f.elements.breakerId.value);
+    const upd = bindWireFields(f, () => breakerAmps(brkNow()));
+    const inh = document.getElementById('wireInherit');
+    const fieldsBox = document.getElementById('wireFields');
+    const mode = () => (f.querySelector('[name=wmode]:checked') || {}).value || 'same';
+    const syncWire = () => {
+      const b = brkNow();
+      const own = mode() === 'own';
+      fieldsBox.hidden = !own;
+      inh.hidden = own;
+      const bw = b && cleanWire(b.wire);
+      inh.innerHTML = !b ? 'Pick a breaker above and this uses that circuit\'s wire.' : bw ? `<span class="wire-ic" aria-hidden="true">〰</span> Uses breaker #${esc(slotText(b))}'s wire: <b>${esc(wireText(bw))}</b>${wireChecksHtml(bw, breakerAmps(b), 'small')}` : `Breaker #${esc(slotText(b))} has no wire recorded yet. Add it on the breaker, or set a different wire here.`;
+      // starting a "different wire" from scratch: prefill from the breaker's wire so it is quick to tweak
+      if (own && !fieldsBox.dataset.started && bw && !cleanWire(wireFromForm(Object.fromEntries(new FormData(f).entries())))) {
+        for (const [k, v] of Object.entries(bw)) if (f.elements['w' + k]) f.elements['w' + k].value = v;
+        f.querySelectorAll('select[data-other^=w]').forEach((s) => { const l = f.querySelector(`[name=${s.dataset.other}]`).closest('label'); l.hidden = s.value !== 'other'; });
+      }
+      if (own) fieldsBox.dataset.started = '1';
+      upd();
+    };
+    f.querySelectorAll('[name=wmode]').forEach((r) => r.addEventListener('change', syncWire));
+    f.elements.breakerId.addEventListener('change', syncWire);
+    syncWire();
+  }
   if (col === 'devices') {
     const rs = f.elements.room;
     const tog = () => (f.elements.roomNew.closest('label').hidden = rs.value !== '__new');
@@ -3870,6 +4019,7 @@ function renderEdit(col, id, q) {
       f.elements.style.innerHTML = opt(list || [], '');
     });
   }
+  if (q.get('focus') === 'wire') setTimeout(() => { const wb = document.getElementById('wireBox'); if (wb) window.scrollTo({ top: wb.getBoundingClientRect().top + window.scrollY - 90 }); }, 30);
   if (photo && existing.photoId)
     store.getPhoto(existing.photoId).then((src) => {
       const el = document.getElementById('photoBox');
@@ -3904,9 +4054,11 @@ function renderEdit(col, id, q) {
         return toast('That spot is taken - see the note above');
       }
       next = { ...base, homeId, panelId, slot: pos.slot, poles: pos.poles, size: pos.size, half: pos.half, btype: t, groupId, amps: v.amps, ampsOther: v.ampsOther || '', label: v.label.trim(), leg: v.leg || base.leg || '', rooms: v.rooms.split(',').map((s) => s.trim()).filter(Boolean), kind: v.kind, notes: v.notes, loads: base.loads || [] };
+      { const w = wireFromForm(v); if (w) next.wire = w; else delete next.wire; }
       for (const m of mates) await store.put('breakers', m);
     }
     if (col === 'devices') next = { ...base, homeId, type: v.type, name: v.name.trim(), room: (v.room === '__new' ? v.roomNew : v.room).trim(), location: v.location.trim(), breakerId: v.breakerId, gfci: v.gfci, afci: v.afci, status: v.status, notes: v.notes, readings: base.readings || [], style: stylesFor(v.type) ? v.style || '' : '', qty: Math.max(1, Math.floor(Number(v.qty)) || 1), box: v.box || '', replace: v.replace || '' };
+    if (col === 'devices') { const w = v.wmode === 'own' ? wireFromForm(v) : null; if (w) next.wire = w; else delete next.wire; }
     if (col === 'customers') next = { ...base, name: v.name.trim(), phone: v.phone.trim(), email: v.email.trim(), notes: v.notes, visits: base.visits || [], openCount: base.openCount || 0, lastOpenedAt: Date.now() };
     await store.put(col, next);
     toast('Saved');
