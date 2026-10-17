@@ -1,5 +1,7 @@
 import './styles.css';
 import QRCode from 'qrcode';
+import { GET_URL, detectPlatform, getTarget, storeRows, stickerQrTarget, cleanInstalledBy, installedByText, installedByDefault, STICKER_SIZES, stickerSize, stickerCopy } from './lib/sticker.js';
+import './sticker.css';
 import { firebaseConfig, isFirebaseConfigured } from './firebase-config.js';
 import { createLocalStore } from './store/local.js';
 import {
@@ -336,6 +338,7 @@ async function render() {
     if (anchor) setTimeout(() => document.getElementById(anchor)?.scrollIntoView({ block: 'start' }), 80);
   }
 
+  if (parts[0] === 'get' || isGetPath()) return renderGet();
   if (parts[0] === 'share' && parts[1]) return renderShare(parts[1]);
   if (['p', 'd', 'b'].includes(parts[0]) && parts[1]) return resolveShort(parts[0], parts[1]);
   if (parts[0] === 'scan') return renderScan();
@@ -374,6 +377,7 @@ async function render() {
     if (view === 'panel') return renderPanel(homeId, id);
     if (view === 'breaker') return renderBreaker(homeId, id);
     if (view === 'device') return renderDevice(homeId, id);
+    if (view === 'sticker') return renderSticker(homeId, q);
     if (view === 'rooms') return renderRooms(homeId, q.get('room'));
     if (view === 'map') return renderMap(homeId, q);
     if (view === 'bulk') return renderBulk(homeId, q);
@@ -392,6 +396,106 @@ async function render() {
     console.error(e);
   }
   return renderNotFound();
+}
+
+// ---------------------------------------------------------------- panel sticker + smart /get link
+// /get (real path, via vercel.json's catch-all rewrite) or #/get: phones go to their store once its URL is set
+// in src/lib/sticker.js; until then everyone gets the web app. Works signed out.
+// keep a phone number on one line on the sticker
+const ibDisplay = (t) => t.replace(/\(?\d[\d\s().-]{5,}\d/g, (m) => m.replace(/-/g, '\u2011').replace(/ /g, '\u00a0'));
+const isGetPath = () => (!location.hash || location.hash === '#') && /\/get\/?$/.test(location.pathname);
+
+function renderGet() {
+  const platform = detectPlatform(navigator.userAgent, { platform: navigator.platform, maxTouchPoints: navigator.maxTouchPoints });
+  const target = getTarget(platform);
+  if (target.redirect && !/[?&]stay=1/.test(location.search)) {
+    app.innerHTML = `<div class="center-msg">Opening ${target.kind === 'play' ? 'Google Play' : 'the App Store'}... <a href="${esc(target.url)}">Tap here if nothing happens</a></div>`;
+    location.replace(target.url);
+    return;
+  }
+  const web = `${location.pathname.replace(/\/get\/?$/, '/')}${location.search}#/`;
+  const rows = storeRows(platform).map((r) => {
+    const inner = `<span class="gs-ic" aria-hidden="true">${r.key === 'ios' ? '📱' : '▶'}</span><span class="gs-txt"><b>${esc(r.text)}</b><span>${esc(r.soon ? `${r.store} · for ${r.label}` : r.label)}</span></span>`;
+    return r.url ? `<a class="get-store ${r.key === platform ? 'mine' : ''}" href="${esc(r.url)}">${inner}</a>` : `<div class="get-store soon ${r.key === platform ? 'mine' : ''}">${inner}</div>`;
+  }).join('');
+  app.innerHTML = `<div class="auth get-page">
+    <img class="auth-logo" src="./brand/badge.png" alt="AmpMap logo" width="116" height="128">
+    <h1>Get AmpMap</h1>
+    <p class="get-lead">Map your electrical panel: every breaker, outlet and wire, right on your phone.</p>
+    <a class="btn primary get-open" href="${esc(web)}">Open AmpMap</a>
+    <p class="tiny muted">Free. Works in your browser right now. Tip: use Add to Home Screen to keep it like an app.</p>
+    <div class="get-stores">${rows}</div>
+    <p class="tiny muted get-foot">Already mapped a panel? Sign in and it's all there.</p>
+  </div>`;
+}
+
+function renderSticker(homeId, q) {
+  const home = byId('homes', homeId);
+  const size = stickerSize(q.get('size') || '4x6');
+  const paper = q.get('paper') === 'letter' ? 'letter' : 'label';
+  const prefer = q.get('qr') === 'get' ? 'get' : '';
+  const target = stickerQrTarget(home, { shareUrl: (t) => deepLink('/share/' + t), getUrl: GET_URL, prefer });
+  const copy = stickerCopy(target.kind);
+  const ib = installedByDefault(home, store.settings, isPro()) || {};
+  const qs = (o) => { const p = new URLSearchParams({ size: size.value, paper, qr: prefer, ...o }); for (const [k, v] of [...p]) if (!v || (k === 'paper' && v === 'label')) p.delete(k); return p.toString(); };
+  const panel = inHome('panels', homeId)[0];
+  const back = panel ? `#/h/${homeId}/panel/${panel.id}` : `#/h/${homeId}/panel`;
+  const body = `
+  <div class="no-print st-row st-sizes" role="group" aria-label="Sticker size"><span class="st-lbl">Size</span>${STICKER_SIZES.map((s) => `<a class="st-chip ${s.value === size.value ? 'on' : ''}" aria-pressed="${s.value === size.value}" href="#/h/${homeId}/sticker?${qs({ size: s.value })}">${esc(s.label)}</a>`).join('')}</div>
+  <div class="amp-sign-wrap paper-${paper}">
+    <div class="amp-sign s-${size.value}" id="ampSign">
+      <div class="as-top"><img class="as-badge" src="./brand/badge.png" alt="AmpMap"><div class="as-brand"><b>AmpMap</b><span>Panel &amp; circuit map</span></div></div>
+      <div class="as-head">This panel is mapped with <b>AmpMap</b></div>
+      <div class="as-qr" id="asQr" aria-label="QR code"></div>
+      <div class="as-scan"><b>${esc(copy.scan)}</b><span>${esc(copy.sub)}</span></div>
+      <div class="as-ib" id="asIb" ${installedByText(ib) ? '' : 'hidden'}>${esc(ibDisplay(installedByText(ib)))}</div>
+      <div class="as-url">${esc(GET_URL.replace(/^https:\/\//, ''))}</div>
+    </div>
+  </div>
+  <div class="print-controls no-print st-controls">
+    <div class="st-ib">
+      <span class="st-lbl">Installed by <span class="muted">(optional)</span></span>
+      <div class="st-ib-row"><input id="ibCompany" maxlength="60" autocomplete="organization" placeholder="Company name" aria-label="Company name" value="${esc(ib.company || '')}"><input id="ibPhone" type="tel" maxlength="30" autocomplete="tel" placeholder="Phone" aria-label="Phone" value="${esc(ib.phone || '')}"></div>
+      <div class="st-ib-foot"><span class="tiny muted">${isPro() ? 'Saved on this home, and used as your default on new stickers.' : 'Saved on this home.'}</span><button type="button" class="btn small" id="ibSave" hidden>Save</button></div>
+    </div>
+    ${home.shareToken
+      ? `<label>QR opens<select id="stQr">${opt([{ value: '', label: 'This panel (read-only shared copy)' }, { value: 'get', label: 'Just the app download' }], prefer)}</select></label>`
+      : `<p class="tiny muted st-hint">The QR opens the AmpMap download page. To let people who scan see this panel too, turn on <a href="#/h/${homeId}/more">More › Share a read-only copy</a>.</p>`}
+    <label>Paper<select id="stPaper">${opt([{ value: 'label', label: `${size.label} (label printer / sticker sheet)` }, { value: 'letter', label: 'Regular 8.5 x 11 paper (cut it out)' }], paper)}</select></label>
+    <button class="btn primary" id="doPrint">Print / Save as PDF</button>
+  </div>
+  <style>@media print { @page { size: ${paper === 'letter' ? 'letter' : `${size.w}in ${size.h}in`}; margin: 0; } }</style>`;
+  app.innerHTML = shell(homeId, 'more', body, { title: 'Panel sticker', back });
+  bindShell();
+  qrSvg(target.url).then((svg) => { const el = document.getElementById('asQr'); if (el) el.innerHTML = svg; });
+  const $c = document.getElementById('ibCompany');
+  const $p = document.getElementById('ibPhone');
+  const $save = document.getElementById('ibSave');
+  const val = () => cleanInstalledBy({ company: $c.value, phone: $p.value });
+  const dirty = () => JSON.stringify(val()) !== JSON.stringify(installedByDefault(byId('homes', homeId), store.settings, isPro()));
+  const live = () => {
+    const t = installedByText(val());
+    const el = document.getElementById('asIb');
+    el.textContent = ibDisplay(t);
+    el.hidden = !t;
+    $save.hidden = !dirty();
+  };
+  $c.oninput = live;
+  $p.oninput = live;
+  const save = async (print = false) => {
+    const h = byId('homes', homeId);
+    if (!dirty() && !(print && val() && !Object.prototype.hasOwnProperty.call(h, 'installedBy'))) return;
+    const v = val();
+    await store.put('homes', { ...byId('homes', homeId), installedBy: v });
+    if (isPro()) await store.saveSettings({ installedBy: v });
+  };
+  $save.onclick = async () => { await save(); toast('Saved'); };
+  document.getElementById('stPaper').onchange = (e) => go(`#/h/${homeId}/sticker?${qs({ paper: e.target.value })}`);
+  if (document.getElementById('stQr')) document.getElementById('stQr').onchange = (e) => go(`#/h/${homeId}/sticker?${qs({ qr: e.target.value })}`);
+  document.getElementById('doPrint').onclick = async () => {
+    try { await save(true); } catch (e) { console.error(e); }
+    setTimeout(() => window.print(), 120);
+  };
 }
 
 function renderNotFound() {
@@ -579,6 +683,7 @@ function renderPanel(homeId, panelId) {
     ${panel.type === 'rv' ? '' : `<a class="btn" href="#/h/${homeId}/bulk?panel=${panel.id}">+ Several at once</a>`}
     <a class="btn" href="#/edit/panels/new?home=${homeId}">+ Panel</a>
     <a class="btn" href="#/h/${homeId}/print/directory/${panel.id}">Print schedule</a>
+    <a class="btn" href="#/h/${homeId}/sticker">Print panel sticker</a>
   </div>
   <div class="legend"><span class="dot lvl-ok"></span>under 80% <span class="dot lvl-warn"></span>80%+ <span class="dot lvl-over"></span>over 100% <span class="dot lvl-none"></span>no loads listed <span class="muted">· colors = Typical, ⚠️ = Peak over 100%</span></div>
   ${breakers.some((b) => sizeOf(b) === 'half') ? '<p class="tiny muted legend-note">Half-height blocks are tandems: 1 breaker, 2 switches, each its own circuit. Tall blue-edged blocks are double-pole 240V: 1 circuit.</p>' : ''}

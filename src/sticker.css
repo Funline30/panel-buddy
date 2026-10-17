@@ -1,0 +1,88 @@
+/* "This panel uses AmpMap" sticker (renderSticker) + the /get page (renderGet). */
+.st-controls .st-lbl { font-weight: 600; font-size: 0.92rem; margin-right: 4px; }
+.st-sizes { margin-bottom: 4px; }
+.st-hint { margin: 0; }
+.st-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.st-chip { display: inline-flex; align-items: center; min-height: 38px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--card); color: var(--ink); text-decoration: none; font-size: 0.9rem; font-weight: 600; }
+.st-chip.on { background: var(--chip-dark); color: var(--chip-dark-ink); border-color: var(--chip-dark); }
+.st-ib { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+.st-ib-row { display: grid; grid-template-columns: 1fr; gap: 8px; }
+.st-ib-row input { width: 100%; min-height: 44px; font-size: 16px; padding: 8px 12px; border: 1px solid var(--input-line); border-radius: 12px; background: var(--input); color: var(--ink); font-family: inherit; box-sizing: border-box; }
+.st-ib-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; }
+
+.amp-sign-wrap { display: flex; justify-content: center; padding: 8px 0 18px; }
+.amp-sign {
+  --navy: #1f2a3e; --amber: #f59e0b;
+  container-type: inline-size; box-sizing: border-box; position: relative; overflow: hidden;
+  background: #fff; color: #111827; border-radius: 14px; box-shadow: 0 6px 24px rgba(15, 23, 42, 0.18), 0 0 0 1px rgba(15, 23, 42, 0.08);
+  font-family: inherit; -webkit-print-color-adjust: exact; print-color-adjust: exact;
+}
+.amp-sign .as-qr svg { display: block; width: 100%; height: 100%; }
+.amp-sign .as-top { background: var(--navy); color: #fff; display: flex; align-items: center; border-bottom: solid var(--amber); }
+.amp-sign .as-badge { display: block; height: auto; }
+.amp-sign .as-brand { display: grid; line-height: 1.05; }
+.amp-sign .as-brand b { font-weight: 800; letter-spacing: -0.01em; }
+.amp-sign .as-brand span { color: #fcd34d; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; }
+.amp-sign .as-head { font-weight: 700; line-height: 1.15; color: var(--navy); }
+.amp-sign .as-head b { color: #b45309; font-weight: 800; }
+.amp-sign .as-scan { display: grid; line-height: 1.15; }
+.amp-sign .as-scan b { font-weight: 800; color: #111827; }
+.amp-sign .as-scan span { color: #4b5563; font-weight: 500; }
+.amp-sign .as-ib { font-weight: 700; color: var(--navy); background: #fff7e6; border: solid #f6c768; border-radius: 1.6cqw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.amp-sign .as-url { color: #6b7280; font-weight: 600; letter-spacing: 0.02em; }
+
+/* 4 x 6 in sign, portrait */
+.amp-sign.s-4x6 { width: min(100%, 340px); aspect-ratio: 4 / 6; display: flex; flex-direction: column; align-items: center; text-align: center; }
+.s-4x6 .as-top { width: 100%; justify-content: center; gap: 3cqw; padding: 4.5cqw 5cqw; border-bottom-width: 1.6cqw; }
+.s-4x6 .as-badge { width: 11cqw; }
+.s-4x6 .as-brand { text-align: left; }
+.s-4x6 .as-brand b { font-size: 10cqw; }
+.s-4x6 .as-brand span { font-size: 3.1cqw; margin-top: 0.6cqw; }
+.s-4x6 .as-head { font-size: 7.6cqw; margin: 6cqw 7cqw 0; }
+.s-4x6 .as-qr { width: 54cqw; height: 54cqw; margin-top: 5cqw; padding: 2.2cqw; border: 0.9cqw solid var(--navy); border-radius: 3.5cqw; background: #fff; }
+.s-4x6 .as-scan { margin-top: 4.5cqw; }
+.s-4x6 .as-scan b { font-size: 6.4cqw; }
+.s-4x6 .as-scan span { font-size: 3.9cqw; margin-top: 1cqw; }
+.s-4x6 .as-ib { font-size: 3.8cqw; margin: auto 6cqw 0; padding: 2cqw 3cqw; border-width: 0.5cqw; max-width: 88cqw; box-sizing: border-box; white-space: normal; line-height: 1.25; }
+.s-4x6 .as-url { font-size: 3.2cqw; margin: 3cqw 0 4.5cqw; }
+.s-4x6 .as-ib[hidden] + .as-url { margin-top: auto; }
+
+/* 2 x 3 in label, landscape: QR left, words right */
+.amp-sign.s-2x3 { width: min(100%, 360px); aspect-ratio: 3 / 2; display: grid; grid-template-columns: 44cqw 1fr; grid-template-rows: auto 1fr auto auto; column-gap: 4cqw; }
+.s-2x3 .as-top { grid-column: 1 / -1; gap: 2.4cqw; padding: 2.6cqw 4.5cqw; border-bottom-width: 1.2cqw; }
+.s-2x3 .as-badge { width: 6.5cqw; }
+.s-2x3 .as-brand { grid-auto-flow: column; align-items: baseline; gap: 2.4cqw; }
+.s-2x3 .as-brand b { font-size: 6.6cqw; }
+.s-2x3 .as-brand span { font-size: 2.6cqw; }
+.s-2x3 .as-qr { grid-column: 1; grid-row: 2 / 5; align-self: center; width: 38cqw; height: 38cqw; margin-left: 4.5cqw; padding: 1.4cqw; border: 0.7cqw solid var(--navy); border-radius: 2.5cqw; }
+.s-2x3 .as-head, .s-2x3 .as-scan, .s-2x3 .as-ib, .s-2x3 .as-url { margin-right: 4.5cqw; }
+.s-2x3 .as-head { grid-column: 2; grid-row: 2; align-self: end; font-size: 5.6cqw; margin-top: 3cqw; }
+.s-2x3 .as-scan { grid-column: 2; grid-row: 3; margin-top: 2.6cqw; }
+.s-2x3 .as-scan b { font-size: 4.6cqw; }
+.s-2x3 .as-scan span { font-size: 3cqw; margin-top: 0.6cqw; }
+.s-2x3 .as-ib { grid-column: 2; grid-row: 4; align-self: start; font-size: 2.9cqw; margin: 2.6cqw 4.5cqw 3.5cqw 0; padding: 1.2cqw 2cqw; border-width: 0.4cqw; white-space: normal; line-height: 1.2; }
+.s-2x3 .as-url { display: none; }
+.s-2x3 .as-ib[hidden] ~ .as-url { display: block; grid-column: 2; grid-row: 4; font-size: 2.8cqw; margin: 2.6cqw 4.5cqw 3.5cqw 0; }
+
+/* /get page */
+.get-page h1 { margin: 0; }
+.get-lead { margin: 0; font-size: 1.05rem; color: var(--ink-2); }
+.get-open { min-height: 52px; font-size: 1.05rem; }
+.get-stores { display: grid; gap: 10px; margin-top: 6px; text-align: left; }
+.get-store { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 14px; border: 1px solid var(--line); background: var(--card); color: var(--ink); text-decoration: none; }
+.get-store.soon { opacity: 0.8; }
+.get-store.mine { border-color: var(--brand); box-shadow: 0 0 0 1px var(--brand) inset; opacity: 1; }
+.get-store .gs-ic { flex: none; width: 36px; height: 36px; border-radius: 10px; background: var(--card-2); display: flex; align-items: center; justify-content: center; font-size: 18px; }
+.get-store .gs-txt { display: grid; }
+.get-store .gs-txt span { font-size: 0.85rem; color: var(--muted); }
+.get-foot { margin-top: 4px; }
+
+@media print {
+  .amp-sign-wrap { display: block; padding: 0; margin: 0; }
+  .amp-sign { box-shadow: none; border-radius: 0; margin: 0; }
+  .amp-sign.s-4x6 { width: 4in; height: 6in; aspect-ratio: auto; }
+  .amp-sign.s-2x3 { width: 3in; height: 2in; aspect-ratio: auto; }
+  .paper-letter { padding: 0.5in; }
+  .paper-letter .amp-sign { outline: 1px dashed #999; outline-offset: 0; }
+  .paper-label .amp-sign { page-break-after: avoid; break-after: avoid; }
+}
