@@ -810,3 +810,24 @@ select.full { margin-top: 0; }
 .pl-exact[open] { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .pl-exact[open] summary { width: 100%; }
 .pl-feet { margin-left: 0 !important; }
+
+/* start from scratch / rooms first */
+.pl-start { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 6px 0 4px; }
+.pl-start-btn { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-height: 120px; padding: 12px; border-radius: 14px; border: 1.5px solid var(--line-2); background: var(--card); color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+.pl-start-btn svg { color: var(--accent); }
+.pl-start-btn b { font-size: 0.92rem; line-height: 1.2; }
+.pl-start-btn small { font-size: 0.78rem; color: var(--ink-2); line-height: 1.3; }
+.pl-start-btn:active { border-color: var(--accent); background: var(--accent-soft); }
+.tp-or { margin: 12px 0 0 !important; font-size: 0.8rem; font-weight: 700; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.04em; }
+.pl-more { margin-top: 2px; }
+.pl-more .btn, .pl-tools2 #plScratch, .pl-tools2 #plMakeOutline { min-height: 40px; }
+.pl-auto button { min-height: 44px; }
+.pl-wrap.editing .pl-outline.auto { stroke: var(--accent); stroke-dasharray: 0.9 0.6; opacity: 0.95; }
+.pl-sheet-bg { position: fixed; inset: 0; z-index: 100; display: flex; align-items: flex-end; justify-content: center; background: rgba(10, 14, 22, 0.45); }
+.pl-sheet { width: 100%; max-width: 520px; padding: 18px 16px calc(16px + var(--safe-b)); border-radius: 20px 20px 0 0; background: var(--card); color: var(--ink); box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.25); }
+.pl-sheet h3 { margin: 0 0 6px; font-size: 1.12rem; }
+.pl-sheet p { margin: 0 0 10px; line-height: 1.4; }
+.pl-sheet .btn.full { width: 100%; min-height: 50px; margin-top: 8px; font-size: 1rem; }
+.pl-sheet .pl-sheet-go { color: #fff; background: var(--over); border-color: var(--over); }
+.pl-sheet-pins { display: flex; align-items: center; gap: 10px; min-height: 44px; margin-bottom: 4px; }
+.pl-sheet-pins input { width: 22px; height: 22px; }

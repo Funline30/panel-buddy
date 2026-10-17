@@ -2,6 +2,7 @@
 //   home.floorplan = { w, h, rooms: [{ id, name, x, y, w, h }], outline?, photoId?, photoOpacity?, photoRot? }
 //                    or, for 2+ floors, floors: [{ id, name, rooms }] instead of rooms
 //                    outlinePts?: [{ x, y }] = the house outline drawn by eye (per floor; see shapeOf)
+//                    autoOutline?: true = rooms first, the outline is drawn around the rooms
 //   device.pos     = { x, y, floor? }   (feet from the plan's top-left corner; no floor = first floor)
 // outline 'box' (default) draws the w x h outline; 'rooms' = the house is just its rooms
 // (L-shapes, a garage sticking out), the w x h box is only the drawing area.
@@ -27,7 +28,7 @@ export function planOf(home, floorId = '') {
   const d = defaultSize(home);
   const w = clamp(snap(fp && fp.w ? fp.w : d.w), 6, 200);
   const h = clamp(snap(fp && fp.h ? fp.h : d.h), 6, 200);
-  const plan = { w, h, rooms: [], outline: fp && fp.outline === 'rooms' ? 'rooms' : 'box', photoId: (fp && fp.photoId) || '', photoOpacity: fp && fp.photoOpacity != null ? Number(fp.photoOpacity) : 0.45, photoRot: (fp && Number(fp.photoRot)) || 0, hasPlan: !!fp };
+  const plan = { w, h, rooms: [], outline: fp && fp.outline === 'rooms' ? 'rooms' : 'box', photoId: (fp && fp.photoId) || '', photoOpacity: fp && fp.photoOpacity != null ? Number(fp.photoOpacity) : 0.45, photoRot: (fp && Number(fp.photoRot)) || 0, hasPlan: !!fp, autoOutline: !!(fp && fp.autoOutline) };
   const raw = fp && Array.isArray(fp.floors) && fp.floors.length ? fp.floors : [{ id: 'f1', name: 'Floor 1', rooms: (fp && fp.rooms) || [] }];
   const single = !(fp && Array.isArray(fp.floors) && fp.floors.length);
   plan.floors = raw.map((f, i) => {
@@ -63,6 +64,7 @@ export function planToSave(plan) {
   if (floors.length > 1) out.floors = floors.map((f) => ({ id: f.id, name: f.name, rooms: f.rooms.map(room), ...pts(f) }));
   else { out.rooms = (floors[0] ? floors[0].rooms : plan.rooms).map(room); Object.assign(out, pts(floors[0] || plan)); }
   if (plan.outline === 'rooms') out.outline = 'rooms';
+  if (plan.autoOutline) out.autoOutline = true;
   if (plan.photoId) { out.photoId = plan.photoId; out.photoOpacity = plan.photoOpacity; out.photoRot = plan.photoRot || 0; }
   return out;
 }
@@ -628,4 +630,121 @@ export function normalizeShape(plan, devices = []) {
   const pins = {};
   if (ox || oy) for (const d of placed) pins[d.id] = { ...d.pos, x: r1(d.pos.x + ox), y: r1(d.pos.y + oy) };
   return { plan: next, pins };
+}
+
+
+// ---- rooms first: the house outline drawn around the rooms
+// home.floorplan.autoOutline = true: the outline (outlinePts) follows the rooms as they move.
+// Off (or missing, every older plan): the outline stays as drawn.
+
+// The outside wall around a set of rooms: the outer edge of all the rooms together, as corners
+// (clockwise on screen, only square corners). Gaps up to `gap` ft between rooms are closed, so
+// rooms drawn a little apart still make one house; holes inside (a courtyard) are filled.
+// Rooms farther apart than that: the biggest block wins. No rooms -> [].
+export function outlineFromRooms(rooms, { gap = 2 } = {}) {
+  const rs = (rooms || []).filter((r) => r && r.w > 0 && r.h > 0 && [r.x, r.y, r.w, r.h].every(Number.isFinite));
+  if (!rs.length) return [];
+  const g = Math.max(0, Math.round(gap / 2)); // close = grow by g then shrink by g (fills gaps up to 2g)
+  const x0 = Math.floor(Math.min(...rs.map((r) => r.x))) - g - 1, y0 = Math.floor(Math.min(...rs.map((r) => r.y))) - g - 1;
+  const W = Math.min(600, Math.ceil(Math.max(...rs.map((r) => r.x + r.w))) - x0 + g + 1);
+  const H = Math.min(600, Math.ceil(Math.max(...rs.map((r) => r.y + r.h))) - y0 + g + 1);
+  let fill = new Uint8Array(W * H);
+  for (const r of rs)
+    for (let y = Math.max(0, Math.floor(r.y) - y0); y < Math.min(H, Math.ceil(r.y + r.h) - y0); y++)
+      for (let x = Math.max(0, Math.floor(r.x) - x0); x < Math.min(W, Math.ceil(r.x + r.w) - x0); x++) fill[y * W + x] = 1;
+  const pass = (src, grow) => {
+    const out = new Uint8Array(W * H);
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++) {
+        let v = grow ? 0 : 1;
+        for (let dy = -g; dy <= g && v === (grow ? 0 : 1); dy++)
+          for (let dx = -g; dx <= g; dx++) {
+            const xx = x + dx, yy = y + dy;
+            const c = xx >= 0 && yy >= 0 && xx < W && yy < H ? src[yy * W + xx] : 0;
+            if (grow && c) { v = 1; break; }
+            if (!grow && !c) { v = 0; break; }
+          }
+        out[y * W + x] = v;
+      }
+    return out;
+  };
+  if (g) fill = pass(pass(fill, true), false);
+  // fill holes: flood the outside from the border, everything not reached is house
+  const outside = new Uint8Array(W * H), stack = [];
+  for (let x = 0; x < W; x++) stack.push(x, 0, x, H - 1);
+  for (let y = 0; y < H; y++) stack.push(0, y, W - 1, y);
+  while (stack.length) {
+    const y = stack.pop(), x = stack.pop();
+    if (x < 0 || y < 0 || x >= W || y >= H) continue;
+    const k = y * W + x;
+    if (outside[k] || fill[k]) continue;
+    outside[k] = 1;
+    stack.push(x + 1, y, x - 1, y, x, y + 1, x, y - 1);
+  }
+  for (let k = 0; k < W * H; k++) fill[k] = outside[k] ? 0 : 1;
+  // walk the edges of the filled cells (same tracing as roomsOutline), keep the biggest loop
+  const on = (x, y) => x >= 0 && y >= 0 && x < W && y < H && fill[y * W + x];
+  const edges = new Map();
+  const add = (ax, ay, bx, by) => { const k = ax + ',' + ay; if (!edges.has(k)) edges.set(k, []); edges.get(k).push([bx, by]); };
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      if (!on(x, y)) continue;
+      if (!on(x, y - 1)) add(x, y, x + 1, y);
+      if (!on(x + 1, y)) add(x + 1, y, x + 1, y + 1);
+      if (!on(x, y + 1)) add(x + 1, y + 1, x, y + 1);
+      if (!on(x - 1, y)) add(x, y + 1, x, y);
+    }
+  let best = [], bestA = 0;
+  while (edges.size) {
+    const [k0] = edges.keys();
+    let [x, y] = k0.split(',').map(Number);
+    const loop = [];
+    for (let guard = 0; guard < 400000; guard++) {
+      const k = x + ',' + y, list = edges.get(k);
+      if (!list) break;
+      const [nx, ny] = list.pop();
+      if (!list.length) edges.delete(k);
+      loop.push({ x: x + x0, y: y + y0 });
+      x = nx; y = ny;
+    }
+    const a = polyArea(loop);
+    if (a > bestA) { best = loop; bestA = a; }
+  }
+  const pts = dropStraight(best);
+  return pts.length >= 4 ? pts : [];
+}
+
+// The plan with its outline redrawn from the rooms when Auto outline is on (else unchanged).
+// No rooms -> no outline (an empty plan has nothing to draw around).
+export function withAutoOutline(plan) {
+  if (!plan || !plan.autoOutline) return plan;
+  const pts = outlineFromRooms(plan.rooms);
+  return { ...plan, outline: 'box', outlinePts: pts.length >= 4 ? pts : null };
+}
+
+// Rooms first: make the drawing area bigger when a room reaches its right or bottom edge, so
+// there's always space to add or stretch a room. Only grows (up to 200 ft).
+export function growArea(plan, room = 8) {
+  let w = plan.w, h = plan.h;
+  for (const r of plan.rooms || []) {
+    if (r.x + r.w >= w - 1) w = Math.max(w, r.x + r.w + room);
+    if (r.y + r.h >= h - 1) h = Math.max(h, r.y + r.h + room);
+  }
+  w = clamp(Math.ceil(w), 6, 200); h = clamp(Math.ceil(h), 6, 200);
+  return w === plan.w && h === plan.h ? plan : { ...plan, w, h };
+}
+
+// Start from scratch: every floor loses its rooms and its outline (the floors themselves, the
+// size and the photo stay; breakers, outlets and other devices aren't part of the plan).
+// autoOutline: what the cleared plan starts with (true = rooms first).
+export function clearPlan(plan, { autoOutline = false } = {}) {
+  const floors = (plan.floors || [{ id: 'f1', name: 'Floor 1', rooms: [] }]).map(({ outlinePts, ...f }) => { void outlinePts; return { ...f, rooms: [] }; });
+  const cur = floors.find((f) => f.id === plan.floor) || floors[0];
+  return { ...plan, floors, floor: cur.id, rooms: [], outline: 'box', outlinePts: null, autoOutline: !!autoOutline };
+}
+
+// Is there anything on the plan to clear (rooms or a drawn outline on any floor)?
+export function planHasDrawing(plan) {
+  const fl = (plan.floors || []).map((f) => (f.id === plan.floor ? { ...f, rooms: plan.rooms, outlinePts: plan.outlinePts } : f));
+  return fl.some((f) => (f.rooms && f.rooms.length) || (f.outlinePts && f.outlinePts.length >= 3));
 }
