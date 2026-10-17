@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "firebase": "^11.0.0",
+    "html2canvas-pro": "^1.6.7",
+    "jspdf": "^3.0.4",
     "jsqr": "^1.4.0",
     "qrcode": "^1.5.4"
   },

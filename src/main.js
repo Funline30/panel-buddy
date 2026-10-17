@@ -28,6 +28,7 @@ import { CATALOG, CATEGORIES, CATALOG_NOTE, catById, categoryOf, wattsRange, amp
 import { searchHome, searchCatalog, lookupUrl, projectedPct, wattsFromAmps } from './lib/devicesearch.js';
 import { uid, esc, ampsText, sortBreakers, download } from './lib/util.js';
 import { isNativeApp, initNative, publicBase } from './native.js';
+import { printOrSave } from './print.js';
 import { breakersCsv, devicesCsv, fusesCsv } from './lib/csv.js';
 import { compressPhoto } from './lib/photo.js';
 import { WIRE_SIZES, WIRE_TYPES, WIRE_CONDUCTORS, WIRE_COLORS, JACKET_SIZE, WIRE_GUIDANCE, cleanWire, wireFromForm, wireText, wireTag, wireShort, effectiveWire, wireChecks, sizeText, typeText, condText, colorText, cableText } from './lib/wire.js';
@@ -497,6 +498,31 @@ function renderGet() {
   </div>`;
 }
 
+const printFileName = () => {
+  const h = document.querySelector('#app .sheet h2, #app .sheet h1, #app main h1, #app h1, #app h2');
+  const t = ((h && h.textContent) || 'print').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'print';
+  return `AmpMap-${t}.pdf`;
+};
+
+// Every "Print / Save as PDF" button: the print dialog where it works, else a PDF in the share sheet.
+async function runPrint(btn, opts = {}) {
+  const label = btn ? btn.textContent : '';
+  try {
+    await printOrSave({
+      ...opts,
+      onBusy: (on) => {
+        if (!btn) return;
+        btn.disabled = on;
+        btn.textContent = on ? 'Making the PDF...' : label;
+      },
+    });
+  } catch (err) {
+    console.error('print', err);
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+    toast("Couldn't make the PDF. Try again, or open AmpMap in Safari and print from there.");
+  }
+}
+
 function renderSticker(homeId, q) {
   const home = byId('homes', homeId);
   const size = stickerSize(q.get('size') || '4x6');
@@ -512,6 +538,10 @@ function renderSticker(homeId, q) {
   const back = panel ? `#/h/${homeId}/panel/${panel.id}` : `#/h/${homeId}/panel`;
   const body = `
   <div class="no-print pm-pick" role="group" aria-label="How will you print it?">${PRINT_METHODS.map((m) => `<a class="pm-card ${m.value === pc.method ? 'on' : ''}" aria-pressed="${m.value === pc.method}" href="#/h/${homeId}/sticker?${qs({ paper: m.value === 'maker' ? 'tape' : 'label' })}"><span class="pm-ic" aria-hidden="true">${m.icon}</span><b>${esc(m.label)}</b><small>${esc(m.sub)}</small></a>`).join('')}</div>
+  <details class="no-print printer-picks" id="printerPicks"><summary class="pp-sum"><span class="pp-ic" aria-hidden="true">🖨️</span><span class="pp-txt"><b>Which label printer should I get?</b><small>3 label makers + a sheet for regular printers</small></span><span class="pp-chev" aria-hidden="true">›</span></summary>
+    <ul class="list maker-list">${LABEL_MAKERS.map((m) => `<li><a class="row" href="${esc(m.url)}" target="_blank" rel="noopener"><span class="row-main"><b>${esc(m.name)}</b><span class="muted">${esc(m.tier)} · ${esc(m.price)}</span></span><span class="chev" aria-hidden="true">↗</span></a></li>`).join('')}<li><a class="row" href="${esc(WEATHERPROOF_SHEETS.url)}" target="_blank" rel="noopener"><span class="row-main"><b>${esc(WEATHERPROOF_SHEETS.name)}</b><span class="muted">Regular printer · weatherproof sticker sheets</span></span><span class="chev" aria-hidden="true">↗</span></a></li></ul>
+    <p class="tiny muted">Label makers: any that takes 1 in (24 mm) tape works. Regular printer: ${esc(WEATHERPROOF_SHEETS.note)} Prices are approximate.</p>
+  </details>
   ${paper === 'tape'
     ? `<div class="no-print st-row st-sizes" role="group" aria-label="Tape length"><span class="st-lbl">Size</span>${TAPE_SIZES.map((t) => `<a class="st-chip ${t.value === tape.value ? 'on' : ''}" aria-pressed="${t.value === tape.value}" href="#/h/${homeId}/sticker?${qs({ tape: t.value })}">${esc(t.label)}</a>`).join('')}</div>
   <div class="amp-tape-wrap paper-tape"><div class="amp-tape t-${tape.value}" id="ampTape" style="--tw:${tape.w}in;--th:${tape.h}in">
@@ -519,10 +549,7 @@ function renderSticker(homeId, q) {
     <div class="at-text"><b>Mapped with AmpMap</b><span>${esc(copy.scan)}</span>${tape.w >= 3.5 && installedByText(ib) ? `<small>${esc(ibDisplay(installedByText(ib)))}</small>` : ''}</div>
   </div></div>
   <p class="no-print tiny muted st-tip">${esc(TAPE_TIP)}</p>
-  <details class="no-print more-details st-makers"><summary><b>Which printer should I get?</b><span class="muted tiny">3 picks, prices approx.</span></summary>
-    <ul class="list maker-list">${LABEL_MAKERS.map((m) => `<li><a class="row" href="${esc(m.url)}" target="_blank" rel="noopener"><span class="row-main"><b>${esc(m.name)}</b><span class="muted">${esc(m.tier)} · ${esc(m.price)}</span></span><span class="chev" aria-hidden="true">↗</span></a></li>`).join('')}</ul>
-    <p class="tiny muted">Any label maker that takes 1 in (24 mm) tape works.</p>
-  </details>`
+`
     : `<div class="no-print st-row st-sizes" role="group" aria-label="Sticker size"><span class="st-lbl">Size</span>${STICKER_SIZES.map((s) => `<a class="st-chip ${s.value === size.value ? 'on' : ''}" aria-pressed="${s.value === size.value}" href="#/h/${homeId}/sticker?${qs({ size: s.value })}">${esc(s.label)}</a>`).join('')}</div>
   <p class="no-print tiny muted st-tip">For outdoor or long-lasting labels, print on weatherproof label sheets, like <a href="${esc(WEATHERPROOF_SHEETS.url)}" target="_blank" rel="noopener">${esc(WEATHERPROOF_SHEETS.name)}</a>. ${esc(WEATHERPROOF_SHEETS.note)}</p>`}
   <div class="amp-sign-wrap paper-${paper}" ${paper === 'tape' ? 'hidden' : ''}>
@@ -575,9 +602,13 @@ function renderSticker(homeId, q) {
   $save.onclick = async () => { await save(); toast('Saved'); };
   if (document.getElementById('stPaper')) document.getElementById('stPaper').onchange = (e) => go(`#/h/${homeId}/sticker?${qs({ paper: e.target.value })}`);
   if (document.getElementById('stQr')) document.getElementById('stQr').onchange = (e) => go(`#/h/${homeId}/sticker?${qs({ qr: e.target.value })}`);
-  document.getElementById('doPrint').onclick = async () => {
-    try { await save(true); } catch (e) { console.error(e); }
-    setTimeout(() => window.print(), 120);
+  document.getElementById('doPrint').onclick = async (e) => {
+    const btn = e.currentTarget;
+    try { await save(true); } catch (err) { console.error(err); }
+    const el = paper === 'tape' ? document.getElementById('ampTape') : document.getElementById('ampSign');
+    const name = paper === 'tape' ? `AmpMap-label-${tape.value}` : `AmpMap-sticker-${size.value}`;
+    const opts = paper === 'tape' ? { page: { w: tape.w, h: tape.h } } : paper === 'letter' ? { page: 'letter', place: { w: size.w, h: size.h } } : { page: { w: size.w, h: size.h } };
+    await runPrint(btn, { el, filename: `${name}.pdf`, ...opts });
   };
 }
 
@@ -969,7 +1000,7 @@ async function renderSetupPrint(homeId) {
   app.innerHTML = shell(homeId, 'more', body, { title: 'Homeowner setup page', back: `#/h/${homeId}/access#handoff` });
   bindShell();
   document.getElementById('setupQr').innerHTML = await qrSvg(link);
-  document.getElementById('doPrint').onclick = () => window.print();
+  document.getElementById('doPrint').onclick = (e) => runPrint(e.currentTarget, { el: document.getElementById('app'), filename: printFileName() });
 }
 
 // The homeowner: scan › account › enter the setup code.
@@ -4833,7 +4864,7 @@ async function renderShare(token) {
     ${isGuest() ? '' : '<p class="tiny muted no-print edit-hint">Electricians: tap Edit and type the code from the homeowner.</p>'}
     ${sections.join('') || '<p>No panels in this share.</p>'}
   </main>`;
-  document.getElementById('doPrint').onclick = () => window.print();
+  document.getElementById('doPrint').onclick = (e) => runPrint(e.currentTarget, { el: document.getElementById('app'), filename: printFileName() });
 }
 
 // ---------------------------------------------------------------- print
@@ -4905,7 +4936,7 @@ async function renderPrint(homeId, kind, id, q) {
     app.innerHTML = shell(homeId, 'rooms', body, { title: 'Print shopping list', back: `#/h/${homeId}/shop?scope=${scope}` });
     bindShell();
     document.getElementById('shopScopeP').onchange = (e) => go(`#/h/${homeId}/print/shop?scope=${e.target.value}`);
-    document.getElementById('doPrint').onclick = () => window.print();
+    document.getElementById('doPrint').onclick = (e) => runPrint(e.currentTarget, { el: document.getElementById('app'), filename: printFileName() });
     return;
   }
   if (kind === 'directory') {
@@ -4942,7 +4973,7 @@ async function renderPrint(homeId, kind, id, q) {
     document.getElementById('dirSize').onchange = (e) => go(`#/h/${homeId}/print/directory/${panel.id}?${qs2({ size: e.target.value })}`);
     if (document.getElementById('dirWire')) document.getElementById('dirWire').onchange = (e) => go(`#/h/${homeId}/print/directory/${panel.id}?${qs2({ wire: e.target.value })}`);
     document.getElementById('dirQr').onchange = (e) => go(`#/h/${homeId}/print/directory/${panel.id}?${qs2({ qr: e.target.value })}`);
-    document.getElementById('doPrint').onclick = () => window.print();
+    document.getElementById('doPrint').onclick = (e) => runPrint(e.currentTarget, { el: document.getElementById('app'), filename: printFileName() });
     return;
   }
   if (kind === 'qr') {
@@ -4989,7 +5020,7 @@ async function renderPrint(homeId, kind, id, q) {
     document.getElementById('tpl').onchange = (e) => go(qs('tpl', e.target.value));
     if (document.getElementById('what')) document.getElementById('what').onchange = (e) => go(qs('what', e.target.value));
     if (document.getElementById('copies')) document.getElementById('copies').onchange = (e) => go(qs('copies', e.target.value));
-    document.getElementById('doPrint').onclick = () => window.print();
+    document.getElementById('doPrint').onclick = (e) => runPrint(e.currentTarget, { el: document.getElementById('app'), filename: printFileName() });
     return;
   }
   return renderNotFound();
