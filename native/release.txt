@@ -1,0 +1,5 @@
+AmpMap iPhone release trigger. Editing this file on the ios-capacitor branch starts the
+"iOS release (TestFlight)" workflow: signed build -> App Store Connect -> TestFlight
+(internal group, tester funlinevlogs@icloud.com). The build number is the workflow's run number.
+
+release 1: v1.0 first TestFlight build (Oct 17, 2026)
