@@ -18,6 +18,8 @@ import { layoutOf, panelSpaces, slotsFor, slotLabel, numberingOf, overlaps, occu
 import { seedPro } from './lib/seed.js';
 import { SERVICE_TYPES, serviceOf, isThreePhase, isCommercial, mainAmpChoices, mainAmpsNum, polesOf, breakerPhases, isAutoPhase, phaseText, phaseChoices, breakerVolts, phaseTotals, FEEDER_SIZES, feedParent, wouldLoop, feedRows, feedText, feederText, GEN_HOOKUPS, GEN_INLETS, GEN_SIZES, YES_NO, GROUND_RODS, hasGenerator, generatorText, panelExtrasText, groundingText, CONDUIT_OPTIONS, cleanRun, runText, DEVICE_GROUPS, defaultsHint, deviceDefaults, TOUR_KEY, TOUR_STEPS, shouldShowTour } from './lib/pro.js';
 import './pro.css';
+import { SOURCE_KINDS, kindOf, UTILITY, BACKFEED_KINDS, backfeedOf, isOnBackup, SOLAR_SIZES, SOLAR_INVERTERS, SOLAR_CONNECTIONS, BACKFEED_AMPS, SHUTOFF_PLACES, WIND_SIZES, BATTERY_TYPES, BATTERY_BRANDS, BATTERY_KWH, BATTERY_BACKUP, BATTERY_HOOKUPS, GEN_TYPES, GEN_HOOKUP_PICKS, GEN_FUELS, YES_NO_SURE, FIELDS as SOURCE_FIELDS, newSourceId, sourcesOf, hasUtility, applySources, sourceName, sourceFacts, shutoffText, sourceChip, sourcesSummary, safetyNote, busHint, breakersFor, sourceOfBreaker } from './lib/sources.js';
+import './sources.css';
 import { LOAD_PRESETS, PRESET_NOTE } from './lib/presets.js';
 import { loadSummary, levelText, fmtAmps, shoreSummary, deviceWatts, voltsFor, breakerAmps, isOn, readings, loadReading, deviceReading, projectLoad, NOW_HOURS } from './lib/load.js';
 import { USE_OPTIONS, habitOf, useLabel, HABIT_NOTE, guessHabit } from './lib/habits.js';
@@ -52,7 +54,8 @@ function dirRowsHtml(panel, breakers, { wire = false } = {}) {
   const half = numberingOf(panel) === 'half';
   const amps = (b) => esc(ampsText(b));
   const rm0 = (b) => ((b.rooms || []).length && !(b.label || '').toLowerCase().includes(String(b.rooms[0]).toLowerCase()) ? ` <span class="rm">(${esc(b.rooms.join(', '))})</span>` : '');
-  const rm = (b) => rm0(b) + (wire && wireTag(b.wire) ? ` <span class="wt">${esc(wireTag(b.wire))}</span>` : '');
+  const srcTag = (b) => { const bf = backfeedOf(b); return (bf ? ` <span class="bft k-${bf.value}">${bf.icon} ${bf.short}</span>` : '') + (isOnBackup(b) ? ' <span class="bkt">BACKUP</span>' : ''); };
+  const rm = (b) => rm0(b) + (wire && wireTag(b.wire) ? ` <span class="wt">${esc(wireTag(b.wire))}</span>` : '') + srcTag(b);
   const cell = (c) => {
     if (!c.items.length) return `<td class="n">${esc(c.num)}</td><td class="a"></td><td class="l"></td>`;
     if (c.items.length === 1) {
@@ -442,6 +445,7 @@ async function render() {
   try {
     if (view === 'panel') return renderPanel(homeId, id);
     if (view === 'tree') return renderTree(homeId);
+    if (view === 'power') return renderPower(homeId, q);
     if (view === 'breaker') return renderBreaker(homeId, id);
     if (view === 'device') return renderDevice(homeId, id);
     if (view === 'sticker') return renderSticker(homeId, q);
@@ -536,6 +540,7 @@ function renderSticker(homeId, q) {
   const qs = (o) => { const p = new URLSearchParams({ size: size.value, paper, qr: prefer, tape: paper === 'tape' ? tape.value : '', ...o }); for (const [k, v] of [...p]) if (!v || (k === 'paper' && v === 'label')) p.delete(k); return p.toString(); };
   const panel = inHome('panels', homeId)[0];
   const back = panel ? `#/h/${homeId}/panel/${panel.id}` : `#/h/${homeId}/panel`;
+  const srcNote = safetyNote(inHome('panels', homeId), inHome('breakers', homeId));
   const body = `
   <div class="no-print pm-pick" role="group" aria-label="How will you print it?">${PRINT_METHODS.map((m) => `<a class="pm-card ${m.value === pc.method ? 'on' : ''}" aria-pressed="${m.value === pc.method}" href="#/h/${homeId}/sticker?${qs({ paper: m.value === 'maker' ? 'tape' : 'label' })}"><span class="pm-ic" aria-hidden="true">${m.icon}</span><b>${esc(m.label)}</b><small>${esc(m.sub)}</small></a>`).join('')}</div>
   <details class="no-print printer-picks" id="printerPicks"><summary class="pp-sum"><span class="pp-ic" aria-hidden="true">🖨️</span><span class="pp-txt"><b>Which label printer should I get?</b><small>3 label makers + a sheet for regular printers</small></span><span class="pp-chev" aria-hidden="true">›</span></summary>
@@ -558,6 +563,7 @@ function renderSticker(homeId, q) {
       <div class="as-head">This panel is mapped with <b>AmpMap</b></div>
       <div class="as-qr" id="asQr" aria-label="QR code"></div>
       <div class="as-scan"><b>${esc(copy.scan)}</b><span>${esc(copy.sub)}</span></div>
+      ${srcNote ? `<div class="as-warn"><b>⚠️ ${esc(srcNote.short.replace(/^\S+\s/, ''))}</b><span>Also shut off the ${esc(((w) => (w.length > 1 ? `${w.slice(0, -1).join(', ')} and ${w[w.length - 1]}` : w[0]))(srcNote.kinds.map((k) => (k === 'solar' ? 'solar disconnect' : k === 'wind' ? 'wind disconnect' : k === 'battery' ? 'battery' : k === 'generator' ? 'generator' : 'other source'))))}.</span></div>` : ''}
       <div class="as-ib" id="asIb" ${installedByText(ib) ? '' : 'hidden'}>${esc(ibDisplay(installedByText(ib)))}</div>
       <div class="as-url">${esc(GET_URL.replace(/^https:\/\//, ''))}</div>
     </div>
@@ -1258,11 +1264,12 @@ function renderPanel(homeId, panelId) {
     const sum = sumOf(b);
     const nDev = devices.filter((d) => d.breakerId === b.id).length;
     const dead = devices.some((d) => d.breakerId === b.id && (d.status === 'dead' || d.status === 'repair'));
-    const meta = [nDev ? `${nDev} item${nDev > 1 ? 's' : ''}` : '', sum.level !== 'none' ? `${Math.round(sum.pct)}%${sum.allLevel === 'over' ? ' ⚠️' : ''}` : '', three ? '' : b.leg ? `L${esc(b.leg)}` : '', dead ? '<b class="bad">needs fix</b>' : '', b.kind && b.kind !== 'standard' && b.kind !== 'spare' ? esc(b.kind.toUpperCase()) : ''].filter(Boolean).join(' · ');
+    const bf = backfeedOf(b);
+    const meta = [bf ? `<b class="srctag k-${bf.value}">${bf.icon} ${bf.short}</b>` : '', isOnBackup(b) ? '<b class="bkup">BACKUP</b>' : '', nDev ? `${nDev} item${nDev > 1 ? 's' : ''}` : '', sum.level !== 'none' ? `${Math.round(sum.pct)}%${sum.allLevel === 'over' ? ' ⚠️' : ''}` : '', three ? '' : b.leg ? `L${esc(b.leg)}` : '', dead ? '<b class="bad">needs fix</b>' : '', b.kind && b.kind !== 'standard' && b.kind !== 'spare' ? esc(b.kind.toUpperCase()) : ''].filter(Boolean).join(' · ');
     const np = polesOf(b);
     const tag = isHalf ? (bt === 'quad' ? 'QUAD' : 'TANDEM') : np === 3 ? '3-POLE' : isTwoPole(b) ? (three ? `${serviceOf(panel).ll}V` : '240V') : '';
     const phs = three ? breakerPhases(b, panel) : [];
-    cells.push(`<a class="brk ${isHalf ? 'half ' + (keys.length > 1 ? 'half-mid' : b.half === 'B' ? 'half-b' : 'half-a') : ''} ${np >= 2 ? 'dbl' : ''} ${np === 3 ? 'tri' : ''} ${b.kind === 'spare' ? 'spare' : ''} lvl-${sum.level}" href="#/h/${homeId}/breaker/${b.id}" style="grid-column:${col};grid-row:${start + 1} / span ${keys.length}">
+    cells.push(`<a class="brk ${isHalf ? 'half ' + (keys.length > 1 ? 'half-mid' : b.half === 'B' ? 'half-b' : 'half-a') : ''} ${np >= 2 ? 'dbl' : ''} ${np === 3 ? 'tri' : ''} ${b.kind === 'spare' ? 'spare' : ''} ${bf ? 'bf bf-' + bf.value : ''} ${isOnBackup(b) ? 'on-bkup' : ''} lvl-${sum.level}" href="#/h/${homeId}/breaker/${b.id}" style="grid-column:${col};grid-row:${start + 1} / span ${keys.length}">
       ${phs.length ? `<span class="ph-tags" aria-label="Phase ${phs.join(' ')}">${phs.map((x) => `<b class="ph ph-${x}">${x}</b>`).join('')}</span>` : ''}
       <span class="brk-slot">${esc(np === 3 ? (() => { const ns = slotsFor(b, panel); return ns.length > 1 ? `${ns[0]}–${ns[ns.length - 1]}` : slotText(b); })() : slotText(b))}</span>
       <span class="brk-handle">${esc(ampsText(b))}</span>
@@ -1305,12 +1312,14 @@ function renderPanel(homeId, panelId) {
     </div>
   </section>
   ${feedText(panel, panels, breakersAll) ? `<a class="feed-line" href="#/h/${homeId}/tree"><span aria-hidden="true">↳</span> ${esc(feedText(panel, panels, breakersAll, (x) => slotLabel(x, panelOf(x) || 'two')))}</a>` : ''}
-  ${panelExtrasText(panel).length ? `<div class="chips extras-chips">${panelExtrasText(panel).map((t) => `<a class="chip" href="#/edit/panels/${panel.id}?home=${homeId}#more">${esc(t)}</a>`).join('')}</div>` : ''}
+  ${panelExtras(panel).length ? `<div class="chips extras-chips">${panelExtras(panel).map((t) => `<a class="chip" href="#/edit/panels/${panel.id}?home=${homeId}#more">${esc(t)}</a>`).join('')}</div>` : ''}
   ${(() => { const h = byId('homes', homeId); const c = h && h.customerId && byId('customers', h.customerId); return c ? `<a class="breaker-link" href="#/customers/${c.id}"><span class="big-icon sm" aria-hidden="true">👤</span><span><b>${esc(c.name)}</b><span class="muted">${c.lastServiced ? 'Last serviced ' + esc(c.lastServiced) : 'No visits logged'} · ${(c.visits || []).length} service note${(c.visits || []).length === 1 ? '' : 's'}</span></span><span aria-hidden="true">›</span></a>` : ''; })()}
   ${over || warn ? `<a class="alert ${over ? 'over' : 'warn'}" href="#/h/${homeId}/load">${over ? `${over} circuit${over > 1 ? 's' : ''} over 100%` : ''}${over && warn ? ' · ' : ''}${warn ? `${warn} at 80%+` : ''} typical - see Load check</a>` : ''}
   ${peakOver ? `<a class="peak-note" href="#/h/${homeId}/load">⚠️ ${peakOver} circuit${peakOver > 1 ? 's' : ''} could trip if everything runs at once</a>` : ''}
   ${!breakers.length && panel.type !== 'rv' ? scanCard(homeId, panel) : ''}
   ${clashes.length ? `<div class="card clash-card"><h3>⚠️ ${clashes.length === 1 ? 'Two breakers share a spot' : `${clashes.length} spots are shared`}</h3><ul class="list">${clashes.map(([a, b2]) => `<li class="clash-row"><span><b>${esc(stickerText(a, panel))}</b> and <b>${esc(stickerText(b2, panel))}</b> overlap.${canJoinTandem(a, b2, panel) ? ' One breaker with 2 switches?' : ''}</span>${canJoinTandem(a, b2, panel) ? `<button type="button" class="btn small primary" data-join="${esc(a.id)}|${esc(b2.id)}">Make it a tandem</button>` : `<a class="btn small" href="#/edit/breakers/${b2.id}?home=${homeId}">Fix ${esc(slotLabel(b2, panel))}</a>`}</li>`).join('')}</ul></div>` : ''}
+  ${powerStrip(homeId, panel)}
+  ${safetyHtml(safetyNote(panels, breakersAll), { homeId })}
   <div class="panel-box">
     <div class="panel-main">${panel.type === 'rv' ? '120V AC · ' : ''}MAIN ${esc(mainAmpsText(panel))}${panel.mainAmps ? 'A' : ''}${three ? ` · ${esc(serviceOf(panel).short)}` : ''}</div>
     <div class="panel-grid halfrows ${one ? 'one' : ''}" style="grid-template-rows:repeat(${rows}, minmax(30px, auto))">${cells.join('')}</div>
@@ -1327,6 +1336,7 @@ function renderPanel(homeId, panelId) {
     ${isGuest() ? '' : `<a class="btn" href="#/h/${homeId}/access">🔑 Who can edit</a>`}
   </div>
   <div class="legend"><span class="dot lvl-ok"></span>under 80% <span class="dot lvl-warn"></span>80%+ <span class="dot lvl-over"></span>over 100% <span class="dot lvl-none"></span>no loads listed <span class="muted">· colors = Typical, ⚠️ = Peak over 100%</span></div>
+  ${breakers.some((b) => backfeedOf(b) || isOnBackup(b)) ? `<p class="tiny muted legend-note src-legend">${BACKFEED_KINDS.filter((k) => breakers.some((b) => b.backfeed === k.value)).map((k) => `<b class="srctag k-${k.value}">${k.icon} ${k.short}</b> ${esc(k.label.toLowerCase())}`).join(' · ')}${breakers.some(isOnBackup) ? `${breakers.some((b) => backfeedOf(b)) ? ' · ' : ''}<b class="bkup">BACKUP</b> stays on in an outage` : ''}</p>` : ''}
   ${breakers.some((b) => sizeOf(b) === 'half') ? '<p class="tiny muted legend-note">Half-height blocks are tandems: 1 breaker, 2 switches, each its own circuit. Tall blue-edged blocks are double-pole 240V: 1 circuit.</p>' : ''}
   ${three ? phaseCard(panel, breakers) : ''}
   ${shoreCard(panel, breakers, homeId)}
@@ -1488,19 +1498,224 @@ function phaseCard(panel, breakers) {
   </div>`;
 }
 
+// ---------------------------------------------------------------- power sources (solar, wind, battery, generator)
+// header chips without the old "Generator: …" chip (the power strip shows generators now)
+const panelExtras = (panel) => panelExtrasText(panel).filter((t) => !t.startsWith('Generator'));
+function powerStrip(homeId, panel) {
+  if (!panel || panel.type === 'rv') return '';
+  const list = sourcesOf(panel);
+  const href = `#/h/${homeId}/power?panel=${panel.id}`;
+  if (!list.length && hasUtility(panel))
+    return `<a class="power-strip empty" href="${href}"><span class="ps-ic" aria-hidden="true">⚡</span><span class="ps-txt"><b>Power sources</b><small>Utility only · tap to add solar, wind, battery or generator</small></span><span class="chev" aria-hidden="true">›</span></a>`;
+  return `<a class="power-strip" href="${href}"><span class="ps-txt"><b>Power sources</b><span class="ps-chips">${hasUtility(panel) ? `<span class="src-chip k-utility">${UTILITY.icon} Utility</span>` : '<span class="src-chip k-off">Off-grid</span>'}${list.map((s) => `<span class="src-chip k-${s.kind}">${esc(sourceChip(s, list))}</span>`).join('')}</span></span><span class="chev" aria-hidden="true">›</span></a>`;
+}
+// The plain-language safety note (general info). print: compact box for paper.
+function safetyHtml(note, { homeId = '', print = false } = {}) {
+  if (!note) return '';
+  const list = note.shutoffs.length ? `<ul class="sn-list">${note.shutoffs.map((x) => `<li>${x.icon} ${esc(x.text)}${x.panel ? ` <span class="muted">· ${esc(x.panel)}</span>` : ''}</li>`).join('')}</ul>` : '';
+  if (print) return `<div class="safety-print"><b>⚠️ ${esc(note.title.toUpperCase())}.</b> ${esc(note.body)}${note.shutoffs.length ? ' ' + note.shutoffs.map((x) => esc(x.text)).join('; ') + '.' : ''} <i>${esc(note.disclaimer)}</i></div>`;
+  return `<div class="safety-note" role="note"><div class="sn-head"><span class="sn-ic" aria-hidden="true">⚠️</span><b>${esc(note.title)}</b></div>
+    <p>${esc(note.body)}</p>${list}
+    <p class="tiny muted sn-foot">${esc(note.disclaimer)}${homeId && note.shutoffs.some((x) => !x.where) ? ` <a href="#/h/${homeId}/power">Add where each shut-off is</a>` : ''}</p></div>`;
+}
+
 function panelDetailsCard(homeId, panel) {
-  const gen = generatorText(panel);
   const gr = groundingText(panel);
   const spd = panel.spd === 'yes' ? 'Yes' : panel.spd === 'no' ? 'No' : '';
   const edit = `#/edit/panels/${panel.id}?home=${homeId}#more`;
-  if (!gen && !gr && !spd && panel.genHookup !== 'none')
-    return `<a class="card details-empty" href="${edit}"><span><b>Generator, surge protector, grounding</b><span class="muted tiny block">Optional. Tap to add.</span></span><span class="chev" aria-hidden="true">›</span></a>`;
+  const src = sourcesSummary(panel);
+  if (!gr && !spd)
+    return `<a class="card details-empty" href="${edit}"><span><b>Surge protector, grounding</b><span class="muted tiny block">Optional. Tap to add.</span></span><span class="chev" aria-hidden="true">›</span></a>`;
   return `<div class="card panel-details"><div class="pd-head"><h3>Panel details</h3><a class="btn small" href="${edit}">Edit</a></div>
     <dl class="facts">
-      <dt>Generator hookup</dt><dd>${esc(gen || (panel.genHookup === 'none' ? 'None' : 'Not set'))}</dd>
+      ${src ? `<dt>Power sources</dt><dd><a href="#/h/${homeId}/power?panel=${panel.id}">${esc(src)}</a></dd>` : ''}
       <dt>Surge protector</dt><dd>${esc(spd || 'Not set')}</dd>
       ${gr ? `<dt>Grounding</dt><dd>${esc(gr)}</dd>` : ''}
     </dl></div>`;
+}
+
+// ---------------------------------------------------------------- power sources screen
+// #/h/H/power?panel=P : utility on/off, + Solar / Wind / Battery / Generator / Other (as many of
+// each as needed), each with a name, the basics, and More details. Optional: link a breaker
+// to a source (sets breaker.backfeed / backfeedSrc) and mark which breakers stay on in an outage.
+const srcChips = (sid, field, list, value, opts) => chipsHtml(`${sid}__${field}`, list, value || '', opts);
+const srcText = (sid, field, value, label, ph = '', type = 'text') => `<label>${label}<input name="${sid}__${field}" type="${type}" ${type === 'tel' ? 'inputmode="tel"' : ''} value="${esc(value || '')}" placeholder="${esc(ph)}"></label>`;
+const srcOther = (sid, field, s, pick, label, ph) => `<label class="other-field" data-other-of="${sid}__${pick}" ${s[pick] === 'other' ? '' : 'hidden'}>${label}<input name="${sid}__${field}" value="${esc(s[field] || '')}" placeholder="${esc(ph)}"></label>`;
+function srcBreakerPick(s, panel, breakers, list, picked) {
+  const label = { solar: 'Solar breaker in this panel', wind: 'Wind breaker in this panel', battery: 'Battery / inverter breaker in this panel', generator: 'Generator inlet / interlock breaker', other: 'Its breaker in this panel' }[s.kind];
+  const opts = sortBreakers(breakers.filter((b) => b.kind !== 'spare' || b.id === picked));
+  return `<label>${label}<select name="${s.id}__brk"><option value="">Not on the map yet / not sure</option>${opts.map((b) => {
+    const other = b.backfeedSrc && b.backfeedSrc !== s.id && list.some((x) => x.id === b.backfeedSrc) ? ` (${sourceName(list.find((x) => x.id === b.backfeedSrc), list)})` : '';
+    return `<option value="${esc(b.id)}" ${b.id === picked ? 'selected' : ''}>${esc(slotLabel(b, panel))} · ${esc(ampsText(b))} · ${esc(b.label || 'Unlabeled')}${esc(other)}</option>`;
+  }).join('')}</select></label>`;
+}
+function srcCardHtml(s, ctx) {
+  const { panel, breakers, list, picked, idx } = ctx;
+  const k = kindOf(s.kind);
+  const sid = s.id;
+  const brk = srcBreakerPick(s, panel, breakers, list, picked);
+  const shutoff = (lab) => `<span class="field-name">${lab}</span>${srcChips(sid, 'shutoff', SHUTOFF_PLACES, s.shutoff)}${srcOther(sid, 'shutoffOther', s, 'shutoff', 'Where is it? (type it)', 'e.g. Left of the meter, gray box')}`;
+  const installer = `<div class="two">${srcText(sid, 'installer', s.installer, 'Installer', 'Company')}${srcText(sid, 'installerPhone', s.installerPhone, 'Installer phone', '', 'tel')}</div>`;
+  const notes = `<label>Notes<textarea name="${sid}__notes" rows="2" placeholder="optional">${esc(s.notes || '')}</textarea></label>`;
+  const amps = (lab) => `<div class="bf-amps" ${picked ? 'hidden' : ''}><span class="field-name">${lab}</span>${srcChips(sid, 'bfAmps', BACKFEED_AMPS, s.bfAmps)}${srcOther(sid, 'bfAmpsOther', s, 'bfAmps', 'Amps (type it)', 'e.g. 70')}${s.kind === 'other' ? '' : srcText(sid, 'bfSlot', s.bfSlot, 'Which space # (if you know)', 'e.g. 23-25')}</div>`;
+  let basic = '', more = '', moreHint = '';
+  if (s.kind === 'solar') {
+    basic = `<span class="field-name">System size</span>${srcChips(sid, 'size', SOLAR_SIZES, s.size)}${srcOther(sid, 'sizeOther', s, 'size', 'Size (type it)', 'e.g. 7.6 kW')}
+      ${shutoff('Solar shut-off / AC disconnect')}${brk}`;
+    more = `<span class="field-name">Inverter</span>${srcChips(sid, 'inverter', SOLAR_INVERTERS, s.inverter, { cls: 'stack' })}
+      ${srcText(sid, 'brand', s.brand, 'Inverter brand / model', 'e.g. Enphase IQ8, SolarEdge SE7600')}
+      <span class="field-name">How it connects</span>${srcChips(sid, 'connection', SOLAR_CONNECTIONS, s.connection, { cls: 'stack' })}
+      ${amps('Solar breaker size')}
+      <span class="field-name">Net metered (sells power back)?</span>${srcChips(sid, 'netMeter', YES_NO_SURE, s.netMeter)}
+      ${installer}${notes}
+      <p class="tiny muted info-hint">ℹ️ ${esc(busHint(panel, s))}</p>`;
+    moreHint = 'inverter, breaker size, net metering, installer';
+  } else if (s.kind === 'wind') {
+    basic = `<span class="field-name">Turbine size</span>${srcChips(sid, 'size', WIND_SIZES, s.size)}${srcOther(sid, 'sizeOther', s, 'size', 'Size (type it)', 'e.g. 3.5 kW')}
+      ${shutoff('Wind disconnect')}${brk}`;
+    more = `${srcText(sid, 'brand', s.brand, 'Controller / inverter', 'brand and model')}${amps('Wind breaker size')}${installer}${notes}`;
+    moreHint = 'controller, breaker size, installer';
+  } else if (s.kind === 'battery') {
+    basic = `<span class="field-name">What kind</span>${srcChips(sid, 'btype', BATTERY_TYPES, s.btype, { cls: 'stack' })}
+      <span class="field-name">Brand</span>${srcChips(sid, 'brand', BATTERY_BRANDS, s.brand)}${srcOther(sid, 'brandOther', s, 'brand', 'Brand (type it)', 'e.g. Bluetti')}
+      <span class="field-name">What it backs up</span>${srcChips(sid, 'backup', BATTERY_BACKUP, s.backup)}
+      ${shutoff('Battery off switch / disconnect')}`;
+    more = `${srcText(sid, 'model', s.model, 'Model', 'e.g. Powerwall 3, IQ Battery 5P')}
+      <span class="field-name">Size</span>${srcChips(sid, 'kwh', BATTERY_KWH, s.kwh)}${srcOther(sid, 'kwhOther', s, 'kwh', 'kWh (type it)', 'e.g. 27 kWh')}
+      <span class="field-name">How it hooks up</span>${srcChips(sid, 'hookup', BATTERY_HOOKUPS, s.hookup, { cls: 'stack' })}
+      ${brk}${installer}${notes}`;
+    moreHint = 'model, kWh, hookup, breaker, installer';
+  } else if (s.kind === 'generator') {
+    basic = `<span class="field-name">What kind</span>${srcChips(sid, 'gtype', GEN_TYPES, s.gtype, { cls: 'stack' })}
+      <span class="field-name">How it hooks up</span>${srcChips(sid, 'hookup', GEN_HOOKUP_PICKS, s.hookup, { cls: 'stack' })}
+      <span class="field-name">Size</span>${srcChips(sid, 'size', GEN_SIZES, s.size)}${srcOther(sid, 'sizeOther', s, 'size', 'Size (type it)', 'e.g. 3,500 W or 48 kW')}`;
+    more = `<span class="field-name">Fuel</span>${srcChips(sid, 'fuel', GEN_FUELS, s.fuel)}${srcOther(sid, 'fuelOther', s, 'fuel', 'Fuel (type it)', '')}
+      <span class="field-name">Where you plug it in (inlet)</span>${srcChips(sid, 'inlet', GEN_INLETS, s.inlet)}
+      ${brk}${installer}${notes}`;
+    moreHint = 'fuel, inlet, breaker, installer';
+  } else {
+    basic = `${srcText(sid, 'what', s.what, 'What is it?', 'e.g. Micro-hydro, V2H truck, fuel cell')}${shutoff('Its shut-off')}${brk}`;
+    more = `${amps('Breaker size')}${installer}${notes}`;
+    moreHint = 'breaker size, installer, notes';
+  }
+  return `<div class="card src-card k-${s.kind}" data-sid="${esc(sid)}" data-kind="${s.kind}" id="src-${esc(sid)}">
+    <div class="src-head"><span class="src-ic" aria-hidden="true">${k.icon}</span><label class="src-name"><span class="sr-only">Name</span><input name="${sid}__label" value="${esc(s.label || '')}" placeholder="${esc(`e.g. ${{ solar: 'Garage roof solar', wind: 'Back field turbine', battery: 'Garage battery', generator: 'Backup generator', other: 'Creek hydro' }[s.kind]}`)}" maxlength="60" aria-label="Name (optional)"></label><button type="button" class="icon-btn src-rm" data-rm="${esc(sid)}" aria-label="Remove ${esc(sourceName(s, list))}">✕</button></div>
+    ${basic}
+    <details class="more-details"><summary><b>More details</b><span class="muted tiny">${moreHint}</span></summary>${more}</details>
+  </div>`;
+}
+
+function renderPower(homeId, q) {
+  const panels = inHome('panels', homeId).filter((p) => p.type !== 'rv');
+  if (!panels.length) return go(`#/h/${homeId}/panel`);
+  const panel = panels.find((p) => p.id === q.get('panel')) || panels.find((p) => p.type === 'main') || panels[0];
+  const breakers = inHome('breakers', homeId).filter((b) => b.panelId === panel.id);
+  // working copy: the list, utility on/off, breaker links (sourceId -> breakerId), backup flags
+  const st = {
+    list: sourcesOf(panel).map((s) => ({ ...s })),
+    utility: hasUtility(panel),
+    links: {},
+    backup: new Set(breakers.filter(isOnBackup).map((b) => b.id)),
+  };
+  for (const s of st.list) { const hit = breakersFor(s, breakers, st.list)[0]; if (hit) st.links[s.id] = hit.id; }
+  const init = { ...st.links };
+  const collect = () => {
+    const f = document.getElementById('srcForm');
+    if (!f) return;
+    const fd = new FormData(f);
+    st.utility = !!f.querySelector('#srcUtility')?.checked;
+    st.list = st.list.map((s) => {
+      const out = { id: s.id, kind: s.kind };
+      for (const k of [...SOURCE_FIELDS.common, ...SOURCE_FIELDS[s.kind]]) { const v = fd.get(`${s.id}__${k}`); if (v != null && String(v).trim()) out[k] = String(v).trim(); }
+      if (f.querySelector(`[name="${s.id}__brk"]`)) st.links[s.id] = fd.get(`${s.id}__brk`) || '';
+      return out;
+    });
+    // only the breakers shown as chips change; the rest keep their flag
+    const shown = [...f.querySelectorAll('input[name=bkup]')].map((x) => x.value);
+    if (shown.length) st.backup = new Set([...[...st.backup].filter((id) => !shown.includes(id)), ...fd.getAll('bkup')]);
+  };
+  const draw = (focusId = '') => {
+    const list = st.list;
+    const kinds = SOURCE_KINDS.filter((k) => list.some((s) => s.kind === k.value));
+    const hasBk = list.some((s) => s.kind === 'battery' || s.kind === 'generator') || st.backup.size;
+    const preview = safetyNote([{ ...panel, sources: list, offGrid: !st.utility }]);
+    const body = `
+    ${panels.length > 1 ? `<label class="src-panel-pick">Panel<select id="srcPanel">${opt(panels.map((p) => ({ value: p.id, label: p.name })), panel.id)}</select></label>` : ''}
+    <form id="srcForm" class="form src-form" autocomplete="off">
+      <div class="card src-top">
+        <h3>Where does ${esc(panel.name || 'this panel')} get power?</h3>
+        <p class="muted tiny">All optional. Tap what you have. You can add more than one of each (like 2 solar systems).</p>
+        <label class="util-toggle"><input type="checkbox" id="srcUtility" ${st.utility ? 'checked' : ''}><span>${UTILITY.icon} ${esc(UTILITY.label)}</span></label>
+        <div class="src-add" role="group" aria-label="Add a power source">${SOURCE_KINDS.map((k) => `<button type="button" class="add-src k-${k.value}" data-add="${k.value}"><span aria-hidden="true">${k.icon}</span> + ${esc(k.label)}</button>`).join('')}</div>
+      </div>
+      ${kinds.map((k) => list.filter((s) => s.kind === k.value).map((s, i) => srcCardHtml(s, { panel, breakers, list, picked: st.links[s.id] || '', idx: i })).join('') + `<button type="button" class="btn small ghost add-another" data-add="${k.value}">+ Add another ${esc(k.add)}</button>`).join('')}
+      ${hasBk && breakers.length ? `<details class="card bkup-card" ${st.backup.size ? 'open' : ''}><summary><b>Stays on in an outage</b><span class="muted tiny">Optional · tap the breakers your battery or generator keeps on</span></summary>
+        <div class="bkup-chips">${sortBreakers(breakers).filter((b) => b.kind !== 'spare' && !backfeedOf(b)).map((b) => `<label class="pchip ck"><input type="checkbox" name="bkup" value="${esc(b.id)}" ${st.backup.has(b.id) ? 'checked' : ''}><span>${esc(slotLabel(b, panel))} ${esc(b.label || 'Unlabeled')}</span></label>`).join('')}</div>
+        <p class="tiny muted">They get a green BACKUP tag on the panel map and the printed schedule.</p></details>` : ''}
+      ${preview ? `<div class="src-preview"><p class="tiny muted">This note shows on the panel and the printed schedule:</p>${safetyHtml(preview)}</div>` : ''}
+      <div class="row-actions"><button class="btn primary" type="submit">Save</button><a class="btn ghost" href="#/h/${homeId}/panel/${panel.id}">Cancel</a></div>
+    </form>`;
+    app.innerHTML = shell(homeId, 'panel', body, { title: 'Power sources', back: `#/h/${homeId}/panel/${panel.id}` });
+    bindShell();
+    const f = document.getElementById('srcForm');
+    bindChipClear(f);
+    // "Other" text boxes follow their chip; a picked breaker hides the amps/space boxes
+    f.querySelectorAll('[data-other-of]').forEach((lab) => f.querySelectorAll(`input[name="${lab.dataset.otherOf}"]`).forEach((r) => r.addEventListener('change', () => (lab.hidden = !(f.querySelector(`input[name="${lab.dataset.otherOf}"]:checked`) || {}).value || f.querySelector(`input[name="${lab.dataset.otherOf}"]:checked`).value !== 'other'))));
+    f.querySelectorAll('select[name$="__brk"]').forEach((sel) => sel.addEventListener('change', () => { const box = sel.closest('.src-card').querySelector('.bf-amps'); if (box) box.hidden = !!sel.value; }));
+    f.querySelectorAll('[data-add]').forEach((btn) => (btn.onclick = () => {
+      collect();
+      const s = { id: newSourceId(), kind: btn.dataset.add };
+      st.list.push(s);
+      draw(s.id);
+    }));
+    f.querySelectorAll('[data-rm]').forEach((btn) => (btn.onclick = () => {
+      collect();
+      const s = st.list.find((x) => x.id === btn.dataset.rm);
+      const filled = s && Object.keys(s).some((k) => !['id', 'kind'].includes(k));
+      if (filled && !confirm(`Remove ${sourceName(s, st.list)}?`)) return;
+      st.list = st.list.filter((x) => x.id !== btn.dataset.rm);
+      delete st.links[btn.dataset.rm];
+      draw();
+    }));
+    const pp = document.getElementById('srcPanel');
+    if (pp) pp.onchange = () => go(`#/h/${homeId}/power?panel=${pp.value}`);
+    if (focusId) {
+      const el = document.getElementById('src-' + focusId);
+      if (el) { el.scrollIntoView({ block: 'start', behavior: 'smooth' }); el.classList.add('flash'); }
+    }
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      collect();
+      const next = applySources(byId('panels', panel.id) || panel, st.list, { offGrid: !st.utility });
+      const ids = new Set(next.sources.map((s) => s.id));
+      // one breaker per source link (the select); other tagged breakers are left alone
+      const want = new Map();
+      for (const s of next.sources) if (st.links[s.id]) want.set(st.links[s.id], s);
+      const writes = [];
+      for (const b of inHome('breakers', homeId).filter((x) => x.panelId === panel.id)) {
+        const nb = { ...b };
+        const s = want.get(b.id);
+        const was = Object.keys(init).find((sid) => init[sid] === b.id);
+        if (s) { nb.backfeed = s.kind; nb.backfeedSrc = s.id; }
+        else if (was && !ids.has(was)) delete nb.backfeedSrc; // its source was removed: keep the tag (safer), drop the link
+        else if (was && st.links[was] !== b.id) { delete nb.backfeed; delete nb.backfeedSrc; } // unpicked here
+        else if (b.backfeedSrc && !ids.has(b.backfeedSrc)) delete nb.backfeedSrc;
+        if (st.backup.has(b.id)) nb.backup = true; else delete nb.backup;
+        if (JSON.stringify(nb) !== JSON.stringify(b)) writes.push(nb);
+      }
+      try {
+        await store.put('panels', next);
+        for (const nb of writes) await store.put('breakers', nb);
+      } catch (err) {
+        console.error(err);
+        return toast(err && err.message ? err.message : 'Could not save. Try again.');
+      }
+      toast('Power sources saved');
+      go(`#/h/${homeId}/panel/${panel.id}`);
+    };
+  };
+  if (q.get('add') && kindOf(q.get('add'))) { const s = { id: newSourceId(), kind: q.get('add') }; st.list.push(s); draw(s.id); }
+  else draw();
 }
 
 const RUN_WIRES = ['14/2', '12/2', '12/3', '10/2', '10/3', '8/3', '6/3', '#4', '#2', '1/0', '4/0', 'other'];
@@ -1830,6 +2045,18 @@ function groupMatesHtml(homeId, b) {
   return `<div class="card mates"><h3>Same breaker, other ${mates.length > 1 ? 'parts' : 'half'}</h3><ul class="list">${mates.map((m) => `<li><a class="row" href="#/h/${homeId}/breaker/${m.id}"><span class="row-icon mate-slot">${esc(slotText(m))}</span><span class="row-main"><b>${esc(m.label || 'Unlabeled')}</b><span class="muted">${esc(ampsText(m))} · ${esc(breakerTypeText(m))}</span></span><span class="row-side" aria-hidden="true">›</span></a></li>`).join('')}</ul></div>`;
 }
 
+// breaker page: "☀️ Solar backfeed · Garage roof solar" + the safety note; "On backup" line
+function breakerSourceHtml(homeId, b, panel) {
+  const bf = backfeedOf(b);
+  if (!bf && !isOnBackup(b)) return '';
+  const list = sourcesOf(panel);
+  const s = sourceOfBreaker(b, list);
+  const note = bf ? safetyNote(inHome('panels', homeId), inHome('breakers', homeId)) : null;
+  return `${bf ? `<a class="src-line k-${bf.value}" href="#/h/${homeId}/power?panel=${panel ? panel.id : ''}"><span class="src-ic" aria-hidden="true">${bf.icon}</span><span><b>${esc(bf.label)}</b><small>${esc(s ? [sourceName(s, list), sourceFacts(s)].filter(Boolean).join(' · ') : 'Tap to add its details')}</small></span><span class="chev" aria-hidden="true">›</span></a>` : ''}
+  ${isOnBackup(b) ? '<p class="bkup-line"><b class="bkup">BACKUP</b> Stays on in a power outage (battery / generator).</p>' : ''}
+  ${note ? safetyHtml(note, { homeId }) : ''}`;
+}
+
 function renderBreaker(homeId, id) {
   const b = byId('breakers', id);
   if (!b || b.homeId !== homeId) return renderNotFound();
@@ -1849,6 +2076,7 @@ function renderBreaker(homeId, id) {
     </div>
   </section>
   ${b.notes ? `<p class="note-text pre">${esc(b.notes)}</p>` : ''}
+  ${breakerSourceHtml(homeId, b, panel)}
   ${groupMatesHtml(homeId, b)}
 
   ${breakerWireCard(homeId, b, devices)}
@@ -4829,8 +5057,9 @@ function sharePayload(homeId) {
     panels: inHome('panels', homeId).map((p) => ({
       id: p.id, name: p.name, type: p.type, numbering: p.numbering || 'space', layout: p.layout || 'auto', mainAmps: p.mainAmps || '', mainAmpsOther: p.mainAmpsOther || '',
       spaces: p.spaces || '', spacesOther: p.spacesOther || '', shorePower: p.shorePower || '', shorePowerOther: p.shorePowerOther || '', powerSource: p.powerSource || '', sourceAmps: p.sourceAmps || '', sourceAmpsOther: p.sourceAmpsOther || '', location: p.location || '',
+      ...(sourcesOf(p).length ? { sources: sourcesOf(p).map(({ notes, ...s }) => s) } : {}), ...(p.offGrid ? { offGrid: true } : {}),
       fuses: (p.fuses || []).map((f) => ({ num: f.num, amps: f.amps, ampsOther: f.ampsOther || '', powers: f.powers, notes: f.notes || '' })),
-      breakers: inHome('breakers', homeId).filter((b) => b.panelId === p.id).map((b) => ({ slot: b.slot, poles: b.poles, size: b.size || 'full', half: b.half || '', btype: b.btype || '', amps: b.amps, ampsOther: b.ampsOther || '', label: b.label || '', rooms: b.rooms || [], kind: b.kind || '', ...(cleanWire(b.wire) ? { wire: cleanWire(b.wire) } : {}) })),
+      breakers: inHome('breakers', homeId).filter((b) => b.panelId === p.id).map((b) => ({ slot: b.slot, poles: b.poles, size: b.size || 'full', half: b.half || '', btype: b.btype || '', amps: b.amps, ampsOther: b.ampsOther || '', label: b.label || '', rooms: b.rooms || [], kind: b.kind || '', ...(cleanWire(b.wire) ? { wire: cleanWire(b.wire) } : {}), ...(backfeedOf(b) ? { backfeed: b.backfeed } : {}), ...(isOnBackup(b) ? { backup: true } : {}) })),
     })),
   };
 }
@@ -4850,7 +5079,7 @@ async function renderShare(token) {
   const sections = (doc.panels || []).map((p) => {
     const one = layoutOf(p) === 'one';
     return `<div class="sheet directory full share-sheet">
-      <div class="dir-head"><b>${esc(p.name)}</b>${p.mainAmps ? ` · Main ${esc(p.mainAmps === 'other' ? p.mainAmpsOther : p.mainAmps)}A` : ''}${p.type === 'rv' && p.shorePower ? ` · ${esc(shoreText(p))} shore` : ''}${sourceText(p) ? ` · ${esc(sourceText(p))}` : ''}${p.location ? ` · ${esc(p.location)}` : ''}</div>
+      <div class="dir-head"><b>${esc(p.name)}</b>${p.mainAmps ? ` · Main ${esc(p.mainAmps === 'other' ? p.mainAmpsOther : p.mainAmps)}A` : ''}${p.type === 'rv' && p.shorePower ? ` · ${esc(shoreText(p))} shore` : ''}${sourceText(p) ? ` · ${esc(sourceText(p))}` : ''}${p.location ? ` · ${esc(p.location)}` : ''}${sourcesSummary(p) ? `<br><span class="dir-src">Power: ${esc(sourcesOf(p).length ? [hasUtility(p) ? 'Utility' : 'Off-grid', ...sourcesOf(p).map((s) => sourceChip(s, sourcesOf(p)))].join(' + ') : sourcesSummary(p))}</span>` : ''}</div>
       <table class="dir-table ${one ? 'one' : ''}"><thead><tr><th>#</th><th>A</th><th>Circuit</th>${one ? '' : '<th>#</th><th>A</th><th>Circuit</th>'}</tr></thead><tbody>${dirRowsHtml(p, p.breakers, { wire: true })}</tbody></table>
       ${p.fuses.length ? `<div class="dir-head" style="margin-top:8px"><b>12V DC fuses</b></div><table class="dir-table one"><thead><tr><th>#</th><th>A</th><th>Powers</th></tr></thead><tbody>${p.fuses.map((f) => `<tr><td class="n">${esc(f.num)}</td><td class="a">${esc(f.amps === 'other' ? f.ampsOther : f.amps)}A</td><td class="l">${esc(f.powers)}${f.notes ? ` <span class="rm">(${esc(f.notes)})</span>` : ''}</td></tr>`).join('')}</tbody></table>` : ''}
     </div>`;
@@ -4862,6 +5091,7 @@ async function renderShare(token) {
     <p class="muted no-print">Read-only panel directory shared from AmpMap${doc.updatedAt ? ' · updated ' + new Date(doc.updatedAt).toLocaleDateString() : ''}.</p>
     <div class="row-actions no-print">${isGuest() ? `<a class="btn primary" href="#/h/${esc(store.guest.homeId)}/panel">✎ Back to editing</a>` : `<a class="btn primary" href="#/share/${esc(token)}/edit">✎ Edit</a>`}<button class="btn" id="doPrint">Print / Save as PDF</button><a class="btn ghost" href="#/get">Get AmpMap (free)</a></div>
     ${isGuest() ? '' : '<p class="tiny muted no-print edit-hint">Electricians: tap Edit and type the code from the homeowner.</p>'}
+    ${safetyHtml(safetyNote(doc.panels || [], (doc.panels || []).flatMap((p) => p.breakers || [])))}
     ${sections.join('') || '<p>No panels in this share.</p>'}
   </main>`;
   document.getElementById('doPrint').onclick = (e) => runPrint(e.currentTarget, { el: document.getElementById('app'), filename: printFileName() });
@@ -4960,9 +5190,10 @@ async function renderPrint(homeId, kind, id, q) {
     </div>
     <div class="sheet directory ${size}">
       <div class="dir-top">
-        <div class="dir-head"><div class="dir-title">PANEL SCHEDULE</div><b>${esc(panel.name)}</b> · ${esc(homeLabel(home))}${home.address ? `<br><span class="dir-addr">${esc(home.address)}</span>` : ''}<br><span class="dir-meta">${panel.mainAmps ? `Main ${esc(mainAmpsText(panel))}A` : ''}${panel.type === 'rv' && panel.shorePower ? ` · ${esc(shoreText(panel))} shore` : ''}${sourceText(panel) ? ` · ${esc(sourceText(panel))}` : ''}${panel.location ? ` · ${esc(panel.location)}` : ''} · ${breakers.length} circuits</span></div>
+        <div class="dir-head"><div class="dir-title">PANEL SCHEDULE</div><b>${esc(panel.name)}</b> · ${esc(homeLabel(home))}${home.address ? `<br><span class="dir-addr">${esc(home.address)}</span>` : ''}<br><span class="dir-meta">${panel.mainAmps ? `Main ${esc(mainAmpsText(panel))}A` : ''}${panel.type === 'rv' && panel.shorePower ? ` · ${esc(shoreText(panel))} shore` : ''}${sourceText(panel) ? ` · ${esc(sourceText(panel))}` : ''}${panel.location ? ` · ${esc(panel.location)}` : ''} · ${breakers.length} circuits</span>${sourcesSummary(panel) ? `<br><span class="dir-src">Power: ${esc(sourcesOf(panel).length ? [hasUtility(panel) ? 'Utility' : 'Off-grid', ...sourcesOf(panel).map((s) => sourceChip(s, sourcesOf(panel)))].join(' + ') : sourcesSummary(panel))}</span>` : ''}</div>
         ${showQr ? '<div class="dir-qr"><div id="dirQrBox"></div><span>Scan for the full map</span></div>' : ''}
       </div>
+      ${safetyHtml(safetyNote(inHome('panels', homeId), inHome('breakers', homeId)), { print: true })}
       <table class="dir-table ${one ? 'one' : ''}"><thead><tr><th>#</th><th>A</th><th>Circuit</th>${one ? '' : '<th>#</th><th>A</th><th>Circuit</th>'}</tr></thead><tbody>${dirRowsHtml(panel, breakers, { wire: showWire })}</tbody></table>
       ${fuses.length ? `<div class="dir-head" style="margin-top:8px"><b>12V DC fuses</b></div><table class="dir-table one"><thead><tr><th>#</th><th>A</th><th>Powers</th></tr></thead><tbody>${fuses.map((f) => `<tr><td class="n">${esc(f.num)}</td><td class="a">${esc(f.amps === 'other' ? f.ampsOther : f.amps)}A</td><td class="l">${esc(f.powers)}${f.notes ? ` <span class="rm">(${esc(f.notes)})</span>` : ''}</td></tr>`).join('')}</tbody></table>` : ''}
       <div class="dir-foot">Updated ${new Date().toLocaleDateString()} · AmpMap</div>
@@ -4984,7 +5215,7 @@ async function renderPrint(homeId, kind, id, q) {
     const panels = inHome('panels', homeId), breakers = sortBreakers(inHome('breakers', homeId)), devices = inHome('devices', homeId);
     const add = (type, it) => {
       if (type === 'panel') items.push({ path: `/p/${it.id}`, title: it.name, sub: `${homeLabel(home)}${it.mainAmps ? ' · ' + mainAmpsText(it) + 'A main' : ''}` });
-      if (type === 'breaker') items.push({ path: `/b/${it.id}`, title: `Breaker ${slotText(it)} · ${ampsText(it)}${wireTag(it.wire) ? ' · ' + wireTag(it.wire) : ''}`, sub: it.label || '' });
+      if (type === 'breaker') items.push({ path: `/b/${it.id}`, title: `Breaker ${slotText(it)} · ${ampsText(it)}${wireTag(it.wire) ? ' · ' + wireTag(it.wire) : ''}`, sub: `${backfeedOf(it) ? backfeedOf(it).icon + ' ' + backfeedOf(it).label + ' · ' : ''}${isOnBackup(it) ? 'On backup · ' : ''}${it.label || ''}` });
       if (type === 'device') {
         const b = byId('breakers', it.breakerId);
         items.push({ path: `/d/${it.id}`, title: `${it.room || ''} ${it.name ? '- ' + it.name : ''}`.trim(), sub: b ? `Breaker ${slotText(b)} · ${ampsText(b)}` : 'Breaker: ?' });
@@ -5104,18 +5335,13 @@ function renderEdit(col, id, q) {
       <label>Where is it?<input name="location" value="${esc(p.location)}" placeholder="${rv ? 'e.g. Under the bed' : 'e.g. Garage, north wall'}"></label>
       <label>Notes<textarea name="notes" rows="3">${esc(p.notes)}</textarea></label>
       ${rv ? '<p class="tiny muted">12V DC fuses are added on the panel screen after saving.</p>' : ''}
-      <details class="more-details" id="more" ${q.get('more') || location.hash.endsWith('#more') ? 'open' : ''}><summary><b>More details</b><span class="muted tiny">${rv ? 'layout' : 'Generator, surge protector, grounding, what feeds it…'}</span></summary>
+      <details class="more-details" id="more" ${q.get('more') || location.hash.endsWith('#more') ? 'open' : ''}><summary><b>More details</b><span class="muted tiny">${rv ? 'layout' : 'Power sources, surge protector, grounding, what feeds it…'}</span></summary>
         <div class="home-only" ${rv ? 'hidden' : ''}>
         ${showSvc ? '' : svcHtml}
         ${otherPanels.length ? `<label>Fed from<select name="fedFrom"><option value="">Not fed from another panel (it's the main)</option>${otherPanels.map((x) => `<option value="${esc(x.id)}" ${x.id === p.fedFrom ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
         <label class="fed-brk" ${p.fedFrom ? '' : 'hidden'}>Which breaker feeds it<select name="fedBreaker"><option value="">Not sure</option>${(p.fedFrom ? feedBrks(p.fedFrom) : []).map((b) => `<option value="${esc(b.id)}" ${b.id === p.fedBreaker ? 'selected' : ''}>${esc(slotLabel(b, byId('panels', p.fedFrom)))} · ${esc(ampsText(b))} · ${esc(b.label || '')}</option>`).join('')}</select></label>
         <div class="fed-wire" ${p.fedFrom ? '' : 'hidden'}><span class="field-name">Feeder wire</span>${chipsHtml('feeder', FEEDER_SIZES, p.feeder || '')}<label class="other-field" ${p.feeder === 'other' ? '' : 'hidden'}>Feeder (type it)<input name="feederOther" value="${esc(p.feederOther || '')}" placeholder="e.g. 2 sets 350 kcmil AL"></label></div>` : ''}
-        <span class="field-name" id="genHook">Generator hookup</span>${chipsHtml('genHookup', GEN_HOOKUPS.map((g) => ({ value: g.value, label: g.short === 'None' ? 'None' : g.short })), p.genHookup || '', { cls: 'stack' })}
-        <div class="gen-more" ${hasGenerator(p) ? '' : 'hidden'}>
-          <span class="field-name">Generator size</span>${chipsHtml('genSize', GEN_SIZES, p.genSize || '')}
-          <label class="other-field" ${p.genSize === 'other' ? '' : 'hidden'}>Size (type it)<input name="genSizeOther" value="${esc(p.genSizeOther || '')}" placeholder="e.g. 48 kW"></label>
-          <span class="field-name">Where you plug it in (inlet)</span>${chipsHtml('genInlet', GEN_INLETS, p.genInlet || '')}
-        </div>
+        ${isNew ? '<p class="tiny muted" id="genHook">Solar, wind, battery or a generator? Add them on the panel screen after saving (Power sources).</p>' : `<a class="power-link" id="genHook" href="#/h/${homeId}/power?panel=${p.id}"><span aria-hidden="true">⚡</span><span><b>Power sources</b><small>${esc(sourcesSummary(p) || 'Utility only')} · solar, wind, battery, generator</small></span><span class="chev" aria-hidden="true">›</span></a>`}
         <span class="field-name">Whole-home surge protector</span>${chipsHtml('spd', YES_NO, p.spd || '')}
         <span class="field-name">Ground rod</span>${chipsHtml('groundRod', GROUND_RODS, p.groundRod || '')}
         <span class="field-name">Water pipe bonded to ground</span>${chipsHtml('waterBond', YES_NO, p.waterBond || '')}
@@ -5138,6 +5364,15 @@ function renderEdit(col, id, q) {
     const lonelyHalf = (isNew && !!q.get('half')) || (!isNew && !!b.groupId);
     const mateAmps = AMP_OPTIONS.filter((a) => a !== 'other');
     title = isNew ? 'Add a breaker' : `Edit breaker ${slotText(b)}`;
+    // power source on this breaker (solar backfeed, generator inlet…) + "on backup": up top when the panel has sources
+    const bSrcs = sourcesOf(bPanel);
+    const qbf = BACKFEED_KINDS.some((k) => k.value === q.get('backfeed')) ? q.get('backfeed') : '';
+    const bfVal = b.backfeed || qbf;
+    const srcUp = !!(bSrcs.length || bfVal || b.backup);
+    const srcPick = (kind, cur) => { const same = bSrcs.filter((s) => s.kind === kind); return same.length > 1 ? `<option value="">Not sure</option>${same.map((s) => `<option value="${esc(s.id)}" ${s.id === cur ? 'selected' : ''}>${esc(sourceName(s, bSrcs))}</option>`).join('')}` : ''; };
+    const srcBlock = `<div class="bf-field"><span class="field-name">Power source on this breaker <span class="muted tiny">(optional)</span></span>${chipsHtml('backfeed', BACKFEED_KINDS.map((k) => ({ value: k.value, label: `${k.icon} ${k.label}` })), bfVal, { label: 'Power source on this breaker' })}
+      <label class="bf-which" ${srcPick(bfVal, b.backfeedSrc || q.get('src')) ? '' : 'hidden'}>Which one<select name="backfeedSrc">${srcPick(bfVal, b.backfeedSrc || q.get('src'))}</select></label>
+      <span class="field-name">During a power outage</span>${chipsHtml('backup', [{ value: 'yes', label: '🟢 On backup (stays on)' }], b.backup ? 'yes' : '', { label: 'On backup' })}</div>`;
     back = isNew ? `#/h/${homeId}/panel/${b.panelId || ''}` : `#/h/${homeId}/breaker/${id}`;
     fields = `
       ${panels.length > 1 ? `<label>Panel<select name="panelId">${opt(panels.map((p) => ({ value: p.id, label: p.name })), b.panelId)}</select></label>` : `<input type="hidden" name="panelId" value="${esc(b.panelId)}">`}
@@ -5160,7 +5395,9 @@ function renderEdit(col, id, q) {
         ${[1, 2].map((k) => `<div class="mate" data-k="${k}"><div class="mate-title"></div><div class="two"><label>Label<input name="m${k}label" placeholder="e.g. Bedroom 2"></label><label>Amps<select name="m${k}amps">${opt(mateAmps, k === 2 ? '15' : '20')}</select></label></div></div>`).join('')}
       </div>
       <span class="field-name">Protection</span>${chipsHtml('kind', BREAKER_KINDS.filter((k) => k.value !== 'gfpe' || isCommercial(bHome, bPanel) || b.kind === 'gfpe').map((k) => ({ value: k.value, label: k.label.replace(' breaker', '') })), b.kind || 'standard', { label: 'Protection' })}
-      <details class="more-details" ${q.get('focus') === 'wire' || q.get('more') ? 'open' : ''}><summary><b>More details</b><span class="muted tiny">Wire, ${isThreePhase(bPanel) ? 'phase, ' : ''}notes</span></summary>
+      ${srcUp ? srcBlock : ''}
+      <details class="more-details" ${q.get('focus') === 'wire' || q.get('more') ? 'open' : ''}><summary><b>More details</b><span class="muted tiny">${srcUp ? '' : 'Solar / battery / generator, '}Wire, ${isThreePhase(bPanel) ? 'phase, ' : ''}notes</span></summary>
+        ${srcUp ? '' : srcBlock}
         <div class="phase-field" ${isThreePhase(bPanel) ? '' : 'hidden'}><span class="field-name">Phase</span><p class="tiny muted phase-auto"></p>
           <label>Change it (only if the panel is wired differently)<select name="phase"><option value="">Automatic (from the space)</option>${['A', 'B', 'C', 'AB', 'BC', 'AC', 'ABC'].map((x) => `<option value="${x}" ${String(b.phase || '') === x ? 'selected' : ''}>${x.split('').join(' + ')}</option>`).join('')}</select></label></div>
         ${wireFieldsHtml(b.wire, { legend: 'Wire on this circuit', hint: 'What feeds this breaker. Outlets on it use this wire unless you set a different one on the outlet.' })}
@@ -5266,8 +5503,6 @@ function renderEdit(col, id, q) {
     }));
     const showIf = (sel, on) => { const el = f.querySelector(sel); if (el) el.hidden = !on; };
     const radios = (name, fn) => f.querySelectorAll(`input[name=${name}]`).forEach((r) => r.addEventListener('change', fn));
-    radios('genHookup', () => showIf('.gen-more', !['', 'none'].includes(f.elements.genHookup.value)));
-    radios('genSize', () => (f.elements.genSizeOther.closest('label').hidden = f.elements.genSize.value !== 'other'));
     radios('feeder', () => (f.elements.feederOther.closest('label').hidden = f.elements.feeder.value !== 'other'));
     if (f.elements.fedFrom) f.elements.fedFrom.addEventListener('change', () => {
       const pid = f.elements.fedFrom.value;
@@ -5278,6 +5513,19 @@ function renderEdit(col, id, q) {
     });
   }
   if (col === 'breakers') {
+    // power source on this breaker: "Which one" when the panel has 2+ of that kind
+    const syncBf = () => {
+      const kind = (f.querySelector('input[name=backfeed]:checked') || {}).value || '';
+      const list = sourcesOf(byId('panels', f.elements.panelId.value));
+      const same = list.filter((s) => s.kind === kind);
+      const sel = f.elements.backfeedSrc;
+      if (!sel) return;
+      const cur = sel.value;
+      sel.innerHTML = same.length > 1 ? `<option value="">Not sure</option>${same.map((s) => `<option value="${esc(s.id)}" ${s.id === cur ? 'selected' : ''}>${esc(sourceName(s, list))}</option>`).join('')}` : '';
+      sel.closest('label').hidden = same.length < 2;
+    };
+    f.querySelectorAll('input[name=backfeed]').forEach((r) => r.addEventListener('change', syncBf));
+    if (f.elements.panelId.tagName === 'SELECT') f.elements.panelId.addEventListener('change', syncBf);
     const typeOf = () => (f.querySelector('input[name="btype"]:checked') || {}).value || 'single';
     const box = f.querySelector('.mate-fields');
     const sync = () => {
@@ -5441,11 +5689,7 @@ function renderEdit(col, id, q) {
       setOpt(next, 'feeder', from ? v.feeder || '' : '');
       setOpt(next, 'feederOther', from && v.feeder === 'other' ? (v.feederOther || '').trim() : '');
       if (from && !next.powerSource) next.powerSource = 'subfeed';
-      setOpt(next, 'genHookup', v.genHookup || '');
-      const gen = v.genHookup && v.genHookup !== 'none';
-      setOpt(next, 'genSize', gen ? v.genSize || '' : '');
-      setOpt(next, 'genSizeOther', gen && v.genSize === 'other' ? (v.genSizeOther || '').trim() : '');
-      setOpt(next, 'genInlet', gen ? v.genInlet || '' : '');
+      // generator fields (genHookup / genSize / genInlet) now live on the Power sources screen; kept as they were
       setOpt(next, 'spd', v.spd || '');
       setOpt(next, 'groundRod', v.groundRod || '');
       setOpt(next, 'waterBond', v.waterBond || '');
@@ -5472,6 +5716,14 @@ function renderEdit(col, id, q) {
       }
       next = { ...base, homeId, panelId, slot: pos.slot, poles: pos.poles, size: pos.size, half: pos.half, btype: t, groupId, amps: v.amps, ampsOther: v.ampsOther || '', label: v.label.trim(), leg: v.leg || base.leg || '', rooms: v.rooms.split(',').map((s) => s.trim()).filter(Boolean), kind: v.kind, notes: v.notes, loads: base.loads || [] };
       setOpt(next, 'phase', isThreePhase(byId('panels', panelId)) && /^[ABC]{1,3}$/.test(v.phase || '') ? v.phase : '');
+      {
+        const bfKind = BACKFEED_KINDS.some((k) => k.value === v.backfeed) ? v.backfeed : '';
+        const list = sourcesOf(byId('panels', panelId)).filter((s) => s.kind === bfKind);
+        const src = list.length === 1 ? list[0].id : list.some((s) => s.id === v.backfeedSrc) ? v.backfeedSrc : '';
+        setOpt(next, 'backfeed', bfKind);
+        setOpt(next, 'backfeedSrc', bfKind ? src : '');
+        if (v.backup === 'yes') next.backup = true; else delete next.backup;
+      }
       { const w = wireFromForm(v); if (w) next.wire = w; else delete next.wire; }
       for (const m of mates) await store.put('breakers', m);
     }

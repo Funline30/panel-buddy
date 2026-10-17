@@ -1,5 +1,5 @@
 // Demo / local mode: everything lives in this browser's localStorage.
-import { seedData, houseExample, commercialExample } from '../lib/seed.js';
+import { seedData, houseExample, commercialExample, sampleSources, sampleSourceBreakers, SAMPLE_BACKUP } from '../lib/seed.js';
 import { codeHash, guardNext, toMillis, randomToken, CLAIM_DAYS, grantId } from '../lib/access.js';
 
 const KEY = 'panelbuddy:data:v1';
@@ -81,6 +81,23 @@ export function createLocalStore() {
             const i = data[c].findIndex((x) => x.id === it.id && x.homeId === it.homeId);
             if (i !== -1 && !data[c][i].wire) { data[c][i] = { ...data[c][i], wire: it.wire }; changed = true; }
           }
+        if (changed) save();
+      }
+      // ?example=solar adds the sample power sources (solar + battery + generator) and their
+      // breakers to the sample home of a demo started before they existed. Only touches the
+      // sample main panel when it has no power-source list yet, and only adds missing ids.
+      if (typeof location !== 'undefined' && /[?&]example=solar/.test(location.search)) {
+        let changed = false;
+        const pi = data.panels.findIndex((p) => p.id === 'p_main' && p.homeId === 'h_sample');
+        if (pi !== -1 && !Array.isArray(data.panels[pi].sources)) {
+          const p = data.panels[pi];
+          data.panels[pi] = { ...p, sources: sampleSources(), spaces: ['24', '20', '16'].includes(String(p.spaces)) ? '28' : p.spaces };
+          changed = true;
+        }
+        if (pi !== -1) {
+          for (const b of sampleSourceBreakers()) if (!data.breakers.find((x) => x.id === b.id)) { data.breakers.push(b); changed = true; }
+          data.breakers = data.breakers.map((b) => (b.homeId === 'h_sample' && SAMPLE_BACKUP.includes(b.id) && b.backup == null ? ((changed = true), { ...b, backup: true }) : b));
+        }
         if (changed) save();
       }
       data.settings = data.settings || { accountType: 'personal' };

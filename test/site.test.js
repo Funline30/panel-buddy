@@ -32,5 +32,7 @@ test('built site: title, viewport, manifest, local assets, no broken placeholder
   for (const s of ['Load check', 'QR', 'Print', 'GFCI', 'Bedroom 2 - computer, 3D printer, WiFi', 'Demo mode', 'Shore power', '12V DC fuses', 'Customers', 'Service log', 'Scan']) assert.ok(js.includes(s), `bundle contains "${s}"`);
   assert.doesNotMatch(html + js, /Panel Buddy/, 'old name is gone from the app');
   assert.doesNotMatch(js, /google-analytics|googletagmanager|gtag\(/, 'no trackers');
-  assert.doesNotMatch(html + js, /lorem ipsum|TODO|FIXME/i);
+  // third-party chunks (jsPDF, html2canvas) carry their own "todo" strings; check our code only
+  const ours = readdirSync(join(dir, 'assets')).filter((f) => f.endsWith('.js') && !/^(jspdf|html2canvas|index\.es|purify)/.test(f)).map((f) => readFileSync(join(dir, 'assets', f), 'utf8')).join('\n');
+  assert.doesNotMatch(html + ours, /lorem ipsum|TODO|FIXME/i);
 });

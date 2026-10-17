@@ -2,13 +2,31 @@
 // Everything here is example data a user can edit or delete.
 import { mobileHomeTemplate } from './floorplan.js';
 
+// Power sources on the sample main panel (solar + battery + generator), see sources.js.
+export function sampleSources() {
+  return [
+    { id: 's_roof', kind: 'solar', label: 'Garage roof solar', size: '8 kW', inverter: 'micro', brand: 'Enphase IQ8', connection: 'breaker', shutoff: 'By the meter', netMeter: 'yes', installer: 'Sun Valley Solar (example)', installerPhone: '(254) 555-0142' },
+    { id: 's_pw', kind: 'battery', btype: 'home', brand: 'Tesla Powerwall', model: 'Powerwall 3', kwh: '13.5 kWh', backup: 'partial', hookup: 'gateway', shutoff: 'Outside wall', notes: 'Backs up the circuits marked On backup.' },
+    { id: 's_gen', kind: 'generator', gtype: 'portable', hookup: 'interlock', size: '7.5 kW', fuel: 'Gas', inlet: 'Outside wall' },
+  ];
+}
+// Breakers that go with the sample sources (added to older demos by ?example=solar).
+export function sampleSourceBreakers(H = 'h_sample', P = 'p_main', now = Date.now()) {
+  const b = (id, slot, poles, amps, label, rooms, extra = {}) => ({ id, homeId: H, panelId: P, slot: String(slot), poles: String(poles), amps: String(amps), label, rooms, kind: 'standard', notes: '', loads: [], createdAt: now, ...extra });
+  return [
+    b('b23', 23, 2, 40, 'Solar (garage roof)', ['Outside'], { backfeed: 'solar', backfeedSrc: 's_roof', wire: { size: '8', cond: '2g', type: 'thhn' }, notes: 'Solar back-feed breaker. Shut off the solar disconnect by the meter before working in this panel.' }),
+    b('b24', 24, 2, 30, 'Generator inlet (interlock)', ['Outside'], { backfeed: 'generator', backfeedSrc: 's_gen', wire: { size: '10', cond: '3g', type: 'nm', color: 'orange' }, notes: 'Only turn this on after the main is OFF (the interlock plate makes you).' }),
+  ];
+}
+export const SAMPLE_BACKUP = ['b8', 'b9', 'b11', 'b13'];
+
 export function seedData() {
   const now = Date.now();
   const H = 'h_sample';
   const P = 'p_main';
   const homes = [{ id: H, type: 'mobile', name: 'Sample mobile home', address: 'Riesel, TX (example)', notes: 'Example data - edit or delete anything.', createdAt: now, portables: [{ name: 'Vacuum (upright)', watts: 1000, qty: 1, note: 'Typical estimate', portable: true }, { name: 'Carpet cleaner', watts: 1200, qty: 1, note: 'Typical estimate', portable: true }] }];
   const panels = [
-    { id: P, homeId: H, name: 'Main panel', type: 'main', layout: 'auto', mainAmps: '200', spaces: '24', location: 'Hall closet by back door', notes: 'Main breaker at top. Spaces 23-24 empty.', createdAt: now, genHookup: 'interlock', genSize: '7.5 kW', genInlet: 'Outside wall', spd: 'yes', groundRod: '1', waterBond: 'yes' },
+    { id: P, homeId: H, name: 'Main panel', type: 'main', layout: 'auto', mainAmps: '200', spaces: '28', location: 'Hall closet by back door', notes: 'Main breaker at top. Spaces 27-28 empty.', createdAt: now, genHookup: 'interlock', genSize: '7.5 kW', genInlet: 'Outside wall', spd: 'yes', groundRod: '1', waterBond: 'yes', sources: sampleSources() },
   ];
   const b = (id, slot, poles, amps, label, rooms, extra = {}) => ({
     id, homeId: H, panelId: P, slot: String(slot), poles: String(poles), amps: String(amps), label, rooms, kind: 'standard', notes: '', loads: [], createdAt: now, ...extra,
@@ -31,7 +49,9 @@ export function seedData() {
     b('b18', 18, 1, 20, 'Spare', [], { kind: 'spare' }),
     b('b19', 19, 2, 60, 'Furnace / heat strip', ['Hallway'], { wire: { size: '6', cond: '2g', type: 'mc' } }),
     b('b20', 20, 2, 30, 'AC condenser', ['Outside'], { wire: { size: '10', cond: '2g', type: 'uf', color: 'gray', note: 'UF from the panel to the disconnect' } }),
+    ...sampleSourceBreakers(H, P, now),
   ];
+  for (const x of breakers) if (SAMPLE_BACKUP.includes(x.id)) x.backup = true;
   const d = (id, breakerId, type, name, room, location, extra = {}) => ({
     id, homeId: H, breakerId, type, name, room, location, gfci: 'no', afci: 'unknown', status: 'working', notes: '', readings: [], createdAt: now, ...extra,
   });
