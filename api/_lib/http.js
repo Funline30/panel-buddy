@@ -10,7 +10,11 @@ export function send(res, status, obj) {
 }
 
 export async function readBody(req) {
-  if (req.body !== undefined && req.body !== null && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) return req.body;
+  const parsed = req.body; // Vercel parses JSON bodies for us
+  if (parsed && typeof parsed === 'object' && !Buffer.isBuffer(parsed)) return parsed;
+  if (typeof parsed === 'string') {
+    try { return JSON.parse(parsed); } catch { return {}; }
+  }
   const raw = await rawBody(req);
   try {
     return raw.length ? JSON.parse(raw.toString('utf8')) : {};
@@ -19,9 +23,13 @@ export async function readBody(req) {
   }
 }
 
+// Raw bytes for the Stripe signature check. Never touch req.body here: on Vercel it is a lazy
+// getter that reads and JSON-parses the stream, after which the exact bytes are gone.
 export function rawBody(req) {
-  if (Buffer.isBuffer(req.body)) return Promise.resolve(req.body);
-  if (typeof req.body === 'string') return Promise.resolve(Buffer.from(req.body));
+  if (typeof req.on !== 'function') {
+    const b = req.rawBody ?? '';
+    return Promise.resolve(Buffer.isBuffer(b) ? b : Buffer.from(String(b)));
+  }
   return new Promise((resolve, reject) => {
     const chunks = [];
     req.on('data', (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));

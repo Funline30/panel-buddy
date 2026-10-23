@@ -3,7 +3,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { handleEvent } from '../api/billing/webhook.js';
+import webhook, { handleEvent } from '../api/billing/webhook.js';
+import { Readable } from 'node:stream';
+import crypto from 'node:crypto';
 import { VIP_EMAILS } from '../config/vip.js';
 
 const root = new URL('..', import.meta.url).pathname;
@@ -44,4 +46,34 @@ test('vercel.json sends every page to the app but leaves /api to the functions',
 test('no Stripe key or secret is hard-coded', () => {
   const walk = (d) => readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(join(d, e.name)) : [join(d, e.name)]));
   for (const f of [...walk(join(root, 'api')), ...walk(join(root, 'src'))]) assert.doesNotMatch(readFileSync(f, 'utf8'), /(sk|rk)_(live|test)_[A-Za-z0-9]{8,}|whsec_[A-Za-z0-9]{8,}/, f);
+});
+
+test('webhook handler: reads the raw stream (never req.body), checks the signature', async () => {
+  const fakeRes = () => ({ headers: {}, statusCode: 0, body: '', setHeader(k, v) { this.headers[k] = v; }, end(b) { this.body = b || ''; } });
+  const mkReq = (payload, sig) => {
+    const r = Readable.from([Buffer.from(payload)]);
+    r.method = 'POST';
+    r.headers = { 'stripe-signature': sig, 'content-type': 'application/json' };
+    Object.defineProperty(r, 'body', { get() { throw new Error('req.body must not be read'); } });
+    return r;
+  };
+  const old = { k: process.env.STRIPE_SECRET_KEY, w: process.env.STRIPE_WEBHOOK_SECRET };
+  // not set up -> 503, no crash
+  delete process.env.STRIPE_SECRET_KEY;
+  delete process.env.STRIPE_WEBHOOK_SECRET;
+  let res = fakeRes();
+  await webhook(mkReq('{}', 't=1,v1=x'), res);
+  assert.equal(res.statusCode, 503);
+  process.env.STRIPE_SECRET_KEY = 'sk_test_x';
+  process.env.STRIPE_WEBHOOK_SECRET = 'whsec_unit';
+  const payload = JSON.stringify({ id: 'evt_1', type: 'invoice.paid', data: { object: {} } });
+  const t = Math.floor(Date.now() / 1000);
+  const sig = crypto.createHmac('sha256', 'whsec_unit').update(`${t}.${payload}`).digest('hex');
+  res = fakeRes();
+  await webhook(mkReq(payload, `t=${t},v1=${sig}`), res);
+  assert.equal(res.statusCode, 200, res.body);
+  res = fakeRes();
+  await webhook(mkReq(payload, `t=${t},v1=${'0'.repeat(64)}`), res);
+  assert.equal(res.statusCode, 400);
+  for (const [k, v] of [['STRIPE_SECRET_KEY', old.k], ['STRIPE_WEBHOOK_SECRET', old.w]]) if (v === undefined) delete process.env[k]; else process.env[k] = v;
 });
