@@ -20,6 +20,7 @@ import { SERVICE_TYPES, serviceOf, isThreePhase, isCommercial, mainAmpChoices, m
 import './pro.css';
 import { SOURCE_KINDS, kindOf, UTILITY, BACKFEED_KINDS, backfeedOf, isOnBackup, SOLAR_SIZES, SOLAR_INVERTERS, SOLAR_CONNECTIONS, BACKFEED_AMPS, SHUTOFF_PLACES, WIND_SIZES, BATTERY_TYPES, BATTERY_BRANDS, BATTERY_KWH, BATTERY_BACKUP, BATTERY_HOOKUPS, GEN_TYPES, GEN_HOOKUP_PICKS, GEN_FUELS, YES_NO_SURE, FIELDS as SOURCE_FIELDS, newSourceId, sourcesOf, hasUtility, applySources, sourceName, sourceFacts, shutoffText, sourceChip, sourcesSummary, safetyNote, busHint, breakersFor, sourceOfBreaker } from './lib/sources.js';
 import './sources.css';
+import './plans.css';
 import { LOAD_PRESETS, PRESET_NOTE } from './lib/presets.js';
 import { loadSummary, levelText, fmtAmps, shoreSummary, deviceWatts, voltsFor, breakerAmps, isOn, readings, loadReading, deviceReading, projectLoad, NOW_HOURS } from './lib/load.js';
 import { USE_OPTIONS, habitOf, useLabel, HABIT_NOTE, guessHabit } from './lib/habits.js';
@@ -30,6 +31,8 @@ import { CATALOG, CATEGORIES, CATALOG_NOTE, catById, categoryOf, wattsRange, amp
 import { searchHome, searchCatalog, lookupUrl, projectedPct, wattsFromAmps } from './lib/devicesearch.js';
 import { uid, esc, ampsText, sortBreakers, download } from './lib/util.js';
 import { isNativeApp, initNative, publicBase } from './native.js';
+import { PLANS, PRO_FEATURES, FREE_FEATURES, ACCENTS, accentOf, can, planLabel, companyQuote, printFooterName, FREE_TECHS, TRIAL_DAYS } from './lib/plans.js';
+import { plan, isPaid, refreshPlan, onPlan, startCheckout, openPortal, canBuyHere, inStoreApp, checkoutEnabled, planChecked, setDemoPlan } from './billing.js';
 import { printOrSave } from './print.js';
 import { breakersCsv, devicesCsv, fusesCsv } from './lib/csv.js';
 import { compressPhoto } from './lib/photo.js';
@@ -105,7 +108,7 @@ async function start() {
     app.innerHTML = `<div class="center-msg">Loading AmpMap...</div>`;
     const { createFirebaseStore } = await import('./store/firebase.js');
     store = createFirebaseStore(firebaseConfig);
-    store.onAuth(() => render());
+    store.onAuth(() => { render(); refreshPlan(store); });
   } else {
     store = createLocalStore();
   }
@@ -118,8 +121,17 @@ async function start() {
   });
   await store.init();
   bindLoadActions();
+  inStoreApp(); // notes an Android Play app launch (TWA) before the URL changes
+  applyAccent();
+  onPlan(() => {
+    applyAccent();
+    if (parseRoute().parts[0] === 'edit' && document.getElementById('editForm')) return;
+    if (parseRoute().parts[2] === 'quick' && document.getElementById('quickForm') && quickUI.typing()) return;
+    render();
+  });
   window.addEventListener('hashchange', render);
   render();
+  refreshPlan(store);
   if (!isNativeApp() && 'serviceWorker' in navigator && import.meta.env.PROD && !location.pathname.includes('/previews/')) {
     navigator.serviceWorker.register('./sw.js').catch(() => {});
   }
@@ -348,6 +360,7 @@ function shell(homeId, active, body, { title = '', back = '' } = {}) {
       ${title ? `<h1>${esc(title)}</h1>` : `<label class="sr-only" for="homePick">Home</label>
       <select id="homePick" class="home-pick">${homeOptions(homes, homeId)}${isGuest() ? '' : '<option value="__new">+ Add a home...</option>'}</select>`}
     </div>
+    ${!isGuest() && isPaid() ? proBadge() : ''}
     <a class="scan-btn" href="#/scan" aria-label="Scan a QR sticker"><span aria-hidden="true">⌗</span>Scan</a>
   </header>
   <main id="main" class="main">${body}</main>
@@ -429,6 +442,7 @@ async function render() {
     store.saveSettings({ accountType: t });
   }
   if (parts[0] === 'account' && parts[1] === 'delete') return renderDeleteAccount();
+  if (parts[0] === 'plans') return renderPlans(q);
   if (parts[0] === 'edit') return renderEdit(parts[1], parts[2], q);
   if (parts[0] === 'customers') return parts[1] ? renderCustomer(parts[1]) : renderCustomers(q);
 
@@ -4409,14 +4423,17 @@ function renderMore(homeId) {
   const panels = inHome('panels', homeId);
   const body = `
   <div class="section-head"><h2>Settings</h2></div>
+  ${planCardHtml()}
   <div class="card">
     <h3>Appearance</h3>
     <label class="sr-only" for="themePick">Appearance</label>
     <select id="themePick" class="full">${opt(THEME_OPTIONS, getThemePref())}</select>
     <p class="tiny muted">Saved on this device. System follows your phone's light / dark mode.</p>
+    <label class="pro-field">Accent color ${can('accent', plan()) ? '' : proLock()}<select id="accentPick" class="full" ${can('accent', plan()) ? '' : 'disabled'}>${opt(ACCENTS.map((a) => ({ value: a.value, label: a.label })), getAccent())}</select></label>
   </div>
   <div class="card">
     <h3>Print</h3>
+    <label class="pro-field">Your name on printouts ${can('printName', plan()) ? '' : proLock()}<input id="printName" maxlength="80" placeholder="e.g. Sparky Electric · 254-555-0100" value="${esc((store.settings || {}).printName || '')}" ${can('printName', plan()) ? '' : 'disabled'}></label>
     <div class="stack">
       ${panels.map((p) => `<a class="btn" href="#/h/${homeId}/print/directory/${p.id}">Panel door label: ${esc(p.name)}</a>`).join('')}
       <a class="btn" href="#/h/${homeId}/print/qr">QR sticker sheet</a>
@@ -4481,6 +4498,9 @@ function renderMore(homeId) {
   bindShell();
   const $ = (id) => document.getElementById(id);
   $('themePick').onchange = (e) => { setThemePref(e.target.value); toast(`Appearance: ${e.target.options[e.target.selectedIndex].text}`); };
+  $('accentPick').onchange = (e) => { setAccent(e.target.value); toast(`Accent: ${e.target.options[e.target.selectedIndex].text}`); };
+  $('printName').onchange = async (e) => { await store.saveSettings({ printName: e.target.value.trim().slice(0, 80) }); toast('Saved'); };
+  bindPlanCard();
   $('expJson').onclick = async () => {
     const data = JSON.parse(JSON.stringify(D()));
     const photos = {};
@@ -5160,7 +5180,7 @@ async function renderPrint(homeId, kind, id, q) {
     </div>
     <div class="sheet shop">
       <h2>Shopping list · ${esc(homeLabel(home))}</h2>
-      <div class="dir-foot" style="text-align:left">${scope === 'replace' ? 'Items marked "Needs replacing"' : 'Everything in this home'} · ${new Date().toLocaleDateString()} · AmpMap</div>
+      <div class="dir-foot" style="text-align:left">${scope === 'replace' ? 'Items marked "Needs replacing"' : 'Everything in this home'} · ${new Date().toLocaleDateString()} · ${esc(printFooterName(store.settings, plan()))}</div>
       ${sl.count ? shopSections(sl).map(([title, list]) => `<h3>${esc(title)}</h3><table class="shop-table"><tbody>${list.map((i) => `<tr><td class="box"><span></span></td><td class="q">${i.qty}</td><td>${esc(lineText(i).replace(/^\d+ /, ''))}</td></tr>`).join('')}</tbody></table>`).join('') : '<p>Nothing to list.</p>'}
     </div>`;
     app.innerHTML = shell(homeId, 'rooms', body, { title: 'Print shopping list', back: `#/h/${homeId}/shop?scope=${scope}` });
@@ -5196,7 +5216,7 @@ async function renderPrint(homeId, kind, id, q) {
       ${safetyHtml(safetyNote(inHome('panels', homeId), inHome('breakers', homeId)), { print: true })}
       <table class="dir-table ${one ? 'one' : ''}"><thead><tr><th>#</th><th>A</th><th>Circuit</th>${one ? '' : '<th>#</th><th>A</th><th>Circuit</th>'}</tr></thead><tbody>${dirRowsHtml(panel, breakers, { wire: showWire })}</tbody></table>
       ${fuses.length ? `<div class="dir-head" style="margin-top:8px"><b>12V DC fuses</b></div><table class="dir-table one"><thead><tr><th>#</th><th>A</th><th>Powers</th></tr></thead><tbody>${fuses.map((f) => `<tr><td class="n">${esc(f.num)}</td><td class="a">${esc(f.amps === 'other' ? f.ampsOther : f.amps)}A</td><td class="l">${esc(f.powers)}${f.notes ? ` <span class="rm">(${esc(f.notes)})</span>` : ''}</td></tr>`).join('')}</tbody></table>` : ''}
-      <div class="dir-foot">Updated ${new Date().toLocaleDateString()} · AmpMap</div>
+      <div class="dir-foot">Updated ${new Date().toLocaleDateString()} · ${esc(printFooterName(store.settings, plan()))}</div>
     </div>`;
     app.innerHTML = shell(homeId, 'more', body, { title: 'Panel schedule', back: `#/h/${homeId}/panel/${panel.id}` });
     if (showQr) qrSvg(deepLink(`/p/${panel.id}`)).then((svg) => { const el = document.getElementById('dirQrBox'); if (el) el.innerHTML = svg; });
@@ -5772,6 +5792,130 @@ function renderEdit(col, id, q) {
       await store.remove(col, id);
       go(`#/h/${homeId}/panel`);
     };
+}
+
+
+// ---------------------------------------------------------------- plans (Free / Pro / Company)
+const ACCENT_KEY = 'ampmap:accent';
+function getAccent() {
+  try { return accentOf(localStorage.getItem(ACCENT_KEY)).value; } catch { return 'amber'; }
+}
+function setAccent(v) {
+  try { localStorage.setItem(ACCENT_KEY, accentOf(v).value); } catch { /* private mode */ }
+  applyAccent();
+}
+function applyAccent() {
+  const root = document.documentElement;
+  const a = can('accent', plan()) ? accentOf(getAccent()) : ACCENTS[0];
+  if (a.brand) {
+    root.style.setProperty('--brand', a.brand);
+    root.style.setProperty('--brand-ink', a.ink);
+    root.style.setProperty('--brand-soft', `color-mix(in srgb, ${a.brand} 14%, var(--card))`);
+  } else ['--brand', '--brand-ink', '--brand-soft'].forEach((k) => root.style.removeProperty(k));
+}
+const proBadge = () => `<a class="pro-badge" href="#/plans" aria-label="${esc(planLabel(plan()))}">${plan().plan === 'company' ? 'TEAM' : 'PRO'}</a>`;
+const proLock = () => `<a class="pro-lock" href="#/plans" title="Pro feature">PRO</a>`;
+
+function planCardHtml() {
+  if (isGuest()) return '';
+  const st = plan();
+  const paid = isPaid();
+  const sub = paid && st.plan !== 'vip' && !st.demo;
+  const when = st.periodEnd ? new Date(st.periodEnd * 1000).toLocaleDateString() : '';
+  const trial = st.status === 'trialing' && st.trialEnd ? `Free trial until ${new Date(st.trialEnd * 1000).toLocaleDateString()}` : '';
+  return `<a class="card plan-card ${paid ? 'is-pro' : ''}" href="#/plans">
+    <span class="row-icon" aria-hidden="true">${paid ? '⭐' : '⚡'}</span>
+    <span class="row-main"><b>${paid ? esc(planLabel(st)) : 'AmpMap Free'}${paid ? ` <span class="pro-badge static">${st.plan === 'company' ? 'TEAM' : 'PRO'}</span>` : ''}</b>
+    <span class="muted">${paid ? (trial || (sub && when ? (st.cancelAtPeriodEnd ? `Ends ${when}` : `Renews ${when}`) : st.demo ? 'Demo preview' : 'Thanks for supporting AmpMap')) : 'Everything you use stays free. See what Pro adds'}</span></span>
+    <span class="chev" aria-hidden="true">›</span></a>`;
+}
+function bindPlanCard() { /* the card is a plain link to #/plans */ }
+
+let plansTechs = 3;
+let plansYearly = false;
+function renderPlans(q) {
+  const st = plan();
+  const paid = isPaid();
+  const signedIn = store.mode === 'cloud' && !!store.user;
+  const buyHere = canBuyHere();
+  const ready = signedIn && buyHere && checkoutEnabled();
+  const subscriber = paid && st.plan !== 'vip' && !st.demo;
+  if (q.get('checkout') === 'done' && !renderPlans.thanked) {
+    renderPlans.thanked = true;
+    toast('Thanks! Turning on your plan...');
+    let n = 0;
+    const tick = () => refreshPlan(store).then(() => { if (!isPaid() && ++n < 8) setTimeout(tick, 2500); });
+    tick();
+  }
+  const why = !buyHere
+    ? '<p class="plans-note">Upgrades aren\'t available in the app yet. Everything free keeps working here.</p>'
+    : !signedIn
+      ? `<p class="plans-note">${store.mode === 'demo' ? 'Upgrades are coming soon. You\'re in the demo: ' + (isFirebaseConfigured() ? '<a href="#/login">sign in</a> to keep your plan with your account.' : 'nothing here is charged.') : 'Sign in to upgrade.'}</p>`
+      : !planChecked()
+        ? '<p class="plans-note">Checking your plan...</p>'
+        : !checkoutEnabled() ? '<p class="plans-note"><b>Coming soon.</b> Paid plans open shortly. Everything free keeps working.</p>' : '';
+  const buyBtn = (key, text) => (!buyHere ? '' : ready && !subscriber ? `<button class="btn primary full" data-buy="${key}">${text}</button>` : `<button class="btn full" disabled>${subscriber ? 'You have a plan' : 'Coming soon'}</button>`);
+  const pro = plansYearly ? PLANS.pro_yearly : PLANS.pro_monthly;
+  const quote = companyQuote(plansTechs);
+  const body = `
+  <div class="plans">
+    <div class="plans-head">
+      <h2>AmpMap plans</h2>
+      <p class="muted">You're on <b>${esc(paid ? planLabel(st) : 'Free')}</b>${paid ? ' ' + proBadge() : ''}</p>
+    </div>
+    ${why}
+    ${subscriber && buyHere && signedIn ? '<button class="btn full" id="managePlan">Manage plan (change, card, cancel)</button>' : ''}
+    <section class="card plan ${!paid ? 'current' : ''}">
+      <div class="plan-top"><h3>Homeowner</h3><div class="plan-price"><b>Free</b></div></div>
+      ${!paid ? '<span class="pill">Your plan</span>' : ''}
+      <ul class="ticks">${FREE_FEATURES.map((f) => `<li>${esc(f)}</li>`).join('')}</ul>
+    </section>
+    <section class="card plan pro ${paid && st.plan !== 'company' ? 'current' : ''}">
+      <div class="plan-top"><h3>Pro <span class="pro-badge static">PRO</span></h3>
+        <div class="plan-price"><b>${pro.price}</b><span>${pro.per}</span></div></div>
+      <div class="seg" role="radiogroup" aria-label="Billing">
+        <button class="${!plansYearly ? 'on' : ''}" data-yearly="0" role="radio" aria-checked="${!plansYearly}">Monthly $1.99</button>
+        <button class="${plansYearly ? 'on' : ''}" data-yearly="1" role="radio" aria-checked="${plansYearly}">Yearly $14.99 <small>save 37%</small></button>
+      </div>
+      <p class="muted tiny">Everything in Free, plus:</p>
+      <ul class="feats">${PRO_FEATURES.map((f) => `<li><span aria-hidden="true">${f.icon}</span><span><b>${esc(f.title)}</b><span class="muted">${esc(f.text)}</span></span></li>`).join('')}</ul>
+      ${buyBtn(pro.key, `Get Pro · ${pro.price}${pro.per}`)}
+    </section>
+    <section class="card plan company ${st.plan === 'company' ? 'current' : ''}">
+      <div class="plan-top"><h3>Companies</h3><div class="plan-price"><b>$5</b><span>/tech/month</span></div></div>
+      <p class="muted">Free for ${FREE_TECHS} techs or fewer: just pick "Tech / Pro" in Settings. Bigger teams get ${TRIAL_DAYS} days free, no card needed. Includes everything in Pro.</p>
+      <div class="techs"><span>How many techs?</span>
+        <div class="stepper"><button data-techs="-1" aria-label="Fewer techs">−</button><b id="techCount">${plansTechs}</b><button data-techs="1" aria-label="More techs">+</button></div>
+      </div>
+      <p class="quote">${esc(quote.text)}</p>
+      ${quote.free ? (buyHere ? '<a class="btn full" href="#/plans" id="freeTeam">Free, nothing to buy</a>' : '') : buyBtn('company', `Start ${TRIAL_DAYS}-day free trial`)}
+    </section>
+    ${store.mode === 'demo' ? `<button class="btn full" id="demoPro">${st.demo ? 'Stop the Pro preview' : 'Preview Pro in the demo'}</button>` : ''}
+    <p class="tiny muted center">No ads, ever. Cancel anytime.${buyHere ? ' Secure checkout by Stripe.' : ''}</p>
+  </div>`;
+  const hid = D().homes.length && !isGuest() ? currentHomeId() : '';
+  app.innerHTML = hid ? shell(hid, 'more', body, { title: 'Plans', back: `#/h/${hid}/more` }) : `<div class="auth plans-page"><a class="btn" href="#/">‹ Back</a>${body}</div>`;
+  if (hid) bindShell();
+  app.querySelectorAll('[data-yearly]').forEach((b) => (b.onclick = () => { plansYearly = b.dataset.yearly === '1'; renderPlans(new URLSearchParams()); }));
+  app.querySelectorAll('[data-techs]').forEach((b) => (b.onclick = () => { plansTechs = Math.min(500, Math.max(1, plansTechs + Number(b.dataset.techs))); renderPlans(new URLSearchParams()); }));
+  app.querySelectorAll('[data-buy]').forEach((b) => (b.onclick = async () => {
+    b.disabled = true;
+    const was = b.textContent;
+    b.textContent = 'Opening checkout...';
+    try {
+      await startCheckout(store, b.dataset.buy, plansTechs);
+    } catch (e) {
+      toast(e.comingSoon ? 'Coming soon' : e.message);
+      b.disabled = false;
+      b.textContent = was;
+    }
+  }));
+  const m = document.getElementById('managePlan');
+  if (m) m.onclick = async () => { m.disabled = true; try { await openPortal(store); } catch (e) { toast(e.message); m.disabled = false; } };
+  const ft = document.getElementById('freeTeam');
+  if (ft) ft.onclick = (e) => { e.preventDefault(); toast('1-2 techs are free: Settings > Account type > Tech / Pro'); };
+  const dp = document.getElementById('demoPro');
+  if (dp) dp.onclick = async () => { setDemoPlan(!plan().demo); await refreshPlan(store); renderPlans(new URLSearchParams()); };
 }
 
 start();

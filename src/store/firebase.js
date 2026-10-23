@@ -116,6 +116,10 @@ export function createFirebaseStore(config) {
         });
       });
     },
+    // Firebase ID token for AmpMap's own server functions (plans / billing).
+    async idToken() {
+      return auth.currentUser ? auth.currentUser.getIdToken() : '';
+    },
     get settings() {
       return settings;
     },
