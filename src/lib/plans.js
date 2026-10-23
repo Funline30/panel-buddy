@@ -3,7 +3,8 @@
 //
 //  Homeowner (free)  - everything AmpMap does today stays free, forever. No ads.
 //  Pro               - $1.99 a month or $14.99 a year. Adds extras on top (PRO_FEATURES).
-//  Company           - free for 1-2 techs. 3+ techs: 30 days free, then $5 per tech per month.
+//  Company           - free for 1-2 techs. 3+ techs: 30 days free, then $5 a month for each tech
+//                      after the first 2 (3 techs = $5, 4 = $10). Stripe quantity = techs - 2.
 //                      Includes everything in Pro for the account that pays.
 //  VIP               - family and friends get Pro free: add their email to config/vip.js.
 
@@ -13,7 +14,7 @@ export const TRIAL_DAYS = 30;
 export const PLANS = {
   pro_monthly: { key: 'pro_monthly', plan: 'pro', lookupKey: 'ampmap_pro_monthly', amount: 199, interval: 'month', label: 'Pro monthly', price: '$1.99', per: '/month' },
   pro_yearly: { key: 'pro_yearly', plan: 'pro', lookupKey: 'ampmap_pro_yearly', amount: 1499, interval: 'year', label: 'Pro yearly', price: '$14.99', per: '/year', note: 'Save 37%' },
-  company: { key: 'company', plan: 'company', lookupKey: 'ampmap_company_seat_monthly', amount: 500, interval: 'month', label: 'Company', price: '$5', per: '/tech/month', perSeat: true, trialDays: TRIAL_DAYS },
+  company: { key: 'company', plan: 'company', lookupKey: 'ampmap_company_seat_monthly', amount: 500, interval: 'month', label: 'Company', price: '$5', per: '/tech/month after 2', perSeat: true, trialDays: TRIAL_DAYS },
 };
 
 // Pro is additive: nothing here was free before. Each id is what can() checks.
@@ -66,7 +67,9 @@ export function planFromSubscription(sub) {
     plan: live ? plan : 'free',
     status: sub.status || '',
     interval: (price.recurring && price.recurring.interval) || '',
-    seats: plan === 'company' ? Number(item.quantity || sub.quantity || 0) : 0,
+    // seats = techs covered (Stripe quantity + the 2 free ones); billable = what Stripe charges for.
+    seats: plan === 'company' ? techsFromQuantity(item.quantity || sub.quantity) : 0,
+    billable: plan === 'company' ? Number(item.quantity || sub.quantity || 0) : 0,
     customerId: typeof sub.customer === 'string' ? sub.customer : (sub.customer && sub.customer.id) || '',
     subscriptionId: sub.id || '',
     periodEnd: Number(item.current_period_end || sub.current_period_end || 0) || 0,
@@ -90,12 +93,39 @@ export function planLabel(st) {
   return st.interval === 'year' ? 'Pro · yearly' : 'Pro · monthly';
 }
 
-// Company seats: 1-2 techs are free (no checkout); 3+ pay for every tech after the trial.
+// Company seats: 1-2 techs are free (no checkout). 3+ techs pay $5 a month for each tech after
+// the first 2, so the Stripe quantity is techs - 2 (never below 1 once there are 3 or more).
+export function billableTechs(techs) {
+  const n = Math.floor(Number(techs) || 0);
+  return n > FREE_TECHS ? Math.max(1, n - FREE_TECHS) : 0;
+}
+
+// The other way round: a company subscription's Stripe quantity -> how many techs it covers.
+export function techsFromQuantity(quantity) {
+  const q = Math.floor(Number(quantity) || 0);
+  return q > 0 ? q + FREE_TECHS : 0;
+}
+
 export function companyQuote(techs) {
   const n = Math.max(1, Math.floor(Number(techs) || 1));
-  if (n <= FREE_TECHS) return { techs: n, free: true, monthly: 0, text: `Free for ${n} tech${n === 1 ? '' : 's'}` };
-  const monthly = n * 5;
-  return { techs: n, free: false, monthly, text: `${TRIAL_DAYS} days free, then $${monthly}/month (${n} techs × $5)` };
+  if (n <= FREE_TECHS) return { techs: n, free: true, monthly: 0, billable: 0, text: `Free for ${n} tech${n === 1 ? '' : 's'}` };
+  const billable = billableTechs(n);
+  const monthly = billable * 5;
+  return { techs: n, free: false, monthly, billable, text: `${TRIAL_DAYS} days free, then $${monthly}/month (first ${FREE_TECHS} free, ${billable} × $5)` };
+}
+
+// Validate a tech count for a paid company plan (checkout or a seat change).
+function companyTechs(raw) {
+  const n = Math.floor(Number(raw));
+  if (!Number.isFinite(n) || n < FREE_TECHS + 1) return { error: `Companies with ${FREE_TECHS} techs or fewer are free. Pick 3 or more techs.` };
+  if (n > 500) return { error: 'For more than 500 techs, email us.' };
+  return { techs: n, quantity: billableTechs(n) };
+}
+
+// POST /api/billing/seats body: how many techs the company now has.
+export function seatsRequest(body) {
+  const b = body && typeof body === 'object' ? body : {};
+  return companyTechs(b.techs);
 }
 
 // Can this request start checkout? (server side validation of the body)
@@ -104,10 +134,8 @@ export function checkoutRequest(body) {
   const p = PLANS[b.plan];
   if (!p) return { error: 'Unknown plan' };
   if (p.perSeat) {
-    const n = Math.floor(Number(b.techs));
-    if (!Number.isFinite(n) || n < FREE_TECHS + 1) return { error: `Companies with ${FREE_TECHS} techs or fewer are free. Pick 3 or more techs.` };
-    if (n > 500) return { error: 'For more than 500 techs, email us.' };
-    return { plan: p, quantity: n };
+    const c = companyTechs(b.techs);
+    return c.error ? c : { plan: p, ...c };
   }
   return { plan: p, quantity: 1 };
 }

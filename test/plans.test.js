@@ -2,9 +2,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import { PLANS, PRO_FEATURES, can, isVip, planFromSubscription, companyQuote, checkoutRequest, isTwaLaunch, checkoutAllowed, printFooterName, planLabel, accentOf } from '../src/lib/plans.js';
+import { PLANS, PRO_FEATURES, can, isVip, planFromSubscription, companyQuote, checkoutRequest, billableTechs, techsFromQuantity, seatsRequest, isTwaLaunch, checkoutAllowed, printFooterName, planLabel, accentOf } from '../src/lib/plans.js';
 import { formEncode, verifySignature, priceFor, stripeReady } from '../api/_lib/stripe.js';
 import { toFields, fromFields } from '../api/_lib/firebase.js';
+import seatsHandler, { changeSeats } from '../api/billing/seats.js';
 
 test('locked prices', () => {
   assert.equal(PLANS.pro_monthly.amount, 199);
@@ -32,14 +33,24 @@ test('VIP list matches emails without case or spaces', () => {
   assert.equal(isVip('nope', ['nope']), false);
 });
 
-test('company: 1-2 techs free, 3+ paid per tech after the trial', () => {
+test('company: 1-2 techs free, 3+ pay $5 for each tech after the first 2', () => {
   assert.equal(companyQuote(1).free, true);
   assert.equal(companyQuote(2).free, true);
   assert.equal(companyQuote(3).free, false);
-  assert.equal(companyQuote(3).monthly, 15);
-  assert.match(companyQuote(4).text, /30 days free, then \$20\/month/);
+  assert.equal(companyQuote(3).monthly, 5);
+  assert.equal(companyQuote(4).monthly, 10);
+  assert.equal(companyQuote(10).monthly, 40);
+  assert.match(companyQuote(4).text, /30 days free, then \$10\/month/);
+  assert.deepEqual([0, 1, 2, 3, 4, 10].map(billableTechs), [0, 0, 0, 1, 2, 8]);
+  assert.deepEqual([0, 1, 2, 8].map(techsFromQuantity), [0, 3, 4, 10]);
   assert.ok(checkoutRequest({ plan: 'company', techs: 2 }).error);
-  assert.equal(checkoutRequest({ plan: 'company', techs: 3 }).quantity, 3);
+  assert.equal(checkoutRequest({ plan: 'company', techs: 3 }).quantity, 1);
+  assert.equal(checkoutRequest({ plan: 'company', techs: 3 }).techs, 3);
+  assert.equal(checkoutRequest({ plan: 'company', techs: 7 }).quantity, 5);
+  assert.ok(checkoutRequest({ plan: 'company', techs: 501 }).error);
+  assert.deepEqual(seatsRequest({ techs: 4 }), { techs: 4, quantity: 2 });
+  assert.ok(seatsRequest({ techs: 2 }).error);
+  assert.ok(seatsRequest(null).error);
   assert.equal(checkoutRequest({ plan: 'pro_yearly' }).quantity, 1);
   assert.ok(checkoutRequest({ plan: 'gold' }).error);
   assert.ok(checkoutRequest(null).error);
@@ -48,7 +59,8 @@ test('company: 1-2 techs free, 3+ paid per tech after the trial', () => {
 test('subscription -> plan record', () => {
   const sub = { id: 'sub_1', customer: 'cus_1', status: 'trialing', trial_end: 2000, metadata: { uid: 'u1', plan: 'company' }, items: { data: [{ quantity: 4, current_period_end: 3000, price: { lookup_key: 'ampmap_company_seat_monthly', recurring: { interval: 'month' } } }] } };
   const r = planFromSubscription(sub);
-  assert.deepEqual([r.plan, r.seats, r.customerId, r.periodEnd, r.trialEnd, r.status], ['company', 4, 'cus_1', 3000, 2000, 'trialing']);
+  // quantity 4 = 4 billed techs + the 2 free ones = 6 techs
+  assert.deepEqual([r.plan, r.seats, r.billable, r.customerId, r.periodEnd, r.trialEnd, r.status], ['company', 6, 4, 'cus_1', 3000, 2000, 'trialing']);
   assert.equal(planFromSubscription({ ...sub, status: 'canceled' }).plan, 'free');
   const pro = planFromSubscription({ id: 's', status: 'active', current_period_end: 5, items: { data: [{ price: { lookup_key: 'ampmap_pro_yearly', recurring: { interval: 'year' } } }] } });
   assert.equal(pro.plan, 'pro');
@@ -121,4 +133,40 @@ test('nothing set up: Stripe is off, no crash', () => {
 test('Firestore field mapping round-trips', () => {
   const o = { plan: 'pro', seats: 3, cancelAtPeriodEnd: false, price: 1.5 };
   assert.deepEqual(fromFields(toFields(o)), o);
+});
+
+test('seats: changing techs sets the Stripe quantity to techs - 2 on the company subscription', async () => {
+  const sub = { id: 'sub_c', status: 'active', customer: 'cus_c', metadata: { uid: 'u', plan: 'company' }, items: { data: [{ id: 'si_1', quantity: 1, price: { lookup_key: 'ampmap_company_seat_monthly', recurring: { interval: 'month' } } }] } };
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push([init.method, url, init.body || '']);
+    if (init.method === 'GET') return { ok: true, json: async () => ({ data: [sub] }) };
+    return { ok: true, json: async () => ({ ...sub, items: { data: [{ ...sub.items.data[0], quantity: 3 }] } }) };
+  };
+  const out = await changeSeats('cus_c', seatsRequest({ techs: 5 }), { fetchImpl, key: 'sk_test_x' });
+  assert.deepEqual([out.ok, out.seats, out.billable], [true, 5, 3]);
+  const post = calls.find((c) => c[0] === 'POST');
+  assert.match(post[1], /\/v1\/subscriptions\/sub_c$/);
+  const body = decodeURIComponent(post[2]);
+  assert.match(body, /items\[0\]\[id\]=si_1/);
+  assert.match(body, /items\[0\]\[quantity\]=3/);
+  assert.match(body, /metadata\[techs\]=5/);
+  // same count again: no Stripe write
+  calls.length = 0;
+  const same = await changeSeats('cus_c', seatsRequest({ techs: 3 }), { fetchImpl, key: 'sk_test_x' });
+  assert.equal(same.unchanged, true);
+  assert.equal(calls.filter((c) => c[0] === 'POST').length, 0);
+  // no company plan -> clear error
+  const none = await changeSeats('cus_c', seatsRequest({ techs: 4 }), { fetchImpl: async () => ({ ok: true, json: async () => ({ data: [] }) }), key: 'sk_test_x' });
+  assert.ok(none.error);
+});
+
+test('seats endpoint: no Stripe env -> coming soon, no crash', async () => {
+  const old = process.env.STRIPE_SECRET_KEY;
+  delete process.env.STRIPE_SECRET_KEY;
+  const res = { headers: {}, statusCode: 0, body: '', setHeader(k, v) { this.headers[k] = v; }, end(b) { this.body = b || ''; } };
+  await seatsHandler({ method: 'POST', headers: {} }, res);
+  assert.equal(res.statusCode, 503);
+  assert.match(res.body, /coming_soon/);
+  if (old !== undefined) process.env.STRIPE_SECRET_KEY = old;
 });

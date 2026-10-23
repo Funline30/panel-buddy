@@ -38,7 +38,7 @@ export async function stripe(method, path, params, { fetchImpl = fetch, key = st
 // If a key has no price yet (for example the first run with a test key), it is created.
 const PRODUCTS = {
   pro: { name: 'AmpMap Pro', description: 'AmpMap Pro for homeowners.' },
-  company: { name: 'AmpMap Company', description: 'AmpMap for electrical companies, per tech.', unit_label: 'tech' },
+  company: { name: 'AmpMap Company', description: 'AmpMap for electrical companies: $5 a month for each tech after the first 2.', unit_label: 'tech' },
 };
 export async function priceFor(planKey, opts = {}) {
   const p = PLANS[planKey];

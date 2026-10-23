@@ -15,8 +15,12 @@ Everything AmpMap does today stays free for homeowners. No ads, ever. Pro only a
 | Pro badge | | ✓ | ✓ |
 | Priority support | | ✓ | ✓ |
 
-Company: free for 1-2 techs. 3+ techs: 30 days free (no card needed), then $5 per tech per month,
-for every tech. Family and friends: add their email to `config/vip.js` (or Vercel env `VIP_EMAILS`,
+Company: free for 1–2 techs. 3+ techs: $5/mo for each tech after 2, with a 30-day free trial
+(no card needed). So 3 techs = $5/mo, 4 techs = $10/mo, 10 techs = $40/mo (Caleb, Oct 22 2026).
+In Stripe the subscription quantity is techs − 2 (minimum 1 once there are 3+ techs), on the same
+$5 per-unit price. A company changes its tech count on the Plans screen (`POST /api/billing/seats`),
+which sets the quantity the same way; going back to 1–2 techs means cancelling in Manage plan.
+Family and friends: add their email to `config/vip.js` (or Vercel env `VIP_EMAILS`,
 or a Firestore doc `config/vip` with an `emails` array) and they get Pro free.
 
 The rules live in `src/lib/plans.js` (`PRO_FEATURES`, `can()`).
@@ -26,7 +30,8 @@ The rules live in `src/lib/plans.js` (`PRO_FEATURES`, `can()`).
   - `ampmap_pro_monthly` $1.99/mo: `price_1UTYYfDiAIqGTwYd4LiAIprD`
   - `ampmap_pro_yearly` $14.99/yr: `price_1UTYYgDiAIqGTwYdfofQvt6L`
 - AmpMap Company: `prod_VUXdhJSG9ixFxY`
-  - `ampmap_company_seat_monthly` $5/tech/mo, 30-day trial: `price_1UTYYhDiAIqGTwYdkhgho48Z`
+  - `ampmap_company_seat_monthly` $5 per billed tech per month (quantity = techs − 2), 30-day trial:
+    `price_1UTYYhDiAIqGTwYdkhgho48Z`
 - Customer portal settings: `bpc_1UTYYoDiAIqGTwYd133kzVT4`
 
 The code finds prices by lookup key, so it works with test keys too: with a test key, the first

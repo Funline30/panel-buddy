@@ -1,4 +1,5 @@
 // POST /api/billing/checkout {plan:'pro_monthly'|'pro_yearly'|'company', techs?}
+// Company: quantity = techs - 2 (the first 2 techs are free), so 3 techs = 1 x $5.
 // -> { url } of a Stripe Checkout page. 503 coming_soon when Stripe isn't set up yet.
 import { send, readBody, appUrl } from '../_lib/http.js';
 import { verifyIdToken, bearer } from '../_lib/firebase.js';
@@ -41,7 +42,7 @@ export default async function handler(req, res) {
       line_items: [{ price, quantity: want.quantity }],
       allow_promotion_codes: 'true',
       subscription_data: {
-        metadata: { uid: user.uid, plan: want.plan.plan, app: 'ampmap' },
+        metadata: { uid: user.uid, plan: want.plan.plan, app: 'ampmap', ...(company ? { techs: String(want.techs) } : {}) },
         ...(company ? { trial_period_days: TRIAL_DAYS, trial_settings: { end_behavior: { missing_payment_method: 'cancel' } } } : {}),
       },
       ...(company ? { payment_method_collection: 'if_required' } : {}),

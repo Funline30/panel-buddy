@@ -100,6 +100,13 @@ export async function startCheckout(store, planKey, techs) {
   return data;
 }
 
+// Company plan: change how many techs it covers (Stripe charges for techs - 2).
+export async function changeTechs(store, techs) {
+  const data = await call(store, '/api/billing/seats', 'POST', { techs });
+  await refreshPlan(store);
+  return data;
+}
+
 export async function openPortal(store) {
   const data = await call(store, '/api/billing/portal', 'POST', {});
   if (data.url) location.href = data.url;

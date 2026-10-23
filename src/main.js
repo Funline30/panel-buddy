@@ -32,7 +32,7 @@ import { searchHome, searchCatalog, lookupUrl, projectedPct, wattsFromAmps } fro
 import { uid, esc, ampsText, sortBreakers, download } from './lib/util.js';
 import { isNativeApp, initNative, publicBase } from './native.js';
 import { PLANS, PRO_FEATURES, FREE_FEATURES, ACCENTS, accentOf, can, planLabel, companyQuote, printFooterName, FREE_TECHS, TRIAL_DAYS } from './lib/plans.js';
-import { plan, isPaid, refreshPlan, onPlan, startCheckout, openPortal, canBuyHere, inStoreApp, checkoutEnabled, planChecked, setDemoPlan } from './billing.js';
+import { plan, isPaid, refreshPlan, onPlan, startCheckout, openPortal, changeTechs, canBuyHere, inStoreApp, checkoutEnabled, planChecked, setDemoPlan } from './billing.js';
 import { printOrSave } from './print.js';
 import { breakersCsv, devicesCsv, fusesCsv } from './lib/csv.js';
 import { compressPhoto } from './lib/photo.js';
@@ -5832,6 +5832,7 @@ function planCardHtml() {
 function bindPlanCard() { /* the card is a plain link to #/plans */ }
 
 let plansTechs = 3;
+let plansTechsFrom = 0; // the company plan's tech count the stepper was last set from
 let plansYearly = false;
 function renderPlans(q) {
   const st = plan();
@@ -5840,6 +5841,8 @@ function renderPlans(q) {
   const buyHere = canBuyHere();
   const ready = signedIn && buyHere && checkoutEnabled();
   const subscriber = paid && st.plan !== 'vip' && !st.demo;
+  const companySub = subscriber && st.plan === 'company' && st.seats > FREE_TECHS;
+  if (companySub && plansTechsFrom !== st.seats) { plansTechs = st.seats; plansTechsFrom = st.seats; }
   if (q.get('checkout') === 'done' && !renderPlans.thanked) {
     renderPlans.thanked = true;
     toast('Thanks! Turning on your plan...');
@@ -5882,13 +5885,17 @@ function renderPlans(q) {
       ${buyBtn(pro.key, `Get Pro · ${pro.price}${pro.per}`)}
     </section>
     <section class="card plan company ${st.plan === 'company' ? 'current' : ''}">
-      <div class="plan-top"><h3>Companies</h3><div class="plan-price"><b>$5</b><span>/tech/month</span></div></div>
-      <p class="muted">Free for ${FREE_TECHS} techs or fewer: just pick "Tech / Pro" in Settings. Bigger teams get ${TRIAL_DAYS} days free, no card needed. Includes everything in Pro.</p>
+      <div class="plan-top"><h3>Companies</h3><div class="plan-price"><b>$5</b><span>/tech after ${FREE_TECHS}</span></div></div>
+      <p class="muted"><b>Free for 1–${FREE_TECHS} techs.</b> 3+ techs: $5/mo for each tech after ${FREE_TECHS}, ${TRIAL_DAYS}-day free trial (no card needed). So 3 techs = $5/mo, 4 techs = $10/mo. Includes everything in Pro. For 1–${FREE_TECHS} techs just pick "Tech / Pro" in Settings.</p>
       <div class="techs"><span>How many techs?</span>
         <div class="stepper"><button data-techs="-1" aria-label="Fewer techs">−</button><b id="techCount">${plansTechs}</b><button data-techs="1" aria-label="More techs">+</button></div>
       </div>
       <p class="quote">${esc(quote.text)}</p>
-      ${quote.free ? (buyHere ? '<a class="btn full" href="#/plans" id="freeTeam">Free, nothing to buy</a>' : '') : buyBtn('company', `Start ${TRIAL_DAYS}-day free trial`)}
+      ${companySub && buyHere
+        ? (plansTechs === st.seats ? `<button class="btn full" disabled>Your plan: ${st.seats} techs</button>`
+          : quote.free ? `<p class="plans-note">1–${FREE_TECHS} techs are free: cancel the company plan in Manage plan.</p>`
+          : `<button class="btn primary full" id="changeTechs">Change to ${plansTechs} techs · $${quote.monthly}/mo</button>`)
+        : quote.free ? (buyHere ? '<a class="btn full" href="#/plans" id="freeTeam">Free, nothing to buy</a>' : '') : buyBtn('company', `Start ${TRIAL_DAYS}-day free trial`)}
     </section>
     ${store.mode === 'demo' ? `<button class="btn full" id="demoPro">${st.demo ? 'Stop the Pro preview' : 'Preview Pro in the demo'}</button>` : ''}
     <p class="tiny muted center">No ads, ever. Cancel anytime.${buyHere ? ' Secure checkout by Stripe.' : ''}</p>
@@ -5912,8 +5919,15 @@ function renderPlans(q) {
   }));
   const m = document.getElementById('managePlan');
   if (m) m.onclick = async () => { m.disabled = true; try { await openPortal(store); } catch (e) { toast(e.message); m.disabled = false; } };
+  const ct = document.getElementById('changeTechs');
+  if (ct) ct.onclick = async () => {
+    ct.disabled = true;
+    ct.textContent = 'Changing...';
+    try { await changeTechs(store, plansTechs); toast(`Now ${plansTechs} techs`); } catch (e) { toast(e.comingSoon ? 'Coming soon' : e.message); }
+    renderPlans(new URLSearchParams());
+  };
   const ft = document.getElementById('freeTeam');
-  if (ft) ft.onclick = (e) => { e.preventDefault(); toast('1-2 techs are free: Settings > Account type > Tech / Pro'); };
+  if (ft) ft.onclick = (e) => { e.preventDefault(); toast('1–2 techs are free: Settings > Account type > Tech / Pro'); };
   const dp = document.getElementById('demoPro');
   if (dp) dp.onclick = async () => { setDemoPlan(!plan().demo); await refreshPlan(store); renderPlans(new URLSearchParams()); };
 }
