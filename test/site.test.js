@@ -9,7 +9,7 @@ const dir = ['site', 'dist'].map((d) => join(root, d)).find((d) => existsSync(jo
 
 test('built site: title, viewport, manifest, local assets, no broken placeholders', { skip: !dir && 'no build yet (run npm run build)' }, () => {
   const html = readFileSync(join(dir, 'index.html'), 'utf8');
-  assert.match(html, /<title>AmpMap[^<]*<\/title>/);
+  assert.match(html, /<title>Breakerly[^<]*<\/title>/);
   assert.match(html, /name="viewport" content="width=device-width, initial-scale=1/);
   assert.match(html, /rel="manifest"/);
   assert.match(html, /apple-touch-icon/);
@@ -17,13 +17,13 @@ test('built site: title, viewport, manifest, local assets, no broken placeholder
   assert.ok(refs.length >= 4);
   for (const r of refs) assert.ok(existsSync(join(dir, r.replace(/^\.\//, '').replace(/^\//, ''))), `missing asset ${r}`);
   // Share-preview meta (og:/twitter:) must be absolute URLs to the app's own site; nothing else may be remote.
-  const shareMeta = /<meta (?:property|name)="(?:og|twitter):[^"]+" content="https:\/\/panel-buddy\.vercel\.app\/([^"]*)" \/>/g;
+  const shareMeta = /<meta (?:property|name)="(?:og|twitter):[^"]+" content="https:\/\/(?:panel-buddy\.vercel\.app|www\.breakerly\.com)\/([^"]*)" \/>/g;
   for (const m of html.matchAll(shareMeta)) if (m[1]) assert.ok(existsSync(join(dir, m[1])), `missing share asset ${m[1]}`);
-  assert.match(html, /property="og:image" content="https:\/\/panel-buddy\.vercel\.app\/og-image\.png"/);
+  assert.match(html, /property="og:image" content="https:\/\/www\.breakerly\.com\/og-image\.png"/);
   assert.doesNotMatch(html.replace(shareMeta, ''), /https?:\/\/(?!openapi)/, 'no remote assets in index.html');
   const manifest = JSON.parse(readFileSync(join(dir, 'manifest.webmanifest'), 'utf8'));
-  assert.equal(manifest.name, 'AmpMap');
-  assert.equal(manifest.short_name, 'AmpMap');
+  assert.equal(manifest.name, 'Breakerly');
+  assert.equal(manifest.short_name, 'Breakerly');
   assert.ok(existsSync(join(dir, 'privacy.html')), 'privacy page is deployed');
   for (const i of manifest.icons) assert.ok(existsSync(join(dir, i.src)), i.src);
   assert.ok(existsSync(join(dir, 'sw.js')));

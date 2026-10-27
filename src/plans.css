@@ -45,3 +45,24 @@
 .plans-page > .btn { align-self: flex-start; margin-bottom: 8px; }
 .center { text-align: center; }
 .btn.full { width: 100%; }
+
+/* ---- Breakerly: site banner, landing sections, AI scan, electrician card (Oct 27 2026) */
+.site-banner { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px; padding: 8px 14px; background: var(--brand, #f5a524); color: var(--brand-ink, #1f2a3e); font-size: 0.9rem; font-weight: 600; text-align: center; line-height: 1.3; }
+.site-banner a { color: inherit; text-decoration: underline; white-space: nowrap; }
+.auth .works-today { margin: 0; font-size: 0.95rem; font-weight: 600; }
+.landing { max-width: 420px; margin: -36px auto 0; padding: 0 18px 48px; display: grid; gap: 14px; }
+.landing .land-card h2 { font-size: 1.1rem; margin: 0 0 6px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.landing .land-card p { margin: 0 0 8px; }
+.landing .land-pitch { font-weight: 700; font-size: 1.05rem; }
+.landing .row-actions, .feedback-card .row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.landing .row-actions .btn, .feedback-card .row-actions .btn { flex: 1 1 140px; }
+.center { text-align: center; }
+.ai-scan-btn { margin-top: 10px; display: flex; align-items: center; justify-content: center; gap: 8px; }
+.ai-scan-btn[disabled] { opacity: 0.55; }
+.ai-note { margin: 4px 0 10px; }
+.electrician-card { display: grid; gap: 10px; margin: 10px 0; border: 2px solid var(--brand, #f5a524); }
+.electrician-card .ec-text { display: grid; gap: 2px; }
+.electrician-card .ec-text b { font-size: 1.15rem; }
+.call-btn { text-decoration: none; text-align: center; }
+.plan.lifetime .plan-price span { text-transform: none; }
+@media print { .site-banner, .electrician-card .call-btn { display: none; } }

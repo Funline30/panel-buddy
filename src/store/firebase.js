@@ -116,7 +116,7 @@ export function createFirebaseStore(config) {
         });
       });
     },
-    // Firebase ID token for AmpMap's own server functions (plans / billing).
+    // Firebase ID token for Breakerly's own server functions (plans / billing).
     async idToken() {
       return auth.currentUser ? auth.currentUser.getIdToken() : '';
     },

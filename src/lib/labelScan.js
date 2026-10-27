@@ -5,7 +5,7 @@
 // contrast stretch) used before OCR. Printed labels read well; handwriting often doesn't.
 
 // Words on a label that mean a big 240V appliance (2-pole) or a known piece of equipment.
-// type = the AmpMap device type to suggest (pro.js), name = what to call that device.
+// type = the Breakerly device type to suggest (pro.js), name = what to call that device.
 export const SCAN_KEYWORDS = [
   { re: /\bdryers?\b/i, poles: '2', amps: '30', type: 'appliance', name: 'Dryer' },
   { re: /\b(range|stove)\b/i, poles: '2', amps: '50', type: 'appliance', name: 'Range' },

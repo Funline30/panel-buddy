@@ -1,4 +1,4 @@
-// "This panel uses AmpMap" sticker + the smart /get link. Pure logic only (no DOM), so it can be tested.
+// "This panel uses Breakerly" sticker + the smart /get link. Pure logic only (no DOM), so it can be tested.
 
 // ---- App links: the ONE place to fill in once the store listings exist. ----
 // While a store URL is '', /get shows "coming soon" for that phone and offers the web app.
@@ -58,6 +58,22 @@ export function installedByText(v) {
   return 'Installed by: ' + [c.company, c.phone].filter(Boolean).join(' · ');
 }
 
+// tel: link for a phone number as typed ("(254) 555-0100 ext 2" -> "tel:+12545550100"). '' when no digits.
+export function telHref(phone) {
+  let d = String(phone || '').split(/\s*(?:x|ext\.?|#)\s*\d/i)[0].replace(/[^\d+]/g, '');
+  if (!d.replace(/\D/g, '')) return '';
+  if (/^\d{10}$/.test(d)) d = '+1' + d;
+  else if (/^1\d{10}$/.test(d)) d = '+' + d;
+  return 'tel:' + d;
+}
+
+// The electrician card on a shared panel page: { name, phone, tel } or null.
+export function electricianCard(v) {
+  const c = cleanInstalledBy(v);
+  if (!c) return null;
+  return { name: c.company || '', phone: c.phone || '', tel: telHref(c.phone) };
+}
+
 // Default for a sticker: what was saved on this home (even a deliberate blank), else for Tech/Pro accounts the
 // last value they used (settings.installedBy), else nothing. Old homes have no installedBy field: that's fine.
 export function installedByDefault(home, settings, pro = false) {
@@ -76,7 +92,7 @@ export const stickerSize = (v) => STICKER_SIZES.find((s) => s.value === v) || ST
 // The words on the sticker, by what the QR opens.
 export function stickerCopy(kind) {
   return kind === 'share'
-    ? { scan: 'Scan to see this panel', sub: 'and get the free AmpMap app' }
+    ? { scan: 'Scan to see this panel', sub: 'and get the free Breakerly app' }
     : { scan: 'Scan to get the app', sub: 'Free for iPhone, Android & web' };
 }
 

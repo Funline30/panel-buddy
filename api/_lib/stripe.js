@@ -37,8 +37,8 @@ export async function stripe(method, path, params, { fetchImpl = fetch, key = st
 // Prices are found by lookup_key, so the same code works with test keys and live keys.
 // If a key has no price yet (for example the first run with a test key), it is created.
 const PRODUCTS = {
-  pro: { name: 'AmpMap Pro', description: 'AmpMap Pro for homeowners.' },
-  company: { name: 'AmpMap Company', description: 'AmpMap for electrical companies: $5 a month for each tech after the first 2.', unit_label: 'tech' },
+  pro: { name: 'Breakerly Pro', description: 'Breakerly Pro: AI panel scan, branded PDF schedules and more.' },
+  company: { name: 'Breakerly Company', description: 'Breakerly for electrical companies: $5 a month for each tech after the first 2.', unit_label: 'tech' },
 };
 export async function priceFor(planKey, opts = {}) {
   const p = PLANS[planKey];
@@ -47,6 +47,9 @@ export async function priceFor(planKey, opts = {}) {
   if (envId) return envId;
   const found = await stripe('GET', '/v1/prices', { lookup_keys: [p.lookupKey], active: 'true', limit: 1 }, opts);
   if (found.data && found.data[0]) return found.data[0].id;
+  // One-time prices (Lifetime) are never made up here: Caleb creates the $19.99 one-time price in
+  // Stripe and sets STRIPE_PRICE_LIFETIME (or gives it the lookup key breakerly_pro_lifetime).
+  if (p.oneTime) { const e = new Error('lifetime_not_set_up'); e.code = 'lifetime_not_set_up'; throw e; }
   const product = await stripe('POST', '/v1/products', { ...PRODUCTS[p.plan], metadata: { app: 'ampmap', plan: p.plan } }, opts);
   const price = await stripe('POST', '/v1/prices', {
     product: product.id,
@@ -54,7 +57,7 @@ export async function priceFor(planKey, opts = {}) {
     unit_amount: p.amount,
     recurring: { interval: p.interval },
     lookup_key: p.lookupKey,
-    nickname: `AmpMap ${p.label}`,
+    nickname: `Breakerly ${p.label}`,
     metadata: { app: 'ampmap', plan: p.plan },
   }, opts);
   return price.id;
@@ -72,3 +75,6 @@ export function verifySignature(payload, header, secret, { toleranceSec = 300, n
   const a = Buffer.from(expected);
   return sigs.some((s) => { const b = Buffer.from(s); return b.length === a.length && crypto.timingSafeEqual(a, b); });
 }
+
+// Lifetime can be bought once STRIPE_PRICE_LIFETIME is set (Stripe key present too).
+export const lifetimeReady = () => stripeReady() && !!process.env.STRIPE_PRICE_LIFETIME;

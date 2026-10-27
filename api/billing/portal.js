@@ -20,7 +20,7 @@ export default async function handler(req, res) {
       if (!/configuration/i.test(e.message)) throw e;
       // First use with a key whose account has no portal settings saved yet: make default ones.
       await stripe('POST', '/v1/billing_portal/configurations', {
-        business_profile: { headline: 'AmpMap: manage your plan' },
+        business_profile: { headline: 'Breakerly: manage your plan' },
         features: { invoice_history: { enabled: 'true' }, payment_method_update: { enabled: 'true' }, subscription_cancel: { enabled: 'true', mode: 'at_period_end' } },
       });
       session = await stripe('POST', '/v1/billing_portal/sessions', params);

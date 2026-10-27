@@ -79,9 +79,9 @@ test('no web checkout inside the iPhone app or the Android Play app', () => {
 });
 
 test('printout footer name is Pro only', () => {
-  assert.equal(printFooterName({ printName: 'Sparky Electric' }, { plan: 'free' }), 'AmpMap');
+  assert.equal(printFooterName({ printName: 'Sparky Electric' }, { plan: 'free' }), 'Breakerly');
   assert.equal(printFooterName({ printName: 'Sparky Electric' }, { plan: 'pro' }), 'Sparky Electric');
-  assert.equal(printFooterName({}, { plan: 'pro' }), 'AmpMap');
+  assert.equal(printFooterName({}, { plan: 'pro' }), 'Breakerly');
   assert.equal(accentOf('nope').value, 'amber');
 });
 

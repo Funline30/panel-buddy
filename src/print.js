@@ -1,6 +1,6 @@
 // Print / Save as PDF that works everywhere.
 // window.print() does nothing in an iPhone home-screen (standalone) web app or inside the iPhone app,
-// so there AmpMap makes a PDF of the page (exact sticker size) and hands it to the share sheet,
+// so there Breakerly makes a PDF of the page (exact sticker size) and hands it to the share sheet,
 // where Print, Save to Files, Mail and AirDrop all work. Desktop and normal browsers keep window.print().
 // The PDF tools (html2canvas-pro + jsPDF, both free) are loaded only when they are needed.
 
@@ -200,7 +200,7 @@ function readyButton(file, title) {
 }
 
 // The one entry point for every "Print / Save as PDF" button.
-export async function printOrSave({ el, filename = 'AmpMap.pdf', page = 'letter', place = null, onBusy = () => {} } = {}) {
+export async function printOrSave({ el, filename = 'Breakerly.pdf', page = 'letter', place = null, onBusy = () => {} } = {}) {
   if (printMode() === 'print') {
     try {
       window.print();

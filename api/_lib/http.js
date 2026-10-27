@@ -1,5 +1,6 @@
 // Small helpers shared by the billing functions.
 import { VIP_EMAILS } from '../../config/vip.js';
+import { COMP_EMAILS } from '../../config/comp.js';
 import { getDocument } from './firebase.js';
 
 export function send(res, status, obj) {
@@ -49,6 +50,13 @@ export async function vipList(opts = {}) {
     /* Firestore not reachable: the file and env still count */
   }
   return [...VIP_EMAILS, ...env, ...doc];
+}
+
+// Owner / comp emails (Pro free, AI scans uncapped): config/comp.js + env COMP_EMAILS.
+export function compList(env = process.env) {
+  // COMP_EMAILS is the name to use; OWNER_EMAILS and FREE_ACCOUNT_EMAILS are read too.
+  const extra = [env.COMP_EMAILS, env.OWNER_EMAILS, env.FREE_ACCOUNT_EMAILS].map((v) => String(v || '')).join(',');
+  return [...COMP_EMAILS, ...extra.split(/[\s,;]+/).filter(Boolean)];
 }
 
 // Where Stripe sends people back to. APP_URL wins; else the host that called us.

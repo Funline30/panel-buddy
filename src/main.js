@@ -1,6 +1,6 @@
 import './styles.css';
 import QRCode from 'qrcode';
-import { GET_URL, detectPlatform, getTarget, storeRows, stickerQrTarget, cleanInstalledBy, installedByText, installedByDefault, STICKER_SIZES, stickerSize, stickerCopy, PRINT_METHODS, TAPE_SIZES, tapeSize, printChoice, WEATHERPROOF_SHEETS, LABEL_MAKERS, TAPE_TIP } from './lib/sticker.js';
+import { telHref, electricianCard, GET_URL, detectPlatform, getTarget, storeRows, stickerQrTarget, cleanInstalledBy, installedByText, installedByDefault, STICKER_SIZES, stickerSize, stickerCopy, PRINT_METHODS, TAPE_SIZES, tapeSize, printChoice, WEATHERPROOF_SHEETS, LABEL_MAKERS, TAPE_TIP } from './lib/sticker.js';
 import './sticker.css';
 import { firebaseConfig, isFirebaseConfigured } from './firebase-config.js';
 import { createLocalStore } from './store/local.js';
@@ -31,9 +31,11 @@ import { CATALOG, CATEGORIES, CATALOG_NOTE, catById, categoryOf, wattsRange, amp
 import { searchHome, searchCatalog, lookupUrl, projectedPct, wattsFromAmps } from './lib/devicesearch.js';
 import { uid, esc, ampsText, sortBreakers, download } from './lib/util.js';
 import { isNativeApp, initNative, publicBase } from './native.js';
+import { ELECTRICIAN_PITCH, ELECTRICIAN_MORE, APPS_SOON, notifyMailto, feedbackMailto } from './lib/marketing.js';
 import { PLANS, PRO_FEATURES, FREE_FEATURES, ACCENTS, accentOf, can, planLabel, companyQuote, printFooterName, FREE_TECHS, TRIAL_DAYS } from './lib/plans.js';
-import { plan, isPaid, refreshPlan, onPlan, startCheckout, openPortal, changeTechs, canBuyHere, inStoreApp, checkoutEnabled, planChecked, setDemoPlan } from './billing.js';
-import { printOrSave } from './print.js';
+import { plan, isPaid, refreshPlan, onPlan, startCheckout, openPortal, changeTechs, canBuyHere, inStoreApp, checkoutEnabled, planChecked, setDemoPlan, lifetimeEnabled, scanStatus, aiScanPhoto } from './billing.js';
+import { aiToCircuits, aiScanNote } from './lib/aiScan.js';
+import { printOrSave, makePdf, deliverPdf } from './print.js';
 import { breakersCsv, devicesCsv, fusesCsv } from './lib/csv.js';
 import { compressPhoto } from './lib/photo.js';
 import { WIRE_SIZES, WIRE_TYPES, WIRE_CONDUCTORS, WIRE_COLORS, JACKET_SIZE, WIRE_GUIDANCE, cleanWire, wireFromForm, wireText, wireTag, wireShort, effectiveWire, wireChecks, sizeText, typeText, condText, colorText, cableText } from './lib/wire.js';
@@ -105,7 +107,7 @@ async function start() {
   }
   const wantDemo = localStorage.getItem(MODE_KEY) === 'demo' || /[?&]demo=1/.test(location.search);
   if (isFirebaseConfigured() && !wantDemo) {
-    app.innerHTML = `<div class="center-msg">Loading AmpMap...</div>`;
+    app.innerHTML = `<div class="center-msg">Loading Breakerly...</div>`;
     const { createFirebaseStore } = await import('./store/firebase.js');
     store = createFirebaseStore(firebaseConfig);
     store.onAuth(() => { render(); refreshPlan(store); });
@@ -506,10 +508,10 @@ function renderGet() {
     return r.url ? `<a class="get-store ${r.key === platform ? 'mine' : ''}" href="${esc(r.url)}">${inner}</a>` : `<div class="get-store soon ${r.key === platform ? 'mine' : ''}">${inner}</div>`;
   }).join('');
   app.innerHTML = `<div class="auth get-page">
-    <img class="auth-logo" src="./brand/badge.png" alt="AmpMap logo" width="116" height="128">
-    <h1>Get AmpMap</h1>
+    <img class="auth-logo" src="./brand/badge.png" alt="Breakerly logo" width="116" height="128">
+    <h1>Get Breakerly</h1>
     <p class="get-lead">Map your electrical panel: every breaker, outlet and wire, right on your phone.</p>
-    <a class="btn primary get-open" href="${esc(web)}">Open AmpMap</a>
+    <a class="btn primary get-open" href="${esc(web)}">Open Breakerly</a>
     <p class="tiny muted">Free. Works in your browser right now. Tip: use Add to Home Screen to keep it like an app.</p>
     <div class="get-stores">${rows}</div>
     <p class="tiny muted get-foot">Already mapped a panel? Sign in and it's all there.</p>
@@ -519,7 +521,7 @@ function renderGet() {
 const printFileName = () => {
   const h = document.querySelector('#app .sheet h2, #app .sheet h1, #app main h1, #app h1, #app h2');
   const t = ((h && h.textContent) || 'print').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'print';
-  return `AmpMap-${t}.pdf`;
+  return `Breakerly-${t}.pdf`;
 };
 
 // Every "Print / Save as PDF" button: the print dialog where it works, else a PDF in the share sheet.
@@ -537,7 +539,7 @@ async function runPrint(btn, opts = {}) {
   } catch (err) {
     console.error('print', err);
     if (btn) { btn.disabled = false; btn.textContent = label; }
-    toast("Couldn't make the PDF. Try again, or open AmpMap in Safari and print from there.");
+    toast("Couldn't make the PDF. Try again, or open Breakerly in Safari and print from there.");
   }
 }
 
@@ -565,7 +567,7 @@ function renderSticker(homeId, q) {
     ? `<div class="no-print st-row st-sizes" role="group" aria-label="Tape length"><span class="st-lbl">Size</span>${TAPE_SIZES.map((t) => `<a class="st-chip ${t.value === tape.value ? 'on' : ''}" aria-pressed="${t.value === tape.value}" href="#/h/${homeId}/sticker?${qs({ tape: t.value })}">${esc(t.label)}</a>`).join('')}</div>
   <div class="amp-tape-wrap paper-tape"><div class="amp-tape t-${tape.value}" id="ampTape" style="--tw:${tape.w}in;--th:${tape.h}in">
     <div class="at-qr" id="atQr" aria-label="QR code"></div>
-    <div class="at-text"><b>Mapped with AmpMap</b><span>${esc(copy.scan)}</span>${tape.w >= 3.5 && installedByText(ib) ? `<small>${esc(ibDisplay(installedByText(ib)))}</small>` : ''}</div>
+    <div class="at-text"><b>Mapped with Breakerly</b><span>${esc(copy.scan)}</span>${tape.w >= 3.5 && installedByText(ib) ? `<small>${esc(ibDisplay(installedByText(ib)))}</small>` : ''}</div>
   </div></div>
   <p class="no-print tiny muted st-tip">${esc(TAPE_TIP)}</p>
 `
@@ -573,8 +575,8 @@ function renderSticker(homeId, q) {
   <p class="no-print tiny muted st-tip">For outdoor or long-lasting labels, print on weatherproof label sheets, like <a href="${esc(WEATHERPROOF_SHEETS.url)}" target="_blank" rel="noopener">${esc(WEATHERPROOF_SHEETS.name)}</a>. ${esc(WEATHERPROOF_SHEETS.note)}</p>`}
   <div class="amp-sign-wrap paper-${paper}" ${paper === 'tape' ? 'hidden' : ''}>
     <div class="amp-sign s-${size.value}" id="ampSign">
-      <div class="as-top"><img class="as-badge" src="./brand/badge.png" alt="AmpMap"><div class="as-brand"><b>AmpMap</b><span>Panel &amp; circuit map</span></div></div>
-      <div class="as-head">This panel is mapped with <b>AmpMap</b></div>
+      <div class="as-top"><img class="as-badge" src="./brand/badge.png" alt="Breakerly"><div class="as-brand"><b>Breakerly</b><span>Panel &amp; circuit map</span></div></div>
+      <div class="as-head">This panel is mapped with <b>Breakerly</b></div>
       <div class="as-qr" id="asQr" aria-label="QR code"></div>
       <div class="as-scan"><b>${esc(copy.scan)}</b><span>${esc(copy.sub)}</span></div>
       ${srcNote ? `<div class="as-warn"><b>⚠️ ${esc(srcNote.short.replace(/^\S+\s/, ''))}</b><span>Also shut off the ${esc(((w) => (w.length > 1 ? `${w.slice(0, -1).join(', ')} and ${w[w.length - 1]}` : w[0]))(srcNote.kinds.map((k) => (k === 'solar' ? 'solar disconnect' : k === 'wind' ? 'wind disconnect' : k === 'battery' ? 'battery' : k === 'generator' ? 'generator' : 'other source'))))}.</span></div>` : ''}
@@ -590,7 +592,7 @@ function renderSticker(homeId, q) {
     </div>
     ${home.shareToken
       ? `<label>Scanning opens<select id="stQr">${opt([{ value: '', label: 'This panel (view only)' }, { value: 'get', label: 'The app download' }], prefer)}</select></label>`
-      : `<p class="tiny muted st-hint">Scanning opens the AmpMap download page. To show this panel instead, turn on <a href="#/h/${homeId}/more#share">Settings › Share</a>.</p>`}
+      : `<p class="tiny muted st-hint">Scanning opens the Breakerly download page. To show this panel instead, turn on <a href="#/h/${homeId}/more#share">Settings › Share</a>.</p>`}
     ${paper === 'tape' ? '' : `<label>Paper<select id="stPaper">${opt([{ value: 'label', label: `${size.label} (label printer / sticker sheet)` }, { value: 'letter', label: 'Regular 8.5 x 11 paper (cut it out)' }], paper)}</select></label>`}
     <button class="btn primary" id="doPrint">Print / Save as PDF</button>
   </div>
@@ -626,7 +628,7 @@ function renderSticker(homeId, q) {
     const btn = e.currentTarget;
     try { await save(true); } catch (err) { console.error(err); }
     const el = paper === 'tape' ? document.getElementById('ampTape') : document.getElementById('ampSign');
-    const name = paper === 'tape' ? `AmpMap-label-${tape.value}` : `AmpMap-sticker-${size.value}`;
+    const name = paper === 'tape' ? `Breakerly-label-${tape.value}` : `Breakerly-sticker-${size.value}`;
     const opts = paper === 'tape' ? { page: { w: tape.w, h: tape.h } } : paper === 'letter' ? { page: 'letter', place: { w: size.w, h: size.h } } : { page: { w: size.w, h: size.h } };
     await runPrint(btn, { el, filename: `${name}.pdf`, ...opts });
   };
@@ -724,7 +726,7 @@ function renderGuestMore(homeId) {
   const body = `
   <div class="card">
     <h3>You're editing ${esc(home ? home.name : 'this home')}</h3>
-    <p class="muted">As <b>${esc(store.guest.name)}</b>. Your changes save to the homeowner's AmpMap with your name, and they can undo them.</p>
+    <p class="muted">As <b>${esc(store.guest.name)}</b>. Your changes save to the homeowner's Breakerly with your name, and they can undo them.</p>
     <p class="muted">You have full access to this home: add or remove panels, breakers, outlets, rooms, wire runs and photos. Codes, sharing and deleting the home stay with the homeowner.</p>
     <button class="btn primary" id="guestDone">Done editing</button>
     ${gi.token ? `<a class="btn ghost" href="#/share/${esc(gi.token)}">See the read-only view</a>` : ''}
@@ -807,7 +809,7 @@ function codeErrorText(ex) {
   if (c === 'ampmap/expired') return 'That code has expired. Ask for a new one.';
   if (c === 'ampmap/gone') return 'This link was turned off.';
   if (c === 'ampmap/self') return 'You made this setup code. The homeowner enters it from their own account.';
-  if (c === 'ampmap/anon-off' || c === 'ampmap/rules') return "Editing with a code isn't switched on for this AmpMap yet. The owner needs to finish a one-time setup.";
+  if (c === 'ampmap/anon-off' || c === 'ampmap/rules') return "Editing with a code isn't switched on for this Breakerly yet. The owner needs to finish a one-time setup.";
   return "Couldn't check the code: " + ((ex && ex.message) || 'try again');
 }
 
@@ -852,13 +854,13 @@ async function renderAccess(homeId, q) {
   const shareLink = token ? deepLink('/share/' + token) : '';
   const body = `
   ${welcome ? `<div class="alert ok-alert">🎉 ${esc(home.name)} is yours now. Make a temporary code below whenever an electrician comes.</div>` : ''}
-  ${rulesMissing ? `<div class="alert warn">Edit codes aren't switched on yet. They need a one-time update by the AmpMap owner.</div>` : ''}
+  ${rulesMissing ? `<div class="alert warn">Edit codes aren't switched on yet. They need a one-time update by the Breakerly owner.</div>` : ''}
   <div class="card access-card" id="codes">
     <h3>Let an electrician edit</h3>
     <p class="muted">Give the electrician a code. They scan the QR on your panel, tap <b>Edit</b> and type it. No account needed.</p>
     <div class="code-status ${st.on ? 'on' : ''}"><span class="dot-st"></span>${esc(st.text)}</div>
     ${showCode ? `<div class="big-code" aria-label="Edit code">${esc(spaced(showCode))}</div><div class="stack"><button class="btn primary" id="codeShare">Send the code</button></div>` : ''}
-    ${st.on && !showCode ? `<p class="tiny muted">AmpMap doesn't show a code you chose. Forgot it? Set a new one.</p>` : ''}
+    ${st.on && !showCode ? `<p class="tiny muted">Breakerly doesn't show a code you chose. Forgot it? Set a new one.</p>` : ''}
     ${locked ? `<div class="alert warn">Too many wrong tries. The code is paused until ${esc(new Date(guardNext(guard).until).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }))}. <button class="btn small" id="unlock">Unpause now</button></div>` : ''}
     <div class="access-block">
       <h4>Temporary code</h4>
@@ -908,7 +910,7 @@ async function renderAccess(homeId, q) {
   app.innerHTML = shell(homeId, 'more', body, { title: 'Who can edit', back: `#/h/${homeId}/more` });
   bindShell();
   const $ = (id) => document.getElementById(id);
-  const fail = (ex) => alert(ex && ex.code === 'ampmap/rules' ? 'This needs the one-time security update first (the AmpMap owner deploys it).' : "Couldn't save: " + ((ex && ex.message) || ex));
+  const fail = (ex) => alert(ex && ex.code === 'ampmap/rules' ? 'This needs the one-time security update first (the Breakerly owner deploys it).' : "Couldn't save: " + ((ex && ex.message) || ex));
   // a code needs the share link (that's what the QR opens); make it if needed, with homeId
   const ensureShare = async () => {
     const panelIds = inHome('panels', homeId).map((p) => p.id);
@@ -948,9 +950,9 @@ async function renderAccess(homeId, q) {
   if ($('unlock')) $('unlock').onclick = async () => { await store.clearGuard(token); renderAccess(homeId, q); };
   if ($('codeShare')) $('codeShare').onclick = async () => {
     const exp = toMillis(code.exp);
-    const text = `AmpMap edit code for ${home.name}: ${showCode}\nScan the QR on the panel (or open ${shareLink}), tap Edit, and enter the code.${exp ? ` Works until ${fmtWhen(exp)}.` : ''}`;
+    const text = `Breakerly edit code for ${home.name}: ${showCode}\nScan the QR on the panel (or open ${shareLink}), tap Edit, and enter the code.${exp ? ` Works until ${fmtWhen(exp)}.` : ''}`;
     try {
-      if (navigator.share) await navigator.share({ title: 'AmpMap edit code', text });
+      if (navigator.share) await navigator.share({ title: 'Breakerly edit code', text });
       else { await navigator.clipboard.writeText(text); toast('Copied'); }
     } catch { /* closed */ }
   };
@@ -1003,7 +1005,7 @@ async function renderSetupPrint(homeId) {
   </div>
   <div class="sheet setup-sheet">
     <div class="setup-top">
-      <div class="setup-brand"><img src="./brand/house-108.png" alt="" width="44" height="44"><div><div class="setup-kicker">AmpMap</div><div class="setup-title">Homeowner setup</div></div></div>
+      <div class="setup-brand"><img src="./brand/house-108.png" alt="" width="44" height="44"><div><div class="setup-kicker">Breakerly</div><div class="setup-title">Homeowner setup</div></div></div>
       <div class="setup-home"><b>${esc(home.name)}</b>${home.address ? `<br>${esc(home.address)}` : ''}${panel ? `<br><span class="muted">${esc(panel.name)}${panel.location ? ' · ' + esc(panel.location) : ''}</span>` : ''}</div>
     </div>
     <p class="setup-lede">Your electrical panel is mapped: every breaker, outlet and wire. Make it yours in 3 steps:</p>
@@ -1011,7 +1013,7 @@ async function renderSetupPrint(homeId) {
       <div class="setup-qr"><div id="setupQr"></div><span>Scan me</span></div>
       <ol class="setup-steps">
         <li><b>Scan</b> the QR code with your phone camera.</li>
-        <li><b>Create</b> your free AmpMap account (or sign in).</li>
+        <li><b>Create</b> your free Breakerly account (or sign in).</li>
         <li><b>Enter</b> this setup code:<div class="setup-code">${esc(prettyClaimCode(priv.code))}</div></li>
       </ol>
     </div>
@@ -1088,7 +1090,7 @@ async function sharedWithMeHtml() {
 
 function renderNotFound() {
   const homeId = currentHomeId();
-  app.innerHTML = shell(homeId, '', `<div class="card empty"><h2>Not found</h2><p>That item isn't in this account. It may have been deleted, or it belongs to someone else's AmpMap.</p><a class="btn" href="#/">Go to my panel</a></div>`, { title: 'Not found', back: '#/' });
+  app.innerHTML = shell(homeId, '', `<div class="card empty"><h2>Not found</h2><p>That item isn't in this account. It may have been deleted, or it belongs to someone else's Breakerly.</p><a class="btn" href="#/">Go to my panel</a></div>`, { title: 'Not found', back: '#/' });
   bindShell();
 }
 
@@ -1130,13 +1132,13 @@ function renderDeleteAccount() {
       err.textContent = 'Type DELETE in the box to confirm.';
       return;
     }
-    if (!confirm('Last check: delete your AmpMap account and all its data for good?')) return;
+    if (!confirm('Last check: delete your Breakerly account and all its data for good?')) return;
     const btn = f.querySelector('button[type=submit]');
     btn.disabled = true;
     try {
       await store.deleteAccount(f.elements.pw.value, (s) => { step.textContent = s; });
       localStorage.removeItem('panelbuddy:pendingType');
-      toast('Account deleted. Your AmpMap data is gone.');
+      toast('Account deleted. Your Breakerly data is gone.');
       go('#/');
     } catch (ex) {
       btn.disabled = false;
@@ -1156,12 +1158,15 @@ function renderDeleteAccount() {
 // ---------------------------------------------------------------- login
 function renderLogin() {
   const cloud = store.mode === 'cloud';
+  const web = !isNativeApp();
   app.innerHTML = `
+  ${web ? `<div class="site-banner" role="note">📱 <span>${esc(APPS_SOON.banner)}</span> <a href="#apps-soon">Notify me</a></div>` : ''}
   <div class="auth">
-    <img class="auth-logo" src="./brand/badge.png" alt="AmpMap logo" width="116" height="128">
-    <h1>AmpMap</h1>
+    <img class="auth-logo" src="./brand/badge.png" alt="Breakerly logo" width="116" height="128">
+    <h1>Breakerly</h1>
     <p class="muted">Map your breaker panel, every outlet and light, QR stickers and load checks. Free, no ads.</p>
-    ${pendingRoute && /^#\/(p|d|b)\//.test(pendingRoute) ? `<div class="alert warn" id="scanBanner">You scanned an AmpMap sticker. Sign in to open it.</div>` : ''}
+    ${web ? '<p class="works-today">✅ Works today in your browser, on any phone or computer. Nothing to install.</p>' : ''}
+    ${pendingRoute && /^#\/(p|d|b)\//.test(pendingRoute) ? `<div class="alert warn" id="scanBanner">You scanned an Breakerly sticker. Sign in to open it.</div>` : ''}
     ${pendingRoute && /^#\/claim\//.test(pendingRoute) ? `<div class="alert ok-alert" id="claimBanner">Setting up your home: create your free account (choose "Create a free account" below) or sign in. Then enter your setup code.</div>` : ''}
     ${isFirebaseConfigured() ? `
     <form id="authForm" class="card form">
@@ -1175,10 +1180,11 @@ function renderLogin() {
       </label>
       <button class="btn primary" type="submit">Continue</button>
       <p class="err" id="authErr" role="alert"></p>
-    </form>` : `<div class="card"><p>Accounts aren't switched on yet for this copy of AmpMap. You can use the demo below; it saves on this device.</p></div>`}
+    </form>` : `<div class="card"><p>Accounts aren't switched on yet for this copy of Breakerly. You can use the demo below; it saves on this device.</p></div>`}
     <button class="btn ghost" id="demoBtn">${cloud ? 'Try the demo without an account' : 'Back to the demo'}</button>
     <p class="tiny muted">Your data is private to your account. No ads, no trackers. <a href="/privacy.html">Privacy Policy</a></p>
-  </div>`;
+  </div>
+  ${web ? landingSections() : ''}`;
   const f = document.getElementById('authForm');
   if (f) {
     const actionSel = f.elements.action;
@@ -1227,6 +1233,33 @@ function renderLogin() {
   };
 }
 
+// Marketing sections under the sign-in card on breakerly.com (not shown inside the store apps).
+function landingSections() {
+  return `
+  <div class="landing">
+    <section class="card land-card land-pro">
+      <h2>📸 AI panel scan <span class="pro-badge static">PRO</span></h2>
+      <p>Snap one photo of the panel directory, even handwritten. AI fills in the breaker numbers, labels and amps, and you check them before anything is saved.</p>
+    </section>
+    <section class="card land-card land-tech">
+      <h2>🔌 For electricians</h2>
+      <p class="land-pitch">${esc(ELECTRICIAN_PITCH)}</p>
+      <p class="muted">${esc(ELECTRICIAN_MORE)}</p>
+    </section>
+    <section class="card land-card land-apps" id="apps-soon">
+      <h2>📱 ${esc(APPS_SOON.title)}</h2>
+      <p class="muted">${esc(APPS_SOON.text)}</p>
+      <a class="btn primary full" href="${esc(notifyMailto())}">Notify me</a>
+      <p class="tiny muted center">Use it now on the web, free.</p>
+    </section>
+    <section class="card land-card land-feedback">
+      <h2>💬 Leave a review / suggest a feature</h2>
+      <p class="muted">Tell us what you like or what Breakerly should do next. It goes straight to the developer.</p>
+      <div class="row-actions"><a class="btn" href="${esc(feedbackMailto('review'))}">⭐ Leave a review</a><a class="btn" href="${esc(feedbackMailto('idea'))}">💡 Suggest a feature</a></div>
+    </section>
+  </div>`;
+}
+
 function friendlyAuthError(ex) {
   const c = (ex && ex.code) || '';
   if (c.includes('invalid-credential') || c.includes('wrong-password') || c.includes('user-not-found')) return 'Email or password is wrong.';
@@ -1240,7 +1273,7 @@ function friendlyAuthError(ex) {
 }
 
 function renderFirstHome() {
-  app.innerHTML = `<div class="auth"><img class="auth-logo" src="./brand/badge.png" alt="AmpMap logo" width="116" height="128"><h1>Welcome to AmpMap</h1>
+  app.innerHTML = `<div class="auth"><img class="auth-logo" src="./brand/badge.png" alt="Breakerly logo" width="116" height="128"><h1>Welcome to Breakerly</h1>
   <p class="muted">Start by adding your home. You can add more properties later.</p>
   <a class="btn primary" href="#/edit/homes/new">Add my home</a>
   ${store.mode === 'cloud' ? `<p class="tiny muted">Signed in as ${esc(store.user.email)} · <a href="#" id="so">Sign out</a> · <a href="#/account/delete">Delete account</a></p>` : ''}</div>`;
@@ -3872,7 +3905,7 @@ function catalogRowHtml(homeId, c, query) {
 
 function notFoundHtml(homeId, query, partial = false) {
   return `<div class="card not-found">
-    <h3>${partial ? 'No exact match for that model' : "Not in AmpMap's list yet"}</h3>
+    <h3>${partial ? 'No exact match for that model' : "Not in Breakerly's list yet"}</h3>
     <p class="muted">Easiest: check the sticker or nameplate on the back or bottom. It lists watts, or amps (watts = amps × 120).</p>
     <div class="row-actions">
       <a class="btn" href="${esc(lookupUrl(query))}" target="_blank" rel="noopener">🔎 Look it up online</a>
@@ -4449,6 +4482,12 @@ function renderMore(homeId) {
       <a class="btn" href="#/edit/panels/new?home=${homeId}">+ Add a panel / sub-panel</a>
     </div>
   </div>
+  <div class="card feedback-card">
+    <h3>Leave a review / suggest a feature</h3>
+    <p class="muted">Tell us what you like or what Breakerly should do next. It opens your email, addressed to the developer.</p>
+    <div class="row-actions"><a class="btn" href="${esc(feedbackMailto('review', { where: isNativeApp() ? 'app' : 'web' }))}">⭐ Leave a review</a><a class="btn" href="${esc(feedbackMailto('idea', { where: isNativeApp() ? 'app' : 'web' }))}">💡 Suggest a feature</a></div>
+  </div>
+  ${isNativeApp() ? '' : `<div class="card apps-soon-card"><h3>📱 ${esc(APPS_SOON.title)}</h3><p class="muted">${esc(APPS_SOON.text)}</p><a class="btn" href="${esc(notifyMailto())}">Notify me</a></div>`}
   <div class="card access-entry">
     <h3>Who can edit</h3>
     <p class="muted">Give an electrician a code to make changes, see what they changed, or hand this home to its owner.</p>
@@ -4493,7 +4532,7 @@ function renderMore(homeId) {
     <h3>Install on your phone</h3>
     <p class="muted"><b>iPhone:</b> open in Safari, tap Share, then "Add to Home Screen".<br><b>Android / Windows (Chrome or Edge):</b> menu, then "Install app".</p>
   </div>`}
-  <p class="tiny muted center">AmpMap · free, no ads, no trackers. Not a substitute for a licensed electrician; turn the breaker off and verify with a tester before touching wiring.<br><a href="/privacy.html">Privacy Policy</a></p>`;
+  <p class="tiny muted center">Breakerly · free, no ads, no trackers. Not a substitute for a licensed electrician; turn the breaker off and verify with a tester before touching wiring.<br><a href="/privacy.html">Privacy Policy</a></p>`;
   app.innerHTML = shell(homeId, 'more', body);
   bindShell();
   const $ = (id) => document.getElementById(id);
@@ -4554,7 +4593,7 @@ function renderMore(homeId) {
     if (!file) return;
     try {
       const parsed = JSON.parse(await file.text());
-      if (!Array.isArray(parsed.homes)) throw new Error('Not an AmpMap backup');
+      if (!Array.isArray(parsed.homes)) throw new Error('Not an Breakerly backup');
       if (!confirm(`Replace everything here with this backup (${parsed.homes.length} home(s), ${(parsed.breakers || []).length} breakers, ${(parsed.devices || []).length} items)?`)) return;
       await importAll(parsed);
       toast('Backup restored');
@@ -4714,7 +4753,7 @@ async function resolveShort(kind, id) {
   const item = byId(col, id);
   if (item) return location.replace(`#/h/${item.homeId}/${view}/${id}`);
   const homeId = currentHomeId();
-  app.innerHTML = shell(homeId, '', `<div class="card empty"><h2>Not in your AmpMap</h2>
+  app.innerHTML = shell(homeId, '', `<div class="card empty"><h2>Not in your Breakerly</h2>
     <p>This sticker belongs to ${store.mode === 'cloud' ? 'another account' : 'data that isn\'t on this device'}.</p>
     <div id="shareHint" class="muted">Checking for a shared copy...</div>
     ${store.mode === 'cloud' ? '<button class="btn" id="switchAcct">Sign in with a different account</button>' : ''}
@@ -4739,7 +4778,7 @@ function handleScanned(text) {
   const m = String(text).match(/#(\/(?:p|d|b|h|share)\/[^\s]*)/);
   if (m) return go('#' + m[1]);
   const el = document.getElementById('scanMsg');
-  if (el) el.textContent = `That QR code isn't an AmpMap sticker: ${String(text).slice(0, 120)}`;
+  if (el) el.textContent = `That QR code isn't an Breakerly sticker: ${String(text).slice(0, 120)}`;
 }
 
 async function decodeImageData(imgData) {
@@ -4769,7 +4808,13 @@ function scanTarget(homeId, q) {
   return empty ? p : null; // null = build a new panel
 }
 
+let aiScanSt = null; // { enabled, signedIn, kind, left, limit, unlimited } from GET /api/scan-panel
+let aiScanAsked = false;
 function renderLabelScan(homeId, q) {
+  if (!aiScanAsked) {
+    aiScanAsked = true;
+    scanStatus(store).then((s) => { aiScanSt = s; if (parseRoute().parts[2] === 'labelscan') render(); }).catch(() => {});
+  }
   const key = `${homeId}|${q.get('panel') || ''}`;
   if (labelUI.key !== key) labelUI = { key, step: 'pick', src: '', rotate: 0, circuits: [], skipped: [], quality: '', progress: 0, msg: '', sel: -1, name: '', errors: {} };
   const target = scanTarget(homeId, q);
@@ -4787,7 +4832,7 @@ function renderLabelScan(homeId, q) {
       <label class="btn primary big scan-pick">📷 Take a photo<input type="file" accept="image/*" capture="environment" id="scanCam" hidden></label>
       <label class="btn big scan-pick">🖼️ Choose a photo<input type="file" accept="image/*" id="scanFile" hidden></label>
       ${demo ? `<button class="btn ghost" id="scanSample">Try it with a sample label</button>` : ''}
-      <p class="tiny muted">Works best with printed labels in good light. Handwriting may not read well. The photo is read on your phone.</p>
+      <p class="tiny muted">Works best with printed labels in good light. Handwriting may not read well on the free reader (it runs on your phone). <b>AI scan</b> (Pro) reads handwriting too.</p>
       <a class="btn ghost small" href="${target ? `#/h/${homeId}/quick?panel=${target.id}` : `#/edit/panels/new?home=${homeId}`}">Skip, I'll type them in</a>
     </div>`;
   } else if (S.step === 'photo' || S.step === 'reading') {
@@ -4800,7 +4845,10 @@ function renderLabelScan(homeId, q) {
         ? `<div class="scan-progress" role="progressbar" aria-valuenow="${Math.round(S.progress * 100)}"><span style="width:${Math.round(S.progress * 100)}%"></span></div><p class="muted tiny" id="scanMsg">${esc(S.msg || '')}</p>`
         : `<p class="muted">Words should read left to right. Turn it if needed.</p>
            <div class="row-actions"><button class="btn" id="scanTurn">↻ Turn</button><button class="btn ghost" id="scanAgain">Different photo</button></div>
-           <button class="btn primary big full" id="scanRead">Read the label</button>`}
+           ${S.aiErr ? `<p class="err">${esc(S.aiErr)}${S.aiUpgrade ? ' <a href="#/plans">See Pro</a>' : ''}</p>` : ''}
+           <button class="btn primary big full ai-scan-btn" id="scanAi" ${aiScanNote(aiScanSt).on ? '' : 'disabled'}>✨ AI scan <span class="pro-badge static">PRO</span></button>
+           <p class="tiny muted center ai-note">${esc(aiScanNote(aiScanSt).text)}</p>
+           <button class="btn big full" id="scanRead">Free scan (on your phone)</button>`}
     </div>`;
   } else if (S.step === 'none') {
     body = `
@@ -4887,6 +4935,26 @@ function bindLabelScan(homeId, q, target, layout) {
   if ($('scanAgain')) $('scanAgain').onclick = () => { Object.assign(S, { src: '', step: 'pick' }); render(); };
   if ($('scanRetry')) $('scanRetry').onclick = () => { Object.assign(S, { src: '', step: 'pick', circuits: [], skipped: [] }); render(); };
   if ($('scanUseAnyway')) $('scanUseAnyway').onclick = () => { S.step = 'review'; render(); };
+  if ($('scanAi')) $('scanAi').onclick = async () => {
+    Object.assign(S, { step: 'reading', progress: 0.35, msg: 'AI is reading the label…', aiErr: '', aiUpgrade: false });
+    render();
+    try {
+      const { loadImage, photoDataUrl } = await import('./ocr.js');
+      const img = await loadImage(S.src);
+      const data = await aiScanPhoto(store, photoDataUrl(img, S.rotate, 1600));
+      aiScanSt = { ...(aiScanSt || {}), enabled: true, signedIn: true, kind: data.kind, left: data.left, limit: data.limit, unlimited: data.unlimited };
+      const circuits = aiToCircuits(data.result);
+      Object.assign(S, { circuits, skipped: (data.result && data.result.notes) || [], quality: circuits.length ? 'good' : 'little', sel: -1, errors: {}, text: '' });
+      S.step = circuits.length ? 'review' : 'none';
+      S.msg = circuits.length ? '' : "The AI couldn't find breakers in this photo, so it wasn't counted. Try a closer, straight photo.";
+    } catch (e) {
+      const d = (e && e.data) || {};
+      if (d.error === 'not_configured' || e.comingSoon) aiScanSt = { ...(aiScanSt || {}), enabled: false };
+      if (d.left !== undefined) aiScanSt = { ...(aiScanSt || {}), kind: d.kind, left: d.left, limit: d.limit };
+      Object.assign(S, { step: 'photo', aiErr: (e && e.message) || 'AI scan had a problem. Try again.', aiUpgrade: d.error === 'trial_used' });
+    }
+    if (parseRoute().parts[2] === 'labelscan') render();
+  };
   if ($('scanRead')) $('scanRead').onclick = async () => {
     Object.assign(S, { step: 'reading', progress: 0, msg: 'Getting ready…' });
     render();
@@ -5005,7 +5073,7 @@ async function renderScan() {
     <video id="scanVideo" playsinline muted aria-label="Camera view"></video>
     <div class="scan-frame" aria-hidden="true"></div>
   </div>
-  <p id="scanMsg" class="center muted" role="status">Point the camera at an AmpMap QR sticker.</p>
+  <p id="scanMsg" class="center muted" role="status">Point the camera at an Breakerly QR sticker.</p>
   <label class="btn full file-btn">Take a photo of the sticker instead<input type="file" accept="image/*" capture="environment" id="scanFile" hidden></label>
   <p class="tiny muted center">Tip: your phone's regular Camera app can scan the stickers too.</p>`;
   app.innerHTML = homeId ? shell(homeId, '', body, { title: 'Scan sticker', back: '#/' }) : body;
@@ -5073,7 +5141,7 @@ function sharePayload(homeId) {
   return {
     v: 1,
     homeId,
-    home: { name: home.name, type: home.type || '', address: home.address || '' },
+    home: { name: home.name, type: home.type || '', address: home.address || '', ...(installedByDefault(home, store.settings, isPro()) ? { installedBy: installedByDefault(home, store.settings, isPro()) } : {}) },
     panels: inHome('panels', homeId).map((p) => ({
       id: p.id, name: p.name, type: p.type, numbering: p.numbering || 'space', layout: p.layout || 'auto', mainAmps: p.mainAmps || '', mainAmpsOther: p.mainAmpsOther || '',
       spaces: p.spaces || '', spacesOther: p.spacesOther || '', shorePower: p.shorePower || '', shorePowerOther: p.shorePowerOther || '', powerSource: p.powerSource || '', sourceAmps: p.sourceAmps || '', sourceAmpsOther: p.sourceAmpsOther || '', location: p.location || '',
@@ -5093,7 +5161,7 @@ async function renderShare(token) {
     doc = null;
   }
   if (!doc) {
-    app.innerHTML = `<div class="auth"><img class="auth-logo" src="./brand/badge.png" alt="AmpMap logo" width="116" height="128"><h1>Link not found</h1><p class="muted">This shared panel link was turned off or doesn't exist.</p><a class="btn" href="#/">Open AmpMap</a></div>`;
+    app.innerHTML = `<div class="auth"><img class="auth-logo" src="./brand/badge.png" alt="Breakerly logo" width="116" height="128"><h1>Link not found</h1><p class="muted">This shared panel link was turned off or doesn't exist.</p><a class="btn" href="#/">Open Breakerly</a></div>`;
     return;
   }
   const sections = (doc.panels || []).map((p) => {
@@ -5108,9 +5176,13 @@ async function renderShare(token) {
   <header class="topbar"><img class="logo" src="./brand/house-108.png" alt="" aria-hidden="true" width="34" height="34"><div class="topbar-title"><h1>${esc(doc.home.name)}</h1></div></header>
   <main class="main share-main">
     ${guestEnded ? `<div class="alert warn no-print">${esc(guestEnded)}</div>` : ''}
-    <p class="muted no-print">Read-only panel directory shared from AmpMap${doc.updatedAt ? ' · updated ' + new Date(doc.updatedAt).toLocaleDateString() : ''}.</p>
-    <div class="row-actions no-print">${isGuest() ? `<a class="btn primary" href="#/h/${esc(store.guest.homeId)}/panel">✎ Back to editing</a>` : `<a class="btn primary" href="#/share/${esc(token)}/edit">✎ Edit</a>`}<button class="btn" id="doPrint">Print / Save as PDF</button><a class="btn ghost" href="#/get">Get AmpMap (free)</a></div>
+    <p class="muted no-print">Read-only panel directory shared from Breakerly${doc.updatedAt ? ' · updated ' + new Date(doc.updatedAt).toLocaleDateString() : ''}.</p>
+    <div class="row-actions no-print">${isGuest() ? `<a class="btn primary" href="#/h/${esc(store.guest.homeId)}/panel">✎ Back to editing</a>` : `<a class="btn primary" href="#/share/${esc(token)}/edit">✎ Edit</a>`}<button class="btn" id="doPrint">Print / Save as PDF</button><a class="btn ghost" href="#/get">Get Breakerly (free)</a></div>
     ${isGuest() ? '' : '<p class="tiny muted no-print edit-hint">Electricians: tap Edit and type the code from the homeowner.</p>'}
+    ${(() => { const ec = electricianCard(doc.home && doc.home.installedBy); return ec ? `<div class="card electrician-card">
+      <div class="ec-text"><span class="tiny muted">Your electrician</span><b>${esc(ec.name || 'Electrician')}</b>${ec.phone ? `<span>${esc(ec.phone)}</span>` : ''}</div>
+      ${ec.tel ? `<a class="btn primary big full call-btn" href="${esc(ec.tel)}">📞 Call your electrician</a>` : ''}
+    </div>` : ''; })()}
     ${safetyHtml(safetyNote(doc.panels || [], (doc.panels || []).flatMap((p) => p.breakers || [])))}
     ${sections.join('') || '<p>No panels in this share.</p>'}
   </main>`;
@@ -5205,8 +5277,9 @@ async function renderPrint(homeId, kind, id, q) {
       <label>Size<select id="dirSize">${opt([{ value: 'half', label: 'Half page (fits most panel doors)' }, { value: 'full', label: 'Full page 8.5 x 11' }], size)}</select></label>
       ${anyWire ? `<label>Wire<select id="dirWire">${opt([{ value: '1', label: 'Show wire (like 12/2)' }, { value: '0', label: 'Hide wire' }], showWire ? '1' : '0')}</select></label>` : ''}
       <label>QR code<select id="dirQr">${opt([{ value: '1', label: 'Show QR (scan to open this panel)' }, { value: '0', label: 'No QR' }], showQr ? '1' : '0')}</select></label>
-      ${showQr ? `<p class="tiny muted qr-hint">${home.shareToken ? 'Sharing is on: anyone who scans sees the read-only panel schedule. After changes, tap Update in <a href="#/h/' + homeId + '/more">More › Share</a>.' : 'The QR opens this panel in AmpMap for you. So a customer or the next electrician can see it too, turn on <a href="#/h/' + homeId + '/more">More › Share a read-only copy</a>.'}</p>` : ''}
-      <button class="btn primary" id="doPrint">Print / Save as PDF</button>
+      ${showQr ? `<p class="tiny muted qr-hint">${home.shareToken ? 'Sharing is on: anyone who scans sees the read-only panel schedule. After changes, tap Update in <a href="#/h/' + homeId + '/more">More › Share</a>.' : 'The QR opens this panel in Breakerly for you. So a customer or the next electrician can see it too, turn on <a href="#/h/' + homeId + '/more">More › Share a read-only copy</a>.'}</p>` : ''}
+      <button class="btn primary" id="doPrint">Print</button>
+      <button class="btn" id="dlPdf">${can('pdfSchedule', plan()) ? '⬇ Branded PDF' : '🔒 Branded PDF <span class="pro-badge static">PRO</span>'}</button>
     </div>
     <div class="sheet directory ${size}">
       <div class="dir-top">
@@ -5225,6 +5298,22 @@ async function renderPrint(homeId, kind, id, q) {
     if (document.getElementById('dirWire')) document.getElementById('dirWire').onchange = (e) => go(`#/h/${homeId}/print/directory/${panel.id}?${qs2({ wire: e.target.value })}`);
     document.getElementById('dirQr').onchange = (e) => go(`#/h/${homeId}/print/directory/${panel.id}?${qs2({ qr: e.target.value })}`);
     document.getElementById('doPrint').onclick = (e) => runPrint(e.currentTarget, { el: document.getElementById('app'), filename: printFileName() });
+    document.getElementById('dlPdf').onclick = async (e) => {
+      if (!can('pdfSchedule', plan())) { toast('Branded PDF panel schedules are part of Pro.'); go('#/plans'); return; }
+      const btn = e.currentTarget;
+      const label = btn.innerHTML;
+      btn.disabled = true;
+      btn.textContent = 'Making the PDF...';
+      try {
+        const blob = await makePdf(document.querySelector('.sheet.directory'), { page: 'letter' });
+        await deliverPdf(blob, printFileName().replace(/\.pdf$/i, '') + '.pdf', { title: `${panel.name} panel schedule` });
+      } catch (err) {
+        console.error('pdf', err);
+        toast("Couldn't make the PDF. Try again.");
+      }
+      btn.disabled = false;
+      btn.innerHTML = label;
+    };
     return;
   }
   if (kind === 'qr') {
@@ -5586,7 +5675,7 @@ function renderEdit(col, id, q) {
       }
       f.querySelector('.slot-name').textContent = halfNum ? (t === 'single' || t === 'double' || bp.makeGroup ? 'Top number on the sticker' : 'Number on the sticker') : 'Space / slot #';
       f.querySelector('.slot-hint').textContent = halfNum
-        ? 'This panel is numbered 2 per row (1/3, 5/7 on the left; 2/4, 6/8 on the right). Type the top number of the row; AmpMap fills in the rest.'
+        ? 'This panel is numbered 2 per row (1/3, 5/7 on the left; 2/4, 6/8 on the right). Type the top number of the row; Breakerly fills in the rest.'
         : layoutOf(pn) === 'one'
           ? 'This panel is stacked in one column: a double-pole breaker in space 1 also covers space 2.'
           : 'Numbered like most US panels: odd on the left, even on the right. A double-pole in space 1 also covers 3. Sticker says 1/3, 5/7? Edit the panel and pick "2 numbers per row".';
@@ -5825,8 +5914,8 @@ function planCardHtml() {
   const trial = st.status === 'trialing' && st.trialEnd ? `Free trial until ${new Date(st.trialEnd * 1000).toLocaleDateString()}` : '';
   return `<a class="card plan-card ${paid ? 'is-pro' : ''}" href="#/plans">
     <span class="row-icon" aria-hidden="true">${paid ? '⭐' : '⚡'}</span>
-    <span class="row-main"><b>${paid ? esc(planLabel(st)) : 'AmpMap Free'}${paid ? ` <span class="pro-badge static">${st.plan === 'company' ? 'TEAM' : 'PRO'}</span>` : ''}</b>
-    <span class="muted">${paid ? (trial || (sub && when ? (st.cancelAtPeriodEnd ? `Ends ${when}` : `Renews ${when}`) : st.demo ? 'Demo preview' : 'Thanks for supporting AmpMap')) : 'Everything you use stays free. See what Pro adds'}</span></span>
+    <span class="row-main"><b>${paid ? esc(planLabel(st)) : 'Breakerly Free'}${paid ? ` <span class="pro-badge static">${st.plan === 'company' ? 'TEAM' : 'PRO'}</span>` : ''}</b>
+    <span class="muted">${paid ? (trial || (sub && when ? (st.cancelAtPeriodEnd ? `Ends ${when}` : `Renews ${when}`) : st.demo ? 'Demo preview' : 'Thanks for supporting Breakerly')) : 'Everything you use stays free. See what Pro adds'}</span></span>
     <span class="chev" aria-hidden="true">›</span></a>`;
 }
 function bindPlanCard() { /* the card is a plain link to #/plans */ }
@@ -5863,7 +5952,7 @@ function renderPlans(q) {
   const body = `
   <div class="plans">
     <div class="plans-head">
-      <h2>AmpMap plans</h2>
+      <h2>Breakerly plans</h2>
       <p class="muted">You're on <b>${esc(paid ? planLabel(st) : 'Free')}</b>${paid ? ' ' + proBadge() : ''}</p>
     </div>
     ${why}
@@ -5875,18 +5964,24 @@ function renderPlans(q) {
     </section>
     <section class="card plan pro ${paid && st.plan !== 'company' ? 'current' : ''}">
       <div class="plan-top"><h3>Pro <span class="pro-badge static">PRO</span></h3>
-        <div class="plan-price"><b>${pro.price}</b><span>${pro.per}</span></div></div>
-      <div class="seg" role="radiogroup" aria-label="Billing">
+        ${buyHere ? `<div class="plan-price"><b>${pro.price}</b><span>${pro.per}</span></div>` : ''}</div>
+      ${buyHere ? `<div class="seg" role="radiogroup" aria-label="Billing">
         <button class="${!plansYearly ? 'on' : ''}" data-yearly="0" role="radio" aria-checked="${!plansYearly}">Monthly $1.99</button>
         <button class="${plansYearly ? 'on' : ''}" data-yearly="1" role="radio" aria-checked="${plansYearly}">Yearly $14.99 <small>save 37%</small></button>
-      </div>
+      </div>` : ''}
       <p class="muted tiny">Everything in Free, plus:</p>
       <ul class="feats">${PRO_FEATURES.map((f) => `<li><span aria-hidden="true">${f.icon}</span><span><b>${esc(f.title)}</b><span class="muted">${esc(f.text)}</span></span></li>`).join('')}</ul>
       ${buyBtn(pro.key, `Get Pro · ${pro.price}${pro.per}`)}
     </section>
+    ${buyHere ? `<section class="card plan lifetime ${st.interval === 'lifetime' ? 'current' : ''}">
+      <div class="plan-top"><h3>Pro Lifetime <span class="pro-badge static">PRO</span></h3><div class="plan-price"><b>${PLANS.lifetime.price}</b><span>once</span></div></div>
+      ${st.interval === 'lifetime' ? '<span class="pill">Your plan</span>' : ''}
+      <p class="muted">Pay once, keep Pro forever. Everything in Pro, no subscription.</p>
+      ${st.interval === 'lifetime' ? '' : ready && !subscriber && lifetimeEnabled() ? `<button class="btn primary full" data-buy="lifetime">Get Pro for life · ${PLANS.lifetime.price}</button>` : `<button class="btn full" disabled>${subscriber ? 'You have a plan' : 'Coming soon'}</button>`}
+    </section>` : ''}
     <section class="card plan company ${st.plan === 'company' ? 'current' : ''}">
-      <div class="plan-top"><h3>Companies</h3><div class="plan-price"><b>$5</b><span>/tech after ${FREE_TECHS}</span></div></div>
-      <p class="muted"><b>Free for 1–${FREE_TECHS} techs.</b> 3+ techs: $5/mo for each tech after ${FREE_TECHS}, ${TRIAL_DAYS}-day free trial (no card needed). So 3 techs = $5/mo, 4 techs = $10/mo. Includes everything in Pro. For 1–${FREE_TECHS} techs just pick "Tech / Pro" in Settings.</p>
+      <div class="plan-top"><h3>Companies</h3>${buyHere ? `<div class="plan-price"><b>$5</b><span>/tech after ${FREE_TECHS}</span></div>` : ''}</div>
+      ${buyHere ? `<p class="muted"><b>Free for 1–${FREE_TECHS} techs.</b> 3+ techs: $5/mo for each tech after ${FREE_TECHS}, ${TRIAL_DAYS}-day free trial (no card needed). So 3 techs = $5/mo, 4 techs = $10/mo. Includes everything in Pro. For 1–${FREE_TECHS} techs just pick "Tech / Pro" in Settings.</p>` : `<p class="muted"><b>Free for 1–${FREE_TECHS} techs.</b> Pick "Tech / Pro" in Settings. Bigger teams can set up on breakerly.com.</p>`}
       <div class="techs"><span>How many techs?</span>
         <div class="stepper"><button data-techs="-1" aria-label="Fewer techs">−</button><b id="techCount">${plansTechs}</b><button data-techs="1" aria-label="More techs">+</button></div>
       </div>

@@ -1,4 +1,4 @@
-// Behaviour that only applies inside the AmpMap iPhone app (Capacitor shell, see native/).
+// Behaviour that only applies inside the Breakerly iPhone app (Capacitor shell, see native/).
 // On the website every function here is a no-op or falls back to the normal web behaviour,
 // so the web app on Vercel works exactly as before.
 import { PUBLIC_APP_URL } from './lib/sticker.js';
@@ -71,7 +71,7 @@ export function initNative() {
   if (p) {
     // WKWebView ignores window.print(); use the iOS print sheet (also "Save to Files" as PDF).
     window.print = () => {
-      p.print({ name: document.title || 'AmpMap' }).catch((e) => console.warn('print', e));
+      p.print({ name: document.title || 'Breakerly' }).catch((e) => console.warn('print', e));
     };
     // The share sheet, for code/link sharing that already calls navigator.share.
     try {

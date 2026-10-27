@@ -1,15 +1,17 @@
-# AmpMap paid plans
+# Breakerly paid plans (formerly Breakerly)
 
 ## Free vs Pro
-Everything AmpMap does today stays free for homeowners. No ads, ever. Pro only adds extras.
+Everything Breakerly does today stays free for homeowners. No ads, ever. Pro only adds extras.
 
-| | Free | Pro ($1.99/mo or $14.99/yr) | Company |
+| | Free | Pro ($1.99/mo, $14.99/yr or $19.99 once) | Company |
 |---|---|---|---|
 | Homes, panels, breakers, outlets, lights (unlimited) | ✓ | ✓ | ✓ |
 | Floor plan, rooms, load checks, device search | ✓ | ✓ | ✓ |
 | QR stickers, printing, sharing, edit codes | ✓ | ✓ | ✓ |
 | Backups and spreadsheets | ✓ | ✓ | ✓ |
 | Tech / Pro account (customers, service log) | ✓ (1-2 techs) | ✓ | ✓ |
+| AI panel scan (one photo -> breakers, amps, labels) | 3 to try | 20 / month | 20 / month |
+| Branded PDF panel schedules (printing stays free) | | ✓ | ✓ |
 | Your name on printouts (schedules, shopping lists) | | ✓ | ✓ |
 | Accent colors | | ✓ | ✓ |
 | Pro badge | | ✓ | ✓ |
@@ -26,10 +28,10 @@ or a Firestore doc `config/vip` with an `emails` array) and they get Pro free.
 The rules live in `src/lib/plans.js` (`PRO_FEATURES`, `can()`).
 
 ## Stripe objects (created Oct 22 2026, LIVE mode on FunLine Industries)
-- AmpMap Pro: `prod_VUXdEK5N3I3ri3`
+- Breakerly Pro: `prod_VUXdEK5N3I3ri3`
   - `ampmap_pro_monthly` $1.99/mo: `price_1UTYYfDiAIqGTwYd4LiAIprD`
   - `ampmap_pro_yearly` $14.99/yr: `price_1UTYYgDiAIqGTwYdfofQvt6L`
-- AmpMap Company: `prod_VUXdhJSG9ixFxY`
+- Breakerly Company: `prod_VUXdhJSG9ixFxY`
   - `ampmap_company_seat_monthly` $5 per billed tech per month (quantity = techs − 2), 30-day trial:
     `price_1UTYYhDiAIqGTwYdkhgho48Z`
 - Customer portal settings: `bpc_1UTYYoDiAIqGTwYd133kzVT4`
@@ -61,3 +63,33 @@ because Apple and Google require their own in-app purchase there. Pro bought on 
 ## Firestore rules
 No change needed. Plans are stored at `billing/{uid}` by the server only; the existing
 catch-all rule keeps that collection closed to the app, so nobody can give themselves Pro.
+
+
+## Lifetime Pro ($19.99 once) - added Oct 27 2026
+- Checkout `mode=payment` with the price in env `STRIPE_PRICE_LIFETIME` (or a price with lookup key
+  `breakerly_pro_lifetime`). The code never creates this price itself.
+- Caleb: Stripe > Product catalog > Breakerly/AmpMap Pro > Add another price > One-off, $19.99 USD
+  (lookup key `breakerly_pro_lifetime`). Copy its `price_...` id into Vercel env `STRIPE_PRICE_LIFETIME`, redeploy.
+  Until then the Lifetime card says "Coming soon".
+- The webhook (`checkout.session.completed`, mode payment, metadata lifetime=true) stores
+  `billing/{uid}` = `{ plan: 'pro', interval: 'lifetime' }`. The status check also finds a lifetime
+  payment in Stripe (PaymentIntent metadata) if the webhook hasn't run.
+
+## AI panel scan - added Oct 27 2026
+- `POST /api/scan-panel` (signed-in, Firebase ID token). Gemini reads one photo of the panel directory;
+  the person reviews the breakers in the same grid as the free on-phone scan before anything is saved.
+- Env: `GEMINI_API_KEY` in Vercel > panel-buddy > Settings > Environment Variables (Production), then redeploy.
+  Without it the app shows "AI scan coming soon". Optional `GEMINI_MODEL` (tried first; then
+  gemini-flash-latest and named fallbacks, same list as Runs Ledger).
+- Allowance: Pro / Company / VIP / Lifetime 20 scans a month, free accounts 3 scans in total, owner
+  accounts unlimited. Usage is stored server-side at `scanUsage/{uid}` (needs `FIREBASE_SERVICE_ACCOUNT`;
+  without it the count is per server instance). Rate limit 15 per user per hour; photo cap 4 MB.
+- No Firestore rules change: `scanUsage` is written by the server only and the catch-all rule keeps it closed.
+
+## Owner accounts (always Pro, unlimited AI scans)
+`config/comp.js` (`COMP_EMAILS`) plus Vercel env `COMP_EMAILS` (comma-separated; `OWNER_EMAILS` and
+`FREE_ACCOUNT_EMAILS` are read too). Seeded with margoittac@gmail.com, margoitta2002@gmail.com,
+caleb.margoitta2002@gmail.com, funlineprints@gmail.com.
+
+## Store apps
+Prices and buy buttons are hidden inside the iPhone app and the Android Play app; checkout is web only.

@@ -128,7 +128,7 @@ export function cloudBackend(db, { ownerUid, homeId }) {
 }
 
 // The electrician's own little Firebase app, so an anonymous sign-in never touches an
-// AmpMap account that's signed in on the same phone.
+// Breakerly account that's signed in on the same phone.
 function guestApp(config) {
   const app = getApps().find((a) => a.name === 'ampmap-guest') || initializeApp(config, 'ampmap-guest');
   let db;
