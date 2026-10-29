@@ -47,9 +47,6 @@ export async function priceFor(planKey, opts = {}) {
   if (envId) return envId;
   const found = await stripe('GET', '/v1/prices', { lookup_keys: [p.lookupKey], active: 'true', limit: 1 }, opts);
   if (found.data && found.data[0]) return found.data[0].id;
-  // One-time prices (Lifetime) are never made up here: Caleb creates the $19.99 one-time price in
-  // Stripe and sets STRIPE_PRICE_LIFETIME (or gives it the lookup key breakerly_pro_lifetime).
-  if (p.oneTime) { const e = new Error('lifetime_not_set_up'); e.code = 'lifetime_not_set_up'; throw e; }
   const product = await stripe('POST', '/v1/products', { ...PRODUCTS[p.plan], metadata: { app: 'ampmap', plan: p.plan } }, opts);
   const price = await stripe('POST', '/v1/prices', {
     product: product.id,
@@ -76,5 +73,5 @@ export function verifySignature(payload, header, secret, { toleranceSec = 300, n
   return sigs.some((s) => { const b = Buffer.from(s); return b.length === a.length && crypto.timingSafeEqual(a, b); });
 }
 
-// Lifetime can be bought once STRIPE_PRICE_LIFETIME is set (Stripe key present too).
-export const lifetimeReady = () => stripeReady() && !!process.env.STRIPE_PRICE_LIFETIME;
+// Lifetime is no longer sold (Caleb, Oct 29 2026: yearly instead). STRIPE_PRICE_LIFETIME, if still set, is ignored.
+export const lifetimeReady = () => false;

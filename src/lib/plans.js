@@ -2,7 +2,9 @@
 // Pure functions only (no DOM, no network) so they run in tests and in the Vercel functions.
 //
 //  Homeowner (free)  - everything Breakerly does today stays free, forever. No ads.
-//  Pro               - $1.99 a month, $14.99 a year, or $19.99 once (Lifetime). Adds extras on top (PRO_FEATURES).
+//  Pro               - $1.99 a month or $14.99 a year. Adds extras on top (PRO_FEATURES).
+//                      No lifetime / one-time option (Caleb, Oct 29 2026: yearly instead, recurring income).
+//                      Anyone who bought the old $19.99 Lifetime before then keeps Pro (planFromLifetimePayment).
 //  Company           - free for 1-2 techs. 3+ techs: 30 days free, then $5 a month for each tech
 //                      after the first 2 (3 techs = $5, 4 = $10). Stripe quantity = techs - 2.
 //                      Includes everything in Pro for the account that pays.
@@ -14,7 +16,6 @@ export const TRIAL_DAYS = 30;
 export const PLANS = {
   pro_monthly: { key: 'pro_monthly', plan: 'pro', lookupKey: 'ampmap_pro_monthly', amount: 199, interval: 'month', label: 'Pro monthly', price: '$1.99', per: '/month' },
   pro_yearly: { key: 'pro_yearly', plan: 'pro', lookupKey: 'ampmap_pro_yearly', amount: 1499, interval: 'year', label: 'Pro yearly', price: '$14.99', per: '/year', note: 'Save 37%' },
-  lifetime: { key: 'lifetime', plan: 'pro', lookupKey: 'breakerly_pro_lifetime', amount: 1999, interval: 'lifetime', oneTime: true, label: 'Pro lifetime', price: '$19.99', per: 'once', note: 'Pay once, Pro forever' },
   company: { key: 'company', plan: 'company', lookupKey: 'ampmap_company_seat_monthly', amount: 500, interval: 'month', label: 'Company', price: '$5', per: '/tech/month after 2', perSeat: true, trialDays: TRIAL_DAYS },
 };
 
@@ -140,6 +141,7 @@ export function seatsRequest(body) {
 // Can this request start checkout? (server side validation of the body)
 export function checkoutRequest(body) {
   const b = body && typeof body === 'object' ? body : {};
+  if (b.plan === 'lifetime') return { error: 'Lifetime is no longer offered. Pick Pro yearly or monthly.' };
   const p = PLANS[b.plan];
   if (!p) return { error: 'Unknown plan' };
   if (p.perSeat) {
@@ -166,7 +168,8 @@ export function printFooterName(settings, st) {
   return n && can('printName', st) ? n : 'Breakerly';
 }
 
-// Lifetime Pro is a one-time Stripe Checkout payment (mode=payment). The webhook stores this.
+// Lifetime Pro was a one-time Stripe Checkout payment (mode=payment), sold until Oct 29 2026.
+// No longer sold; the webhook still stores one if it arrives, and past buyers keep Pro.
 export function planFromLifetimePayment(session) {
   const s = session && typeof session === 'object' ? session : {};
   const paid = s.payment_status === 'paid' || s.payment_status === 'no_payment_required';

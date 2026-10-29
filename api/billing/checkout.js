@@ -1,5 +1,5 @@
-// POST /api/billing/checkout {plan:'pro_monthly'|'pro_yearly'|'lifetime'|'company', techs?}
-// Lifetime: a one-time $19.99 payment (Checkout mode=payment, price from STRIPE_PRICE_LIFETIME).
+// POST /api/billing/checkout {plan:'pro_monthly'|'pro_yearly'|'company', techs?}
+// Lifetime is no longer sold (Oct 29 2026): plan 'lifetime' gets a 400. Past lifetime buyers keep Pro.
 // Company: quantity = techs - 2 (the first 2 techs are free), so 3 techs = 1 x $5.
 // -> { url } of a Stripe Checkout page. 503 coming_soon when Stripe isn't set up yet.
 import { send, readBody, appUrl } from '../_lib/http.js';
@@ -31,13 +31,10 @@ export function checkoutSessionBody(want, { customer, uid, price, app }) {
     client_reference_id: uid,
     line_items: [{ price, quantity: want.quantity }],
     allow_promotion_codes: 'true',
-    metadata: { uid, plan: want.plan.plan, ...(want.plan.oneTime ? { lifetime: 'true' } : {}) },
+    metadata: { uid, plan: want.plan.plan },
     success_url: `${app}/#/plans?checkout=done`,
     cancel_url: `${app}/#/plans`,
   };
-  if (want.plan.oneTime) {
-    return { ...base, mode: 'payment', payment_intent_data: { metadata: { uid, plan: 'pro', lifetime: 'true', app: 'breakerly' } } };
-  }
   return {
     ...base,
     mode: 'subscription',
@@ -62,13 +59,7 @@ export default async function handler(req, res) {
     if ((subs.data || []).some((s) => ACTIVE_STATUSES.includes(s.status))) return send(res, 409, { error: 'You already have a plan. Use Manage plan to change it.', manage: true });
     const current = await planForUser(user).catch(() => ({ plan: 'free' }));
     if (current && current.interval === 'lifetime' && current.plan === 'pro') return send(res, 409, { error: 'You already have Pro for life.' });
-    let price;
-    try {
-      price = await priceFor(want.plan.key);
-    } catch (e) {
-      if (e.code === 'lifetime_not_set_up') return send(res, 503, { error: 'coming_soon', message: 'Lifetime Pro is coming soon.' });
-      throw e;
-    }
+    const price = await priceFor(want.plan.key);
     const app = appUrl(req);
     const session = await stripe('POST', '/v1/checkout/sessions', checkoutSessionBody(want, { customer, uid: user.uid, price, app }));
     return send(res, 200, { url: session.url });

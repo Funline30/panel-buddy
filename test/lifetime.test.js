@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { PLANS, PRO_FEATURES, checkoutRequest, planFromLifetimePayment, planLabel, can, isPaidPlan } from '../src/lib/plans.js';
 import { checkoutSessionBody } from '../api/billing/checkout.js';
 import { handleEvent } from '../api/billing/webhook.js';
-import { priceFor } from '../api/_lib/stripe.js';
+import { priceFor, lifetimeReady } from '../api/_lib/stripe.js';
 import { compList } from '../api/_lib/http.js';
 import { COMP_EMAILS } from '../config/comp.js';
 import { isVip } from '../src/lib/plans.js';
@@ -11,34 +11,24 @@ import { telHref, electricianCard } from '../src/lib/sticker.js';
 import { feedbackMailto, notifyMailto, ELECTRICIAN_PITCH, FEEDBACK_EMAIL, APPS_SOON } from '../src/lib/marketing.js';
 import fs from 'node:fs';
 
-test('lifetime: $19.99 one-time plan, Checkout mode=payment, no subscription data', () => {
-  assert.equal(PLANS.lifetime.amount, 1999);
-  assert.equal(PLANS.lifetime.oneTime, true);
-  const want = checkoutRequest({ plan: 'lifetime' });
-  assert.equal(want.plan.key, 'lifetime');
-  const body = checkoutSessionBody(want, { customer: 'cus_1', uid: 'u1', price: 'price_x', app: 'https://www.breakerly.com' });
-  assert.equal(body.mode, 'payment');
-  assert.equal(body.subscription_data, undefined);
-  assert.equal(body.metadata.lifetime, 'true');
-  assert.equal(body.payment_intent_data.metadata.uid, 'u1');
-  assert.deepEqual(body.line_items, [{ price: 'price_x', quantity: 1 }]);
+test('no lifetime for sale (Oct 29 2026): Pro is monthly or yearly only', () => {
+  assert.equal(PLANS.lifetime, undefined);
+  assert.deepEqual(Object.keys(PLANS).sort(), ['company', 'pro_monthly', 'pro_yearly']);
+  assert.match(checkoutRequest({ plan: 'lifetime' }).error, /no longer offered/);
   const sub = checkoutSessionBody(checkoutRequest({ plan: 'pro_yearly' }), { customer: 'c', uid: 'u', price: 'p', app: 'a' });
   assert.equal(sub.mode, 'subscription');
+  assert.equal(sub.metadata.lifetime, undefined);
+  assert.equal(PLANS.pro_yearly.lookupKey, 'ampmap_pro_yearly');
+  assert.equal(PLANS.pro_yearly.price, '$14.99');
+  assert.equal(lifetimeReady(), false);
 });
 
-test('lifetime: price comes from STRIPE_PRICE_LIFETIME and is never invented', async () => {
-  const saved = process.env.STRIPE_PRICE_LIFETIME;
-  process.env.STRIPE_PRICE_LIFETIME = 'price_from_env';
-  assert.equal(await priceFor('lifetime'), 'price_from_env');
-  delete process.env.STRIPE_PRICE_LIFETIME;
-  const calls = [];
-  const fetchImpl = async (url, init) => { calls.push([init.method, url]); return { ok: true, json: async () => ({ data: [] }) }; };
-  await assert.rejects(priceFor('lifetime', { fetchImpl, key: 'sk_test_x' }), /lifetime_not_set_up/);
-  assert.ok(calls.every(([m]) => m === 'GET'), 'no price or product is created');
-  if (saved !== undefined) process.env.STRIPE_PRICE_LIFETIME = saved;
+test('no lifetime anywhere for sale in the plans screen', () => {
+  const main = fs.readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
+  assert.equal(/data-buy="lifetime"|Pro Lifetime|for life/i.test(main), false);
 });
 
-test('lifetime: webhook turns a paid one-time Checkout into Pro for life', async () => {
+test('lifetime bought before Oct 29: webhook still turns a paid one-time Checkout into Pro for life (honored)', async () => {
   const ev = { type: 'checkout.session.completed', data: { object: { mode: 'payment', payment_status: 'paid', client_reference_id: 'u9', customer: 'cus_9', payment_intent: 'pi_9', metadata: { uid: 'u9', lifetime: 'true' } } } };
   const out = await handleEvent(ev);
   assert.equal(out.plan, 'pro');

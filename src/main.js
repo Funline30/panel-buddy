@@ -33,7 +33,7 @@ import { uid, esc, ampsText, sortBreakers, download } from './lib/util.js';
 import { isNativeApp, initNative, publicBase } from './native.js';
 import { ELECTRICIAN_PITCH, ELECTRICIAN_MORE, APPS_SOON, notifyMailto, feedbackMailto } from './lib/marketing.js';
 import { PLANS, PRO_FEATURES, FREE_FEATURES, ACCENTS, accentOf, can, planLabel, companyQuote, printFooterName, FREE_TECHS, TRIAL_DAYS } from './lib/plans.js';
-import { plan, isPaid, refreshPlan, onPlan, startCheckout, openPortal, changeTechs, canBuyHere, inStoreApp, checkoutEnabled, planChecked, setDemoPlan, lifetimeEnabled, scanStatus, aiScanPhoto } from './billing.js';
+import { plan, isPaid, refreshPlan, onPlan, startCheckout, openPortal, changeTechs, canBuyHere, inStoreApp, checkoutEnabled, planChecked, setDemoPlan, scanStatus, aiScanPhoto } from './billing.js';
 import { aiToCircuits, aiScanNote } from './lib/aiScan.js';
 import { printOrSave, makePdf, deliverPdf } from './print.js';
 import { breakersCsv, devicesCsv, fusesCsv } from './lib/csv.js';
@@ -5973,12 +5973,6 @@ function renderPlans(q) {
       <ul class="feats">${PRO_FEATURES.map((f) => `<li><span aria-hidden="true">${f.icon}</span><span><b>${esc(f.title)}</b><span class="muted">${esc(f.text)}</span></span></li>`).join('')}</ul>
       ${buyBtn(pro.key, `Get Pro · ${pro.price}${pro.per}`)}
     </section>
-    ${buyHere ? `<section class="card plan lifetime ${st.interval === 'lifetime' ? 'current' : ''}">
-      <div class="plan-top"><h3>Pro Lifetime <span class="pro-badge static">PRO</span></h3><div class="plan-price"><b>${PLANS.lifetime.price}</b><span>once</span></div></div>
-      ${st.interval === 'lifetime' ? '<span class="pill">Your plan</span>' : ''}
-      <p class="muted">Pay once, keep Pro forever. Everything in Pro, no subscription.</p>
-      ${st.interval === 'lifetime' ? '' : ready && !subscriber && lifetimeEnabled() ? `<button class="btn primary full" data-buy="lifetime">Get Pro for life · ${PLANS.lifetime.price}</button>` : `<button class="btn full" disabled>${subscriber ? 'You have a plan' : 'Coming soon'}</button>`}
-    </section>` : ''}
     <section class="card plan company ${st.plan === 'company' ? 'current' : ''}">
       <div class="plan-top"><h3>Companies</h3>${buyHere ? `<div class="plan-price"><b>$5</b><span>/tech after ${FREE_TECHS}</span></div>` : ''}</div>
       ${buyHere ? `<p class="muted"><b>Free for 1–${FREE_TECHS} techs.</b> 3+ techs: $5/mo for each tech after ${FREE_TECHS}, ${TRIAL_DAYS}-day free trial (no card needed). So 3 techs = $5/mo, 4 techs = $10/mo. Includes everything in Pro. For 1–${FREE_TECHS} techs just pick "Tech / Pro" in Settings.</p>` : `<p class="muted"><b>Free for 1–${FREE_TECHS} techs.</b> Pick "Tech / Pro" in Settings. Bigger teams can set up on breakerly.com.</p>`}

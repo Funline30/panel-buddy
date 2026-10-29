@@ -3,7 +3,7 @@
 ## Free vs Pro
 Everything Breakerly does today stays free for homeowners. No ads, ever. Pro only adds extras.
 
-| | Free | Pro ($1.99/mo, $14.99/yr or $19.99 once) | Company |
+| | Free | Pro ($1.99/mo or $14.99/yr) | Company |
 |---|---|---|---|
 | Homes, panels, breakers, outlets, lights (unlimited) | ✓ | ✓ | ✓ |
 | Floor plan, rooms, load checks, device search | ✓ | ✓ | ✓ |
@@ -65,15 +65,14 @@ No change needed. Plans are stored at `billing/{uid}` by the server only; the ex
 catch-all rule keeps that collection closed to the app, so nobody can give themselves Pro.
 
 
-## Lifetime Pro ($19.99 once) - added Oct 27 2026
-- Checkout `mode=payment` with the price in env `STRIPE_PRICE_LIFETIME` (or a price with lookup key
-  `breakerly_pro_lifetime`). The code never creates this price itself.
-- Caleb: Stripe > Product catalog > Breakerly/AmpMap Pro > Add another price > One-off, $19.99 USD
-  (lookup key `breakerly_pro_lifetime`). Copy its `price_...` id into Vercel env `STRIPE_PRICE_LIFETIME`, redeploy.
-  Until then the Lifetime card says "Coming soon".
-- The webhook (`checkout.session.completed`, mode payment, metadata lifetime=true) stores
-  `billing/{uid}` = `{ plan: 'pro', interval: 'lifetime' }`. The status check also finds a lifetime
-  payment in Stripe (PaymentIntent metadata) if the webhook hasn't run.
+## Lifetime Pro - REMOVED Oct 29 2026 (was $19.99 once, added Oct 27 2026)
+- Caleb, Oct 29 2026: no lifetime prices on any app, yearly instead (recurring income). Pro is now
+  monthly ($1.99) or yearly ($14.99) only. The Lifetime card is gone and checkout answers plan
+  `lifetime` with 400. `lifetimeReady()` is always false; env `STRIPE_PRICE_LIFETIME` is ignored (harmless).
+- Anyone who bought Lifetime before keeps Pro: the webhook still stores a paid one-time Checkout as
+  `billing/{uid}` = `{ plan: 'pro', interval: 'lifetime' }`, the status check still finds a lifetime
+  PaymentIntent, and an ending subscription never downgrades a lifetime holder.
+- The Stripe price (lookup key `breakerly_pro_lifetime`) was left in Stripe, unused.
 
 ## AI panel scan - added Oct 27 2026
 - `POST /api/scan-panel` (signed-in, Firebase ID token). Gemini reads one photo of the panel directory;
