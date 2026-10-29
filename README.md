@@ -1,5 +1,7 @@
 # ⚡ AmpMap
 
+AI assistants: read AI_HANDOFF.md first.
+
 _Formerly Panel Buddy._
 
 Free, no-ads web app for mapping your home's breaker panel. Installable on iPhone, Android and Windows (it's a PWA), works offline, and syncs across your devices.
