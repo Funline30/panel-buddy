@@ -1158,7 +1158,7 @@ function renderDeleteAccount() {
 // ---------------------------------------------------------------- login
 function renderLogin() {
   const cloud = store.mode === 'cloud';
-  const web = !isNativeApp();
+  const web = !inStoreApp(); // store apps (iOS/Android, incl. the Play TWA) show no web-only banner/landing
   app.innerHTML = `
   ${web ? `<div class="site-banner" role="note">📱 <span>${esc(APPS_SOON.banner)}</span> <a href="#apps-soon">Notify me</a></div>` : ''}
   <div class="auth">
@@ -4487,7 +4487,7 @@ function renderMore(homeId) {
     <p class="muted">Tell us what you like or what Breakerly should do next. It opens your email, addressed to the developer.</p>
     <div class="row-actions"><a class="btn" href="${esc(feedbackMailto('review', { where: isNativeApp() ? 'app' : 'web' }))}">⭐ Leave a review</a><a class="btn" href="${esc(feedbackMailto('idea', { where: isNativeApp() ? 'app' : 'web' }))}">💡 Suggest a feature</a></div>
   </div>
-  ${isNativeApp() ? '' : `<div class="card apps-soon-card"><h3>📱 ${esc(APPS_SOON.title)}</h3><p class="muted">${esc(APPS_SOON.text)}</p><a class="btn" href="${esc(notifyMailto())}">Notify me</a></div>`}
+  ${inStoreApp() ? '' : `<div class="card apps-soon-card"><h3>📱 ${esc(APPS_SOON.title)}</h3><p class="muted">${esc(APPS_SOON.text)}</p><a class="btn" href="${esc(notifyMailto())}">Notify me</a></div>`}
   <div class="card access-entry">
     <h3>Who can edit</h3>
     <p class="muted">Give an electrician a code to make changes, see what they changed, or hand this home to its owner.</p>
