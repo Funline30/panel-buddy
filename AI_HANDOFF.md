@@ -54,7 +54,7 @@ Breakerly (formerly AmpMap, before that Panel Buddy): free, no-ads web app (PWA)
 - **Caleb:** one real Pro purchase to prove it unlocks.
 - **Caleb:** Google Play: apply for production once the tester days are up (~Nov 1).
 - Apple review result (waiting since Oct 22).
-- Rename AmpMap → Breakerly inside the phone apps and store listings (Android name/icon, `native/` appName). Waits on Apple's approval.
+- Rename AmpMap → Breakerly inside the iOS app (`native/` appName 'AmpMap'). Waits on Apple's approval. (Android Play app renamed 2026-10-30, see Log.)
 - README.md still says "AmpMap"; update the title/name when convenient.
 
 ## Log
@@ -65,3 +65,8 @@ _Append below. Format: `### YYYY-MM-DD — Tab|Perplexity` then bullets: what ch
 - Created this AI_HANDOFF.md and added a pointer line at the top of README.md (docs only, no code change; this commit).
 - Earlier today (Tab): e851ad2 stopped selling Lifetime Pro (monthly + yearly only).
 - Left: see "Open / next" above.
+
+### 2026-10-30 — Tab
+- 3f7f4a0 (src/main.js): store apps, including the Play TWA (`inStoreApp()`), no longer show the web-only "apps coming soon" banner, landing sections or the Settings apps-soon card. Plain web unchanged. 274/275 tests pass (1 skipped). Vercel deploy succeeded; checked live with ?twa=1.
+- Android Play app (package com.funline30.ampmap, a TWA, not in this repo) rebuilt as **Breakerly 1.1.0 / versionCode 2**: launcher name Breakerly, current icon from /icons, host www.breakerly.com (was panel-buddy.vercel.app; assetlinks on both hosts already list the Play app-signing key 6F:AF:CC:41… and upload key 3B:B8:E7:6B…). Uploaded to Closed testing – Alpha with a new store listing (name Breakerly, new icon, feature graphic, 6 screenshots, no prices) and sent for review.
+- Left: Play review; iOS rename after Apple approves 1.1.
