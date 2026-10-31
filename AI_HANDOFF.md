@@ -21,7 +21,7 @@ This file is the shared notebook between Caleb's AIs (Tab and Perplexity, and an
 Breakerly (formerly AmpMap, before that Panel Buddy): free, no-ads web app (PWA) for mapping a home's breaker panel. Panels and breakers, outlets/lights/devices, rooms and floor plan, QR stickers, load checks, sharing and edit codes, electrician QR, AI panel scan (Pro). Owner: Caleb Margoitta (Funline30).
 
 - Website: https://breakerly.com (also https://panel-buddy.vercel.app)
-- Android: `com.funline30.ampmap` (Play app shell around the website), Google Play Closed testing. Store name and icon still say AmpMap.
+- Android: `com.funline30.ampmap` (Play app shell around the website), **live on Google Play production since Oct 31 2026** as Breakerly: https://play.google.com/store/apps/details?id=com.funline30.ampmap
 - iPhone: in Apple review since the Oct 22 resubmit.
 - Prices (web checkout only; hidden inside the native apps): Free · Pro $1.99/mo or $14.99/yr (Caleb kept $14.99, Oct 29) · Company: free for 1–2 techs, $5/mo per tech after 2 (30-day trial). Details in `PLANS.md`.
 
@@ -52,7 +52,6 @@ Breakerly (formerly AmpMap, before that Panel Buddy): free, no-ads web app (PWA)
 
 - **Caleb:** add `FIREBASE_SERVICE_ACCOUNT` in Vercel (panel-buddy). Until then a paid plan may not stick to the buyer's account.
 - **Caleb:** one real Pro purchase to prove it unlocks.
-- **Caleb:** Google Play: apply for production once the tester days are up (~Nov 1).
 - Apple review result (waiting since Oct 22).
 - Rename AmpMap → Breakerly inside the iOS app (`native/` appName 'AmpMap'). Waits on Apple's approval. (Android Play app renamed 2026-10-30, see Log.)
 - README.md still says "AmpMap"; update the title/name when convenient.
@@ -70,3 +69,9 @@ _Append below. Format: `### YYYY-MM-DD — Tab|Perplexity` then bullets: what ch
 - 3f7f4a0 (src/main.js): store apps, including the Play TWA (`inStoreApp()`), no longer show the web-only "apps coming soon" banner, landing sections or the Settings apps-soon card. Plain web unchanged. 274/275 tests pass (1 skipped). Vercel deploy succeeded; checked live with ?twa=1.
 - Android Play app (package com.funline30.ampmap, a TWA, not in this repo) rebuilt as **Breakerly 1.1.0 / versionCode 2**: launcher name Breakerly, current icon from /icons, host www.breakerly.com (was panel-buddy.vercel.app; assetlinks on both hosts already list the Play app-signing key 6F:AF:CC:41… and upload key 3B:B8:E7:6B…). Uploaded to Closed testing – Alpha with a new store listing (name Breakerly, new icon, feature graphic, 6 screenshots, no prices) and sent for review.
 - Left: Play review; iOS rename after Apple approves 1.1.
+
+### 2026-10-31 — Tab
+- Google published Breakerly for Android (com.funline30.ampmap, 1.1.0 / versionCode 2) on Google Play **production** (US) on Oct 31.
+- Added an official "Get it on Google Play" badge at the bottom of the web landing (under "Leave a review / suggest a feature"), linking to https://play.google.com/store/apps/details?id=com.funline30.ampmap (new tab). Files: src/main.js (landingSections → .land-gplay), src/plans.css, public/brand/google-play-badge.png (Google's official badge art, padding cropped). Web only: the landing already isn't rendered in store apps (`inStoreApp()`, incl. the Play TWA). Tests 274 pass / 0 fail; build OK.
+- No app update needed: the Android app is a TWA that loads this website live (no app-version.json).
+- Left: the "Mobile apps coming soon – iPhone & Android" banner/card still says coming soon (not changed; Android is now live). Caleb's call.

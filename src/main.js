@@ -1257,6 +1257,9 @@ function landingSections() {
       <p class="muted">Tell us what you like or what Breakerly should do next. It goes straight to the developer.</p>
       <div class="row-actions"><a class="btn" href="${esc(feedbackMailto('review'))}">⭐ Leave a review</a><a class="btn" href="${esc(feedbackMailto('idea'))}">💡 Suggest a feature</a></div>
     </section>
+    <div class="land-gplay">
+      <a href="https://play.google.com/store/apps/details?id=com.funline30.ampmap" target="_blank" rel="noopener" aria-label="Get Breakerly on Google Play"><img src="./brand/google-play-badge.png" alt="Get it on Google Play" width="180" height="54" loading="lazy"></a>
+    </div>
   </div>`;
 }
 

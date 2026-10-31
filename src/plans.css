@@ -66,3 +66,8 @@
 .call-btn { text-decoration: none; text-align: center; }
 .plan.lifetime .plan-price span { text-transform: none; }
 @media print { .site-banner, .electrician-card .call-btn { display: none; } }
+
+/* Get it on Google Play badge at the bottom of the web landing (not shown inside the store apps) */
+.landing .land-gplay { text-align: center; margin: 14px 0 6px; }
+.landing .land-gplay a { display: inline-block; line-height: 0; border-radius: 8px; }
+.landing .land-gplay img { height: 54px; width: auto; display: block; }
