@@ -1128,7 +1128,7 @@ function renderDeleteAccount() {
           ? 'Too many tries. Wait a few minutes and try again.'
           : c.includes('network') || c.includes('unavailable')
             ? 'No internet connection. Deleting needs signal; try again.'
-            : `Couldn't finish deleting: ${(ex && ex.message) || 'something went wrong'}. Try again, or email margoittac@gmail.com and we'll delete it for you.`;
+            : `Couldn't finish deleting: ${(ex && ex.message) || 'something went wrong'}. Try again, or email funlineindustries@gmail.com and we'll delete it for you.`;
     }
   };
 }
