@@ -4,7 +4,7 @@
 
 export const APP_NAME = 'Breakerly';
 export const SITE_URL = 'https://www.breakerly.com';
-export const FEEDBACK_EMAIL = 'margoittac@gmail.com';
+export const FEEDBACK_EMAIL = 'funlineindustries@gmail.com';
 
 export const ELECTRICIAN_PITCH = 'Leave a QR directory on every panel you touch, with your name and number on it.';
 export const ELECTRICIAN_MORE = 'Homeowners scan the sticker on the panel door, see every breaker, and tap "Call your electrician" when they need you again. Free for 1–2 techs.';
